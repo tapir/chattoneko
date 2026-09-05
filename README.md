@@ -1,4 +1,4 @@
-# ChattoNeko
+# Chattoねこ
 
 ![ChattoNeko](ss.png)
 

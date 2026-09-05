@@ -43,8 +43,10 @@ docker:
 mobile:
 	cd mobile && npm ci && npm run sync
 
+# GRADLE_FLAGS is the passthrough for CI versioning, e.g.
+#   make mobile-apk GRADLE_FLAGS="-PversionName=1.0.0 -PversionCode=10000"
 mobile-apk: mobile
-	cd mobile/android && ./gradlew assembleDebug
+	cd mobile/android && ./gradlew assembleDebug $(GRADLE_FLAGS)
 
 # Create the AVD if it doesn't exist; skip otherwise.
 mobile-avd:

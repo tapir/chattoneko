@@ -1,0 +1,78 @@
+# Builds the Android APK via the Makefile targets (`make mobile-apk`,
+# which runs `npm run sync` + `gradlew assembleDebug`) and uploads the
+# debug APK as a workflow artifact.
+#
+# Started manually from the "Actions" tab → "Android APK" → "Run workflow".
+# The APK can then be downloaded from the workflow run's "Artifacts"
+# section.
+name: Android APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            mobile/package-lock.json
+
+      # mobile/scripts/sync.mjs runs `npm run build` in web/, so the web
+      # dependencies must be installed first.
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      # mobile/scripts/icons.mjs renders the launcher icons with rsvg-convert.
+      - name: Install rsvg-convert
+        run: sudo apt-get update && sudo apt-get install -y librsvg2-bin
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Install the shared debug keystore so every CI build is signed
+      # identically (APKs can then be update-installed over previous CI
+      # builds). Generate/locate it locally at ~/.android/debug.keystore
+      # and store `base64 -w0` of it as the DEBUG_KEYSTORE repo secret.
+      - name: Restore persistent debug keystore
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p "$HOME/.android"
+            echo "$DEBUG_KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+            echo "persistent debug keystore restored"
+          else
+            echo "::warning::DEBUG_KEYSTORE secret not set — using an ephemeral auto-generated keystore"
+          fi
+
+      - name: Build APK
+        run: make mobile-apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chattoneko-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

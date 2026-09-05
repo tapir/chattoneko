@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-mode system bars: match the web app dark background. -->
+    <color name="system_bar">#171717</color>
+    <bool name="light_system_bars">false</bool>
+</resources>

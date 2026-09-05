@@ -1,0 +1,28 @@
+# VCS / tooling
+.git
+.gitignore
+.pi
+.playwright
+.playwright-cli
+
+# Local artifacts & state (large: *.db, compiled binary)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/chattoneko
+/config.toml
+.env
+*.local
+
+# Frontend/node rebuild happens inside the image
+node_modules
+web/node_modules
+web/dist
+web/test-smoke.mjs
+
+# Not needed for the image
+docs
+mobile
+README.md
+docker-compose.yml

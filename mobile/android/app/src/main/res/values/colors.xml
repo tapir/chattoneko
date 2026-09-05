@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- System bar background on pre-Android 15 devices (Android 15+ enforces
+         edge-to-edge, making these transparent regardless). Matches the web
+         app background in day mode; values-night overrides for dark. -->
+    <color name="system_bar">#fafafa</color>
+    <bool name="light_system_bars">true</bool>
+</resources>

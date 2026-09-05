@@ -1,0 +1,23 @@
+{
+  "name": "chattoneko-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Chattoneko Android app — Capacitor wrapper around the web frontend; server address is configured in-app.",
+  "scripts": {
+    "icons": "node scripts/icons.mjs",
+    "sync": "node scripts/icons.mjs && node scripts/sync.mjs",
+    "apk": "npm run sync && cd android && ./gradlew assembleDebug",
+    "adb:install": "adb install -r android/app/build/outputs/apk/debug/app-debug.apk"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/camera": "^8.2.4",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/status-bar": "^8.0.3",
+    "@capawesome/capacitor-file-picker": "^8.0.5"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.0.0"
+  }
+}

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en" class="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <!-- Tints the browser chrome (mobile web) to match the app background. -->
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fafafa" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#171717" />
+  <link rel="icon" type="image/svg+xml" href="/src/lib/logo.svg" />
+  <title>Chattoねこ</title>
+  <script>
+    // Seed theme before first paint (no flash). Mirrors src/lib/theme.svelte.js.
+    // Follows the system preference until the user sets 'chattoneko-theme' explicitly.
+    (function () {
+      var t;
+      try {
+        t = localStorage.getItem('chattoneko-theme');
+      } catch (e) {
+        t = null;
+      }
+      var dark = t
+        ? t === 'dark'
+        : !(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+      document.documentElement.classList.toggle('dark', dark);
+      document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+    })();
+  </script>
+  <style>
+    html {
+      background: #171717;
+    }
+
+    html:not(.dark) {
+      background: #fafafa;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+
+</html>

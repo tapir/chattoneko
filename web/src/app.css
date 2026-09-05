@@ -1,0 +1,614 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* Math typesetting: Temml emits native MathML, rendered with the browser's
+   system math fonts (Cambria Math / STIX / Noto) — no webfont downloads.
+   Temml-Local.css only ships one 9KB woff2 for \mathscr capitals. */
+@import 'temml/dist/Temml-Local.css';
+
+/* Code block syntax palettes: highlight.js token colors inlined below and
+   scoped to the UI theme. Surfaces derive from the neutral theme palette
+   (--codeblock-*), tokens from the muted --code-* vars per mode, so code
+   boxes sit on the same surface family as the rest of the UI. */
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.625rem;
+
+  --background: oklch(0.99 0 0);
+  --foreground: oklch(0.19 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.19 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.19 0 0);
+  --primary: oklch(0.21 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.95 0 0);
+  --secondary-foreground: oklch(0.21 0 0);
+  --muted: oklch(0.955 0 0);
+  --muted-foreground: oklch(0.5 0 0);
+  --accent: oklch(0.94 0 0);
+  --accent-foreground: oklch(0.21 0 0);
+  --destructive: oklch(0.577 0.215 27);
+  --destructive-foreground: oklch(0.98 0 0);
+  --warning: oklch(0.62 0.16 75);
+  --warning-foreground: oklch(0.98 0 0);
+  --success: oklch(0.55 0.15 160);
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0 0 0 / 14%);
+  --ring: oklch(0.55 0 0);
+
+  --sidebar: oklch(0.965 0 0);
+  --sidebar-foreground: oklch(0.25 0 0);
+  --sidebar-primary: oklch(0.21 0 0);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.92 0 0);
+  --sidebar-accent-foreground: oklch(0.21 0 0);
+  --sidebar-border: oklch(0 0 0 / 8%);
+  --sidebar-ring: oklch(0.55 0 0);
+
+  --scrollbar: oklch(0 0 0 / 20%);
+
+  /* Code block surface (light): neutral mix of the theme's own surfaces;
+     syntax token palette in the --code-* vars below. */
+  --codeblock-bg: color-mix(in oklab, var(--muted) 45%, var(--background));
+  --codeblock-fg: var(--foreground);
+  --codeblock-head-bg: oklch(0 0 0 / 3%);
+  --codeblock-head-border: var(--border);
+  --codeblock-head-fg: var(--muted-foreground);
+  --codeblock-hover-bg: oklch(0 0 0 / 8%);
+
+  --code-red: oklch(0.52 0.15 25);
+  --code-purple: oklch(0.47 0.13 300);
+  --code-blue: oklch(0.5 0.12 250);
+  --code-green: oklch(0.5 0.11 160);
+  --code-amber: oklch(0.55 0.12 70);
+
+  color-scheme: light;
+}
+
+.dark {
+  --background: oklch(0.19 0 0);
+  --foreground: oklch(0.93 0 0);
+  --card: oklch(0.225 0 0);
+  --card-foreground: oklch(0.93 0 0);
+  --popover: oklch(0.215 0 0);
+  --popover-foreground: oklch(0.93 0 0);
+  --primary: oklch(0.94 0 0);
+  --primary-foreground: oklch(0.19 0 0);
+  --secondary: oklch(0.26 0 0);
+  --secondary-foreground: oklch(0.93 0 0);
+  --muted: oklch(0.30 0 0);
+  --muted-foreground: oklch(0.67 0 0);
+  --accent: oklch(0.285 0 0);
+  --accent-foreground: oklch(0.95 0 0);
+  --destructive: oklch(0.62 0.21 25);
+  --destructive-foreground: oklch(0.97 0 0);
+  --warning: oklch(0.79 0.16 80);
+  --warning-foreground: oklch(0.19 0 0);
+  --success: oklch(0.72 0.17 155);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 13%);
+  --ring: oklch(0.7 0 0);
+
+  --sidebar: oklch(0.16 0 0);
+  --sidebar-foreground: oklch(0.88 0 0);
+  --sidebar-primary: oklch(0.94 0 0);
+  --sidebar-primary-foreground: oklch(0.19 0 0);
+  --sidebar-accent: oklch(0.235 0 0);
+  --sidebar-accent-foreground: oklch(0.93 0 0);
+  --sidebar-border: oklch(1 0 0 / 7%);
+  --sidebar-ring: oklch(0.7 0 0);
+
+  --scrollbar: oklch(1 0 0 / 15%);
+
+  /* Code block surface (dark): same neutral mix as light. */
+  --codeblock-bg: color-mix(in oklab, var(--muted) 25%, var(--background));
+  --codeblock-fg: var(--foreground);
+  --codeblock-head-bg: oklch(1 0 0 / 4%);
+  --codeblock-head-border: var(--border);
+  --codeblock-head-fg: var(--muted-foreground);
+  --codeblock-hover-bg: oklch(1 0 0 / 8%);
+
+  --code-red: oklch(0.72 0.13 25);
+  --code-purple: oklch(0.74 0.12 300);
+  --code-blue: oklch(0.76 0.11 250);
+  --code-green: oklch(0.78 0.11 155);
+  --code-amber: oklch(0.79 0.12 75);
+
+  color-scheme: dark;
+}
+
+/* Mobile scale: native chat apps (e.g. Gemini) render body copy around 17px,
+   while our rem-based UI computes to 15px on phones. Raising the root
+   font-size on small/touch screens scales the whole UI uniformly — text,
+   spacing, radii, icon sizes — with no per-element sizing. Side effect:
+   Tailwind's rem-based breakpoints shift while this is active (sm: ≈ 720px),
+   which just widens the mobile-layout band on touch devices. */
+@media (max-width: 640px), (pointer: coarse) {
+  html {
+    font-size: 18px;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-success: var(--success);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@theme {
+  /* System font stacks — no webfont downloads, native OS look. */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  html {
+    height: 100%;
+  }
+
+  body {
+    height: 100%;
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Deliberately not --accent: user message bubbles are bg-accent, so an
+     accent-colored selection was invisible on them. Primary inverts in
+     .dark, so the highlight stays visible in both themes. */
+  ::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  /* Tailwind v4's preflight dropped v3's automatic pointer cursor on
+     buttons; restore it app-wide so every enabled button feels clickable. */
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+
+}
+
+/* Universal press feedback — deliberately UNLAYERED (same trick as the
+   .p-safe rules below): inside @layer base this rule silently loses to
+   every Tailwind bg-* utility (even bg-transparent), which is why the
+   first version only faded the text. :hover never fires on touch, so
+   :active is the only guaranteed feedback channel on mobile. Instead of
+   fading the control, paint the same kind of wash the desktop hovers use
+   (hover:bg-accent / hover:bg-muted / hover:bg-sidebar-accent are all
+   ~8% foreground tints) as a background-image overlay — it sits on top of
+   any background-color, transparent ghost row or filled primary button
+   alike, without competing with the bg utilities, and it derives from
+   --foreground so it is automatically correct in light and dark themes. */
+:where(
+    button:not(:disabled),
+    a[href],
+    summary,
+    select,
+    [role='button'],
+    [role='link'],
+    [role='menuitem'],
+    [role='menuitemcheckbox'],
+    [role='menuitemradio'],
+    [role='option'],
+    [role='tab'],
+    [role='switch']
+  ):active {
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--foreground) 12%, transparent),
+    color-mix(in oklab, var(--foreground) 12%, transparent)
+  );
+  background-clip: padding-box;
+}
+
+/* Safe-area insets (Android edge-to-edge WebView, iPhone notches).
+   Deliberately UNLAYERED so these beat Tailwind's layered padding
+   utilities (p-0, p-4, …) regardless of class order. env() resolves to 0
+   where there is no inset, so they are no-ops on desktop web.
+   .p-safe: insets only. .p-safe-pad: insets with a 1rem floor for the
+   centered fullscreen states (login / server-down / spinner). */
+.p-safe {
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+.p-safe-pad {
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-right: max(1rem, env(safe-area-inset-right));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  padding-left: max(1rem, env(safe-area-inset-left));
+}
+
+/* --- Markdown body --- */
+/* Content text is 0.9375rem (15px) EVERYWHERE: assistant markdown, user
+   bubbles, and the composer textarea all share this size. UI chrome is
+   text-sm (14px); meta/labels are text-xs (12px); tiny stats are 11px. */
+.md-body {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.md-body > * + * {
+  margin-top: 0.65em;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4,
+.md-body h5,
+.md-body h6 {
+  font-weight: 650;
+  line-height: 1.3;
+  margin-top: 1.1em;
+  margin-bottom: 0.4em;
+  letter-spacing: -0.01em;
+}
+.md-body h1 { font-size: 1.4em; }
+.md-body h2 { font-size: 1.25em; }
+.md-body h3 { font-size: 1.12em; }
+.md-body h4,
+.md-body h5,
+.md-body h6 { font-size: 1em; }
+.md-body ul,
+.md-body ol {
+  padding-left: 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25em;
+}
+.md-body ul { list-style: disc; }
+.md-body ol { list-style: decimal; }
+.md-body li::marker {
+  color: var(--muted-foreground);
+}
+.md-body ul ul,
+.md-body ol ol,
+.md-body ul ol,
+.md-body ol ul {
+  margin-top: 0.2em;
+}
+.md-body blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.9em;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+.md-body a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--muted-foreground);
+}
+.md-body a:hover {
+  text-decoration-color: var(--foreground);
+}
+.md-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin-top: 1em;
+}
+.md-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.875em;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.8em;
+  text-align: left;
+}
+.md-body th {
+  background: var(--muted);
+  font-weight: 600;
+}
+.md-body code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 0.35em;
+  padding: 0.1em 0.35em;
+}
+
+/* --- Fenced code blocks (theme-aware surface, copy button header) --- */
+.md-body pre.codeblock {
+  position: relative;
+  background: var(--codeblock-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-top: 0.75em;
+  font-size: 0.8125rem;
+  overflow: hidden;
+}
+.md-body pre.codeblock code {
+  display: block;
+  background: transparent;
+  border: none;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  color: var(--codeblock-fg);
+  font-size: 0.8125rem;
+}
+.md-body pre.codeblock .codeblock-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 1rem;
+  background: var(--codeblock-head-bg);
+  border-bottom: 1px solid var(--codeblock-head-border);
+  color: var(--codeblock-head-fg);
+  font-size: 0.6875rem;
+  font-family: var(--font-mono);
+  text-transform: lowercase;
+  user-select: none;
+}
+.md-body pre.codeblock .codeblock-copy {
+  text-transform: none;
+  color: var(--codeblock-head-fg);
+  cursor: pointer;
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.3rem;
+}
+.md-body pre.codeblock .codeblock-copy:hover {
+  color: var(--codeblock-fg);
+  background: var(--codeblock-hover-bg);
+}
+
+/* --- Syntax tokens: muted palette from the --code-* vars (per mode) ---
+   Hue roles echo the theme's semantic hues (red≈destructive, amber≈warning,
+   green≈success) at lower chroma so highlighting stays quiet on the neutral
+   surfaces. */
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ { color: var(--code-red); }
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ { color: var(--code-purple); }
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id { color: var(--code-blue); }
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string { color: var(--code-green); }
+.hljs-built_in,
+.hljs-symbol { color: var(--code-amber); }
+.hljs-comment,
+.hljs-code,
+.hljs-formula { color: var(--muted-foreground); }
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo { color: var(--code-green); }
+.hljs-subst { color: var(--codeblock-fg); }
+.hljs-section { color: var(--code-blue); font-weight: bold; }
+.hljs-bullet { color: var(--code-amber); }
+.hljs-emphasis { color: var(--codeblock-fg); font-style: italic; }
+.hljs-strong { color: var(--codeblock-fg); font-weight: bold; }
+.hljs-addition { color: var(--code-green); background-color: color-mix(in oklab, var(--code-green) 12%, transparent); }
+.hljs-deletion { color: var(--code-red); background-color: color-mix(in oklab, var(--code-red) 12%, transparent); }
+
+/* --- Math (Temml / MathML) --- */
+/* Horizontal scrolling lives on the .math-scroll wrapper, NOT on <math>
+   itself: Firefox never turns a display:math box into a scroll container, so
+   overflow-x on <math> is ignored there and the formula would push a
+   horizontal scrollbar onto the whole chat (most visible on mobile). */
+.md-body .math-scroll {
+  display: block;
+  max-width: 100%;
+  margin: 0.6em 0;
+  padding: 0.1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.md-body math {
+  font-size: 1.05em;
+}
+
+/* --- Thinking shimmer (streaming reasoning label) --- */
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 40%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 60%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.8s linear infinite;
+}
+
+/* Streaming scramble placeholder */
+.stream-scramble {
+  display: inline-block;
+  margin-left: 0.15em;
+  font-size: 0.875em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted-foreground);
+}
+
+/* Sidebar breathing title: a chat with an in-flight generation pulses gently */
+@keyframes breathing {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.breathing {
+  animation: breathing 1.8s ease-in-out infinite;
+}
+
+/* Jump-to-bottom button: springy entrance + continuous bounce of the whole
+   circle. Tailwind v4 centers the button via the `translate` property, so
+   animating `transform` here does not clobber the -translate-x-1/2 centering. */
+@keyframes pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  60% {
+    transform: scale(1.1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.pop-in {
+  animation: pop-in 0.3s ease-out;
+}
+@keyframes bounce-hint {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(4px);
+  }
+}
+.bounce-hint {
+  animation: bounce-hint 1.2s ease-in-out infinite;
+}
+/* Both classes on the same element: a single `animation` list so the entrance
+   plays first and the bounce takes over (the shorthand would otherwise be
+   overridden entirely by whichever class rule comes last). */
+.pop-in.bounce-hint {
+  animation:
+    pop-in 0.3s ease-out,
+    bounce-hint 1.2s ease-in-out 0.3s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pop-in,
+  .bounce-hint {
+    animation: none;
+  }
+}
+
+/* Message entrance */
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.message-in {
+  animation: message-in 0.25s ease-out;
+}
+
+/* Subtle login backdrop glow */
+.login-glow {
+  background:
+    radial-gradient(
+      60rem 40rem at 50% -10%,
+      oklch(0.3 0 0 / 35%),
+      transparent 60%
+    ),
+    var(--background);
+}
+:root:not(.dark) .login-glow {
+  background:
+    radial-gradient(
+      60rem 40rem at 50% -10%,
+      oklch(0.9 0 0 / 60%),
+      transparent 60%
+    ),
+    var(--background);
+}

@@ -7,6 +7,43 @@ import { streamUrl } from "./server.js";
 
 const RETRY_MS = 1000; // unexpected drop
 const POLL_MS = 4000; // clean close (server sent idle/done)
+// The server pings every 20s. EventSource only fires onerror on a CLOSED
+// socket; a half-open one (phone changed networks, NAT mapping expired) looks
+// open forever while the reply and its `done` land in a dead pipe and the UI
+// spins until a reload. Nothing at all for 3 pings' worth → reconnect.
+const STALL_MS = 60_000;
+
+// One EventSource: JSON-decodes messages, swallows pings, and after STALL_MS
+// of silence closes itself and calls onStall so the owner can reconnect. The
+// returned es.close() also disarms the watchdog.
+function openStream(url, onEvent, onStall) {
+  const es = new EventSource(url);
+  let wd;
+  const arm = () => {
+    clearTimeout(wd);
+    wd = setTimeout(() => {
+      es.close();
+      onStall();
+    }, STALL_MS);
+  };
+  const close = es.close.bind(es);
+  es.close = () => {
+    clearTimeout(wd);
+    close();
+  };
+  es.onmessage = (e) => {
+    arm();
+    let ev;
+    try {
+      ev = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (ev.type !== "ping") onEvent(ev);
+  };
+  arm();
+  return es;
+}
 
 export class ChatStream {
   constructor(chatId, onEvent) {
@@ -27,15 +64,7 @@ export class ChatStream {
 
   connect() {
     if (this.stopped) return;
-    const es = new EventSource(this.url());
-    this.es = es;
-    es.onmessage = (e) => {
-      let ev;
-      try {
-        ev = JSON.parse(e.data);
-      } catch {
-        return;
-      }
+    const es = openStream(this.url(), (ev) => {
       // The server's seq space resets when the chat hub is pruned and
       // recreated (e.g. after a disconnect on an idle chat); every event
       // carries the hub epoch so we can detect that and reset the dedupe
@@ -51,7 +80,8 @@ export class ChatStream {
       }
       if (ev.type === "done" || ev.type === "idle") this.cleanClose = true;
       this.onEvent(ev);
-    };
+    }, () => this.kick());
+    this.es = es;
     es.onerror = () => {
       es.close();
       if (this.stopped) return;
@@ -79,53 +109,43 @@ export class ChatStream {
   }
 }
 
-// Shared EventSource wrapper that JSON-decodes every message: used by the
-// global and title streams, which rely on EventSource's built-in
-// auto-reconnect and need no resume parameters.
-function jsonEventSource(path, onEvent) {
-  const es = new EventSource(streamUrl(path));
-  es.onmessage = (e) => {
-    let ev;
-    try {
-      ev = JSON.parse(e.data);
-    } catch {
-      return;
-    }
-    onEvent(ev);
-  };
-  return es;
-}
+// Global and title streams need no resume parameters: they rely on
+// EventSource's built-in auto-reconnect for closed sockets and on the stall
+// watchdog for half-open ones (a stall just opens a fresh EventSource).
+class SimpleStream {
+  constructor(path, onEvent) {
+    this.path = path;
+    this.onEvent = onEvent;
+    this.connect();
+  }
 
-// Global (all-chats) lifecycle stream: generation_started / done /
-// chat_updated for EVERY chat, so the sidebar tracks background generations
-// (breathing titles) without a per-chat stream each.
-// The server sends a generating_snapshot first on every (re)connect, so the
-// browser's built-in EventSource auto-reconnect is self-healing — no manual
-// retry logic, no polling.
-export class GlobalStream {
-  constructor(onEvent) {
-    this.es = jsonEventSource("/api/stream", onEvent);
+  connect() {
+    this.es = openStream(streamUrl(this.path), this.onEvent, () => this.connect());
   }
 
   close() {
     this.es?.close();
     this.es = null;
+  }
+}
+
+// Global (all-chats) lifecycle stream: generation_started / done /
+// chat_updated for EVERY chat, so the sidebar tracks background generations
+// (breathing titles) without a per-chat stream each. The server sends a
+// generating_snapshot first on every (re)connect, so reconnects self-heal.
+export class GlobalStream extends SimpleStream {
+  constructor(onEvent) {
+    super("/api/stream", onEvent);
   }
 }
 
 // Title stream: the title task's DEDICATED channel. Carries only
 // {chat_id, title} events (an auto-generated title became final), fully
 // independent from the engine streams so generation traffic can never delay
-// or drop a title update. Like GlobalStream, it relies on EventSource
-// auto-reconnect; a missed event only delays a sidebar label until the next
-// chat-list load (title events are idempotent: chat id + the title itself).
-export class TitleStream {
+// or drop a title update. A missed event only delays a sidebar label until
+// the next chat-list load (title events are idempotent: chat id + title).
+export class TitleStream extends SimpleStream {
   constructor(onEvent) {
-    this.es = jsonEventSource("/api/stream/titles", onEvent);
-  }
-
-  close() {
-    this.es?.close();
-    this.es = null;
+    super("/api/stream/titles", onEvent);
   }
 }

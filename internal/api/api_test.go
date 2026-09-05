@@ -349,6 +349,46 @@ func TestSendMessageValidationAndConflict(t *testing.T) {
 	}
 }
 
+// cancelOnRead cancels the request context the moment the handler reads the
+// body: the client is gone right after the claim, like an app killed on a
+// slow link.
+type cancelOnRead struct {
+	strings.Reader
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnRead) Read(p []byte) (int, error) {
+	c.cancel()
+	return c.Reader.Read(p)
+}
+
+// A client that disconnects after the claim must not strand its message
+// (user message persisted, no reply, no generation): persistence runs
+// detached from r.Context().
+func TestSendMessageSurvivesClientDisconnect(t *testing.T) {
+	ts := newTestServer(t, blockingProvider{}, false)
+	chatID := ts.createChat(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	body := &cancelOnRead{cancel: cancel}
+	body.Reset(`{"content":"hi"}`)
+	req := httptest.NewRequest("POST", "/api/chats/"+chatID+"/messages", body).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	ts.server.Config.Handler.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("send with vanished client: %d %s", rec.Code, rec.Body)
+	}
+	msgs, err := ts.store.ListMessages(context.Background(), chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 || msgs[0].Role != store.RoleUser || msgs[1].Status != store.StatusGenerating {
+		t.Fatalf("want user message + generating reply, got %d messages", len(msgs))
+	}
+}
+
 func TestEditMessageClassification(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 	chatID := ts.createChat(t)

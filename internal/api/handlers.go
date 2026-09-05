@@ -684,6 +684,11 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	release := func() { s.engine.ReleaseClaim(id) }
+	// Once the claim is ours, a client that vanishes mid-request (app killed,
+	// tab closed on a slow link) must not abort the persistence: the
+	// generation itself already runs on the server context, so a canceled
+	// r.Context() here would leave a user message with no reply.
+	ctx := context.WithoutCancel(r.Context())
 	var body struct {
 		Content       string   `json:"content"`
 		AttachmentIDs []string `json:"attachment_ids"`
@@ -707,7 +712,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// link query silently affects zero rows for foreign ids, which would
 	// drop attachments from the message without any error.
 	for _, aid := range body.AttachmentIDs {
-		att, err := s.store.GetAttachment(r.Context(), aid)
+		att, err := s.store.GetAttachment(ctx, aid)
 		if errors.Is(err, store.ErrNotFound) || (err == nil && att.ChatID != id) {
 			release()
 			writeError(w, http.StatusBadRequest, "attachment not found in this chat")
@@ -720,7 +725,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg, err := s.store.CreateMessage(r.Context(), store.NewMessageParams{
+	msg, err := s.store.CreateMessage(ctx, store.NewMessageParams{
 		ChatID:  id,
 		Role:    store.RoleUser,
 		Status:  store.StatusComplete,
@@ -732,20 +737,20 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, aid := range body.AttachmentIDs {
-		if err := s.store.LinkAttachmentToMessage(r.Context(), aid, msg.ID, id); err != nil {
+		if err := s.store.LinkAttachmentToMessage(ctx, aid, msg.ID, id); err != nil {
 			release()
 			internalError(w, "link attachment", err)
 			return
 		}
 	}
 	// Reload with attachments for the broadcast.
-	full, err := s.store.GetMessage(r.Context(), msg.ID)
+	full, err := s.store.GetMessage(ctx, msg.ID)
 	if err != nil {
 		release()
 		internalError(w, "reload user message", err)
 		return
 	}
-	atts, err := s.store.ListAttachmentsByMessage(r.Context(), msg.ID)
+	atts, err := s.store.ListAttachmentsByMessage(ctx, msg.ID)
 	if err != nil {
 		release()
 		internalError(w, "reload attachments", err)
@@ -779,8 +784,11 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	release := func() { s.engine.ReleaseClaim(id) }
+	// Detached like handleSendMessage: an edit truncates history, and a
+	// client disconnect between truncation and start must not strand it.
+	ctx := context.WithoutCancel(r.Context())
 
-	msg, err := s.store.GetMessage(r.Context(), mid)
+	msg, err := s.store.GetMessage(ctx, mid)
 	if errors.Is(err, store.ErrNotFound) {
 		release()
 		writeError(w, http.StatusNotFound, "message not found")
@@ -813,7 +821,7 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 		writeBodyError(w, err)
 		return
 	}
-	current, err := s.store.ListAttachmentsByMessage(r.Context(), mid)
+	current, err := s.store.ListAttachmentsByMessage(ctx, mid)
 	if err != nil {
 		release()
 		internalError(w, "list attachments", err)
@@ -848,27 +856,27 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "message content is empty")
 		return
 	}
-	if err := s.store.UpdateUserMessageContent(r.Context(), mid, body.Content); err != nil {
+	if err := s.store.UpdateUserMessageContent(ctx, mid, body.Content); err != nil {
 		release()
 		internalError(w, "update user message", err)
 		return
 	}
 	for _, aid := range removeIDs {
-		if err := s.store.DeleteAttachment(r.Context(), aid, mid); err != nil {
+		if err := s.store.DeleteAttachment(ctx, aid, mid); err != nil {
 			release()
 			internalError(w, "delete attachment", err)
 			return
 		}
 	}
 	// Delete every message after this one, then re-generate from here.
-	if err := s.store.DeleteMessagesAfterSeq(r.Context(), id, msg.Seq); err != nil {
+	if err := s.store.DeleteMessagesAfterSeq(ctx, id, msg.Seq); err != nil {
 		release()
 		internalError(w, "truncate history", err)
 		return
 	}
 	// Attachments of the deleted messages (user uploads and tool-generated
 	// files) have no FK cascade — reap them instead of leaking blobs.
-	s.reapDanglingAttachments(r.Context(), id)
+	s.reapDanglingAttachments(ctx, id)
 	s.engine.BroadcastMessagesReset(id)
 	// startClaimedGeneration consumes the claim (releases it on failure).
 	am, ok := s.startClaimedGeneration(w, r, id)
@@ -892,8 +900,9 @@ func (s *Server) handleRegenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	release := func() { s.engine.ReleaseClaim(id) }
+	ctx := context.WithoutCancel(r.Context()) // see handleSendMessage
 
-	last, err := s.store.LastAssistantMessage(r.Context(), id)
+	last, err := s.store.LastAssistantMessage(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
 		release()
 		writeError(w, http.StatusNotFound, "no assistant message to regenerate")
@@ -905,13 +914,13 @@ func (s *Server) handleRegenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Delete the last assistant message AND everything after it.
-	if err := s.store.DeleteMessagesFromSeq(r.Context(), id, last.Seq); err != nil {
+	if err := s.store.DeleteMessagesFromSeq(ctx, id, last.Seq); err != nil {
 		release()
 		internalError(w, "truncate history", err)
 		return
 	}
 	// Reap attachments left dangling by the truncation (no FK cascade).
-	s.reapDanglingAttachments(r.Context(), id)
+	s.reapDanglingAttachments(ctx, id)
 	s.engine.BroadcastMessagesReset(id)
 	// startClaimedGeneration consumes the claim (releases it on failure).
 	am, ok := s.startClaimedGeneration(w, r, id)
@@ -1001,7 +1010,10 @@ func serveEventStream[T any](w http.ResponseWriter, r *http.Request, ch <-chan T
 			}
 			flusher.Flush()
 		case <-ticker.C:
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+			// A real event, not an SSE comment: EventSource never surfaces
+			// comments, so the client could not tell a quiet stream from a
+			// half-open socket. Clients reconnect after ~3 missed pings.
+			if _, err := fmt.Fprint(w, "event: message\ndata: {\"type\":\"ping\"}\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()

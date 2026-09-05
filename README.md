@@ -56,7 +56,7 @@ make run          # builds the web UI, generates queries, packs the binary, star
 
 `make build` alone leaves you with `./chattoneko`, which you can run from anywhere.
 
-The Android APK is built by the "Android APK" workflow in this repository and uploaded as a workflow artifact.
+The Android APK is built with `make mobile-apk`.
 
 ## Configuration
 

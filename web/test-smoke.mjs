@@ -38,7 +38,7 @@ console.log('OK typewriter');
 const md = renderMarkdown('# Title\n\n```js\nconst x = 1 < 2;\n```\n\n<script>alert(1)</script>\n\n| a | b |\n|---|---|\n| 1 | 2 |');
 assert(md.includes('<h1>'), 'heading rendered');
 assert(md.includes('hljs'), 'code block highlighted');
-assert(md.includes('data-lang="javascript"') || md.includes('data-lang="js"'), 'code lang captured');
+assert(md.includes('language-js'), 'code lang captured');
 assert(!md.includes('<script>'), 'XSS <script> tag stripped');
 // (real DOMPurify in browser mode removes script content entirely)
 assert(md.includes('<table>'), 'GFM table rendered');

@@ -146,30 +146,33 @@
     return p ? p[1] : md;
   });
 
-  // Post-render decoration: per-code-block copy button.
+  // Post-render decoration: per-code-block copy icon, top-right corner.
+  // Lucide copy/check inlined as strings — the button is created imperatively
+  // here, where a Svelte component cannot be mounted.
+  const ICON_COPY =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+  const ICON_CHECK =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   let contentEl = $state(null);
   $effect(() => {
     html; // re-run when rendered markdown changes
     if (!contentEl) return;
     for (const pre of contentEl.querySelectorAll('pre.codeblock')) {
-      if (pre.querySelector(':scope > .codeblock-head')) continue;
-      const head = document.createElement('div');
-      head.className = 'codeblock-head';
-      const lang = document.createElement('span');
-      lang.textContent = pre.dataset.lang || 'text';
+      if (pre.querySelector(':scope > .codeblock-copy')) continue;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'codeblock-copy';
-      btn.textContent = 'copy';
+      btn.title = 'Copy code';
+      btn.setAttribute('aria-label', 'Copy code');
+      btn.innerHTML = ICON_COPY;
       btn.onclick = () => {
         const code = pre.querySelector('code');
         copyText(code ? code.innerText : pre.innerText).then((ok) => {
-          btn.textContent = ok ? 'copied' : 'failed';
-          setTimeout(() => (btn.textContent = 'copy'), 1200);
+          btn.innerHTML = ok ? ICON_CHECK : ICON_COPY;
+          setTimeout(() => (btn.innerHTML = ICON_COPY), 1200);
         });
       };
-      head.append(lang, btn);
-      pre.prepend(head);
+      pre.append(btn);
     }
   });
 

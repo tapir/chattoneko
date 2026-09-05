@@ -54,9 +54,6 @@
      syntax token palette in the --code-* vars below. */
   --codeblock-bg: color-mix(in oklab, var(--muted) 45%, var(--background));
   --codeblock-fg: var(--foreground);
-  --codeblock-head-bg: oklch(0 0 0 / 3%);
-  --codeblock-head-border: var(--border);
-  --codeblock-head-fg: var(--muted-foreground);
   --codeblock-hover-bg: oklch(0 0 0 / 8%);
 
   --code-red: oklch(0.52 0.15 25);
@@ -106,9 +103,6 @@
   /* Code block surface (dark): same neutral mix as light. */
   --codeblock-bg: color-mix(in oklab, var(--muted) 25%, var(--background));
   --codeblock-fg: var(--foreground);
-  --codeblock-head-bg: oklch(1 0 0 / 4%);
-  --codeblock-head-border: var(--border);
-  --codeblock-head-fg: var(--muted-foreground);
   --codeblock-hover-bg: oklch(1 0 0 / 8%);
 
   --code-red: oklch(0.72 0.13 25);
@@ -379,7 +373,7 @@
   padding: 0.1em 0.35em;
 }
 
-/* --- Fenced code blocks (theme-aware surface, copy button header) --- */
+/* --- Fenced code blocks (theme-aware surface, copy icon overlay) --- */
 .md-body pre.codeblock {
   position: relative;
   background: var(--codeblock-bg);
@@ -398,30 +392,23 @@
   color: var(--codeblock-fg);
   font-size: 0.8125rem;
 }
-.md-body pre.codeblock .codeblock-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.35rem 1rem;
-  background: var(--codeblock-head-bg);
-  border-bottom: 1px solid var(--codeblock-head-border);
-  color: var(--codeblock-head-fg);
-  font-size: 0.6875rem;
-  font-family: var(--font-mono);
-  text-transform: lowercase;
-  user-select: none;
-}
 .md-body pre.codeblock .codeblock-copy {
-  text-transform: none;
-  color: var(--codeblock-head-fg);
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  display: flex;
+  color: var(--muted-foreground);
   cursor: pointer;
   border-radius: 0.25rem;
-  padding: 0.05rem 0.3rem;
+  padding: 0.25rem;
 }
 .md-body pre.codeblock .codeblock-copy:hover {
   color: var(--codeblock-fg);
   background: var(--codeblock-hover-bg);
+}
+.md-body pre.codeblock .codeblock-copy svg {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 /* --- Syntax tokens: muted palette from the --code-* vars (per mode) ---

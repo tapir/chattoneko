@@ -1,7 +1,6 @@
 // Heavy markdown pipeline: marked (GFM) + math ($$..$$ display, $..$ inline)
-// -> highlight.js (manual renderer override) -> DOMPurify. Code blocks get a
-// header bar; the copy button is attached post-render by MessageItem
-// decoration.
+// -> highlight.js (manual renderer override) -> DOMPurify. The copy icon is
+// attached post-render by MessageItem decoration.
 //
 // This module is ONLY reachable through the dynamic import in markdown.js, so
 // rolldown keeps it in a separate `markdown` chunk that is fetched after first
@@ -101,7 +100,7 @@ renderer.code = ({ text, lang }) => {
   } catch {
     highlighted = escapeHtml(text);
   }
-  return `<pre class="codeblock" data-lang="${escapeHtml(language)}"><code class="hljs language-${escapeHtml(language)}">${highlighted}</code></pre>`;
+  return `<pre class="codeblock"><code class="hljs language-${escapeHtml(language)}">${highlighted}</code></pre>`;
 };
 
 renderer.link = ({ href, title, text }) => {

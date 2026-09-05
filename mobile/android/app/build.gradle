@@ -7,10 +7,11 @@ android {
         applicationId "com.chattoneko.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // CI passes -PversionName/-PversionCode from the git tag; locally the
-        // defaults below keep `make mobile-apk` working with no arguments.
-        versionCode (project.findProperty('versionCode') ?: '1').toString().toInteger()
-        versionName (project.findProperty('versionName') ?: '1.0').toString()
+        // CI passes -PversionName/-PversionCode from the git tag; the defaults
+        // keep `make mobile-apk` working locally. Assignment form on purpose:
+        // `versionCode (x).toString()` parses as `versionCode(x).toString()`.
+        versionCode = Integer.parseInt(project.findProperty('versionCode') ?: '1')
+        versionName = project.findProperty('versionName') ?: '1.0'
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

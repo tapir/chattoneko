@@ -14,12 +14,12 @@
   // `overlay` is an optional snippet rendered as a sibling of each cell's
   // button (never inside it), so controls like the "what the model saw"
   // badge can capture their own clicks without also opening the viewer.
-  import { api } from '../lib/api.js';
   import { viewer } from '../lib/viewer.svelte.js';
   import { cn } from '../lib/utils.js';
+  import AttachmentImage from './AttachmentImage.svelte';
 
   let {
-    items, // image attachments ({id, filename, kind, ...})
+    items, // image attachments ({id, filename, kind, ...}); see AttachmentImage for local previews
     cap = 6,
     singleClass = 'max-h-60', // max-height for the lone-image case
     // Explicit width for the grid when the parent is shrink-to-fit (the
@@ -60,9 +60,8 @@
           aria-label={`View ${items[0].filename}`}
           onclick={() => viewer.open(items[0], items)}
         >
-          <img
-            src={api.attachmentUrl(items[0].id)}
-            alt={items[0].filename}
+          <AttachmentImage
+            att={items[0]}
             class={cn('max-w-full rounded-lg border', singleClass)}
             loading="lazy"
           />
@@ -84,12 +83,7 @@
               }
               onclick={() => viewer.open(att, items)}
             >
-              <img
-                src={api.attachmentUrl(att.id)}
-                alt={att.filename}
-                class="size-full object-cover"
-                loading="lazy"
-              />
+              <AttachmentImage {att} class="size-full object-cover" loading="lazy" />
               {#if i === visible.length - 1 && hidden > 0}
                 <span class="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/55 text-sm font-medium tabular-nums text-white">
                   +{hidden}

@@ -12,6 +12,7 @@
   import { viewer } from '../lib/viewer.svelte.js';
   import { Eye, FileText, Info, Paperclip, Pencil, RotateCcw, X } from '@lucide/svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
+  import Scramble from './Scramble.svelte';
   import ImageGallery from './ImageGallery.svelte';
   import ToolCallItem from './ToolCallItem.svelte';
   import GenerationError from './GenerationError.svelte';
@@ -97,30 +98,6 @@
   // Drop a pending promotion when the component unmounts (chat switch while
   // streaming); the effect above re-arms it on every mount/content change.
   $effect(() => () => clearTimeout(promoteTimer));
-
-  // ---- waiting scramble: crush-style random glyphs while generating ----
-  let scramble = $state('');
-  $effect(() => {
-    const active = status === 'generating' && isLive && !waiting;
-    if (!active) return;
-    // Crush-style: start as dots, then flip three random chars per tick,
-    // never re-picking a position changed on the previous tick.
-    const glyph = () => String.fromCharCode(33 + Math.floor(Math.random() * 94));
-    const chars = Array.from({ length: 15 }, () => '.');
-    scramble = chars.join('');
-    let last = new Set();
-    const t = setInterval(() => {
-      const picked = new Set();
-      while (picked.size < 3) {
-        const i = Math.floor(Math.random() * 15);
-        if (!last.has(i)) picked.add(i);
-      }
-      last = picked;
-      for (const i of picked) chars[i] = glyph();
-      scramble = chars.join('');
-    }, 20);
-    return () => clearInterval(t);
-  });
 
   let tail = $derived(isLive ? content.slice(stableText.length) : '');
 
@@ -278,7 +255,7 @@
 {/snippet}
 
 {#if msg.role === 'user'}
-  <div class="group mt-5 flex justify-end message-in">
+  <div class="group mt-5 flex justify-end">
     <div class="max-w-[85%] sm:max-w-[75%]">
       <div class="rounded-2xl rounded-br-sm bg-accent px-4 py-2.5">
         {#if (editing ? editAttachments : (msg.attachments ?? [])).length}
@@ -348,7 +325,8 @@
           <div class="whitespace-pre-wrap break-words text-[0.9375rem] leading-relaxed">{msg.content}</div>
         {/if}
       </div>
-      {#if !editing}
+      <!-- No actions on a message that hasn't reached the server yet (app.outgoing). -->
+      {#if !editing && msg.status !== 'outgoing'}
         <div class="mt-0.5 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
           <CopyButton text={() => msg.content} label="Copy message" size="sm" />
           <IconButton icon={Pencil} label="Edit & resend" size="sm" onclick={startEdit} />
@@ -357,7 +335,7 @@
     </div>
   </div>
 {:else}
-  <div class="group mt-6 message-in">
+  <div class="group mt-6">
     {#if reasoning || waiting}
       <ThinkingBlock
         text={reasoning}
@@ -374,8 +352,12 @@
       <div bind:this={contentEl} class="md-body break-words">{@html html}{#if tail}<span class="whitespace-pre-wrap">{tail}</span>{/if}</div>
     {/if}
 
-    {#if status === 'generating' && isLive && !waiting}
-      <span class="stream-scramble">{scramble}</span>
+    <!-- Continuous from the moment of sending: MessageList shows the same
+         cursor under app.outgoing, this one takes over once the reply is
+         live, and it stays until `done` (also under the empty Thinking pill,
+         so it doesn't blink out while the first token is on its way). -->
+    {#if status === 'generating' && isLive}
+      <Scramble />
     {/if}
 
     {#if imageFiles.length}

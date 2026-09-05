@@ -30,7 +30,9 @@
   // <img>/<a> can't carry the Authorization header; attachmentUrl appends
   // ?token= (the server accepts a token on GETs). Keeping the real URL
   // visible to the browser also keeps download trivial.
-  let url = $derived(attachment ? api.attachmentUrl(attachment.id) : '');
+  let url = $derived(
+    attachment ? attachment.previewUrl || api.attachmentUrl(attachment.id) : ''
+  );
 
   // ---- gallery navigation ----
   // `items` is the message's image set. With more than one member the viewer
@@ -178,7 +180,7 @@
       const att = items[(((i % items.length) + items.length) % items.length)];
       if (att?.kind !== 'image') continue;
       const im = new Image();
-      im.src = api.attachmentUrl(att.id);
+      im.src = att.previewUrl || api.attachmentUrl(att.id);
       if (preloads.length >= 8) preloads.shift();
       preloads.push(im);
     }

@@ -97,6 +97,25 @@ class AppState {
   messages = $state([]);
   chatLoading = $state(false);
   generating = $state(false);
+  // The message currently being sent, until the server has it. MessageList
+  // renders it at the tail of the list (bubble + staged previews + scramble)
+  // so it shows the instant you hit send instead of after the create-chat,
+  // upload and send round trips. Deliberately NOT part of `messages`: nothing
+  // that reloads the list (refreshChat, the `idle` event a fresh stream
+  // subscribe emits) can wipe it, and no id reconciliation is needed — the
+  // real rows arrive through the normal paths and this simply goes away.
+  outgoing = $state(null);
+  // server attachment id -> local object URL of the file just uploaded under
+  // it, so the real message's <img> can keep painting the local copy until the
+  // server's is fully decoded (AttachmentImage does the flip and the revoke).
+  // Plain Map, not $state: read once at mount, never rendered from.
+  previews = new Map();
+  previewFor(id) {
+    return this.previews.get(id);
+  }
+  forgetPreview(id) {
+    this.previews.delete(id);
+  }
   // Chats with an in-flight generation (for the sidebar breathing title, #3).
   // SvelteSet: add/delete must be reactive — a plain Set in $state is not
   // tracked, so background-chat breathing titles silently never updated.
@@ -664,6 +683,16 @@ class AppState {
   // attachments: staged pending entries ({file, previewUrl, ...}); they
   // reach the server only now, at send time.
   async send(content, attachments = []) {
+    // Staged entries already carry the attachment shape the bubble renders
+    // (id/filename/kind) plus previewUrl, a local object URL for images that
+    // the gallery/viewer prefer over the server URL when present.
+    this.outgoing = {
+      id: "outgoing",
+      role: "user",
+      status: "outgoing",
+      content,
+      attachments,
+    };
     try {
       const { chatId, created } = await this.ensureChat();
       try {
@@ -674,6 +703,15 @@ class AppState {
             attachments.map((a) => a.file),
           );
           ids = metas.map((m) => m.id);
+          // Same order in and out (the server rejects the whole request on
+          // any bad file, never skips one). Populated BEFORE the message is
+          // sent, so it's there however the real row arrives (POST response
+          // or the SSE broadcast). ponytail: a failed send leaves its ids
+          // here — orphan uuids that never render, not worth a cleanup path.
+          metas.forEach((m, i) => {
+            if (attachments[i]?.previewUrl)
+              this.previews.set(m.id, attachments[i].previewUrl);
+          });
         }
         const res = await api.sendMessage(chatId, content, ids);
         const um = res?.user_message ?? res?.message;
@@ -695,10 +733,9 @@ class AppState {
         }
         this.stream?.kick();
         this.bumpChatInList(chatId);
-        // The message owns the files now (server URLs render them); free the
-        // local preview object URLs.
-        for (const a of attachments)
-          if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+        // Preview object URLs are NOT revoked here: the real row's <img> is
+        // still painting them (see `previews`); AttachmentImage revokes each
+        // once the server copy has taken over.
       } catch (e) {
         // A chat created by this attempt must not linger messageless (it
         // would sit in the sidebar with nothing in it); the delete also
@@ -709,6 +746,11 @@ class AppState {
     } catch (e) {
       this.toast("error", `Failed to send: ${e.message}`);
       throw e;
+    } finally {
+      // Success: the real user message + assistant placeholder were pushed
+      // above in this same tick, so the swap renders in one frame. Failure:
+      // the Composer restores the draft and staged files.
+      this.outgoing = null;
     }
   }
 

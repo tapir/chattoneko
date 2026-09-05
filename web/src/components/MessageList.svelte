@@ -13,7 +13,11 @@
   import { app } from '../lib/state.svelte.js';
   import { ArrowDown } from '@lucide/svelte';
   import MessageItem from './MessageItem.svelte';
+  import Scramble from './Scramble.svelte';
   import { Button } from '$lib/components/ui/button';
+
+  // A send is in flight and no reply is live yet (see app.outgoing).
+  let sending = $derived(!!app.outgoing && !app.live);
 
   // Build display items: tool-result messages are folded into the preceding
   // assistant message's tool calls; tool messages don't render standalone.
@@ -51,6 +55,9 @@
       const idx = out.findIndex((it) => it.msg.id === app.live.messageId);
       if (idx >= 0) out[idx].toolCalls = app.live.toolCalls;
     }
+    // The message being sent, until the server has it (see app.outgoing).
+    // Hidden as soon as a reply is live: by then its real row is in the list.
+    if (sending) out.push({ msg: app.outgoing, toolCalls: [], key: app.outgoing.id });
     return out;
   });
 
@@ -174,6 +181,10 @@
           track={trackContent}
         />
       {/each}
+      {#if sending}
+        <!-- Same spot the reply's row takes over (MessageItem's mt-6 wrapper). -->
+        <div class="mt-6"><Scramble /></div>
+      {/if}
       <div class="h-2"></div>
     </div>
   </div>

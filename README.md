@@ -4,7 +4,7 @@
 
 Your own cute cat AI assistant, self-hosted.
 
-"Chatto" is a humorous mimicry of the Japanese pronunciation of the English word "chat", "neko" is Japanese for cat. ChattoNeko is a chat application for large language models that you run on your own machine. It is made for personal self-hosted use, not a SaaS product: no accounts, no multi-tenancy, no billing.
+"Chatto" is the Japanese pronunciation of the English word "chat" and "neko" is Japanese for cat. ChattoNeko is a chat application for large language models that you run on your own machine. It is made for personal self-hosted use, not a SaaS product: no accounts, no multi-tenancy, no billing.
 
 It is extremely small. Everything is one static Go binary with the web UI embedded, about 8 MB after UPX packing. The Docker image is about 15 MB. Small as it is, it has what you expect from a chat app: streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login.
 

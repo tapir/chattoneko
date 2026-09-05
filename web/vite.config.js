@@ -6,9 +6,15 @@ import path from "node:path";
 export default defineConfig({
   plugins: [svelte(), tailwindcss()],
   resolve: {
-    alias: {
-      $lib: path.resolve("./src/lib"),
-    },
+    alias: [
+      { find: "$lib", replacement: path.resolve("./src/lib") },
+      // incremark-renderer imports the FULL highlight.js (~190 languages,
+      // ~250 kB gzipped extra). The app only ever highlighted the common set,
+      // so point the bare specifier at it — same languages as before, and the
+      // lazy markdown chunk stays where it was. Exact match: a string alias
+      // also rewrites "highlight.js/lib/common" into a doubled path.
+      { find: /^highlight\.js$/, replacement: "highlight.js/lib/common" },
+    ],
   },
   build: {
     outDir: "dist",
@@ -20,8 +26,8 @@ export default defineConfig({
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
-        // Split the heavy markdown pipeline (marked + Temml + highlight.js
-        // + DOMPurify, ~135 kB gzipped) out of the main bundle.
+        // Split the heavy markdown pipeline (incremark-renderer and its
+        // marked + katex + highlight.js + xss deps) out of the main bundle.
         //
         // Naming the chunk is only HALF the job: markdown.impl.js must also be
         // reached via dynamic import() (see src/lib/markdown.js), otherwise
@@ -31,7 +37,7 @@ export default defineConfig({
         //
         // Vite 8 (rolldown) only accepts the function form.
         manualChunks: (id) =>
-          /node_modules\/(marked|temml|highlight\.js|dompurify)\//.test(id)
+          /node_modules\/(incremark-renderer|marked|katex|highlight\.js|xss)\//.test(id)
             ? "markdown"
             : undefined,
       },

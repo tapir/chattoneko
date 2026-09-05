@@ -1,30 +1,21 @@
 // Markdown façade.
 //
-// The pipeline is split across three modules so the heavy third-party stack
+// The pipeline is split across two modules so the heavy third-party stack
 // stays OFF the critical path:
 //
-//   markdown.core.js  pure string helpers, zero deps — bundled into the entry
-//   markdown.impl.js  marked + Temml + highlight.js + DOMPurify (~135 kB gzip)
-//                     reached ONLY by the dynamic import below -> own chunk
-//   markdown.js       this façade; keeps the historical sync call signature
+//   markdown.js       this file: pure string helpers + lazy loader, zero deps
+//   markdown.impl.js  incremark-renderer (marked + KaTeX-as-MathML +
+//                     highlight.js + xss) -> reached ONLY by the dynamic
+//                     import below, so rolldown gives it its own chunk
 //
 // The split only works because markdown.impl.js is imported dynamically. A
 // static `import ... from './markdown.impl.js'` anywhere in the reachable
 // graph merges it back into the entry chunk — the exact regression this module
 // exists to prevent.
 //
-// While the chunk is in flight `renderMarkdown` returns escaped plain text
-// instead of formatted HTML, so a message is readable immediately and upgrades
-// in place a moment later. Nothing ever renders blank.
-
-import { escapeHtml } from "./markdown.core.js";
-
-export {
-  escapeHtml,
-  normalizeMathDelimiters,
-  stablePrefixLen,
-  closeOpenInline,
-} from "./markdown.core.js";
+// While the chunk is in flight `createRenderer` returns null and MessageItem
+// shows escaped plain text instead, so a message is readable immediately and
+// upgrades in place a moment later. Nothing ever renders blank.
 
 let impl = null;
 let pending = null;
@@ -59,14 +50,47 @@ export function onMarkdownReady(fn) {
   return () => listeners.delete(fn);
 }
 
-// Synchronous render — the signature every call site already expects.
+// Incremental renderer bound to `el`: feed it deltas with .append(), freeze
+// the tail with .finalize(), or hand it a whole document with .setMarkdown().
+// Returns null until the chunk lands — the caller's $effect re-runs on
+// mdReady and picks it up then.
+export function createRenderer(el) {
+  if (!impl) {
+    loadMarkdown();
+    return null;
+  }
+  return impl.createRenderer(el);
+}
+
+export function escapeHtml(s) {
+  return (s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Models frequently glue a heading onto the end of a sentence
+// ("…power laws.# Power Law"), which is invalid markdown and would render as
+// literal text. Split it onto its own line. Requires sentence punctuation
+// before the #'s and a capital/digit/quote after, so "C#", "example.md#anchor"
+// and "#hashtag" survive untouched.
+const MID_LINE_HEADING = /([.!?:;\u2014\u2013])\s*(#{1,6})\s+(?=[A-Z0-9"'\u201C])/g;
+
+export function normalizeHeadings(src) {
+  return (src ?? "").replace(MID_LINE_HEADING, "$1\n\n$2 ");
+}
+
+// Streaming feed: normalizeHeadings needs the punctuation BEFORE a "#" to
+// decide, and a delta can land anywhere, so hold back a trailing fragment that
+// could still become one and release it when the next delta settles it. The
+// hold is at most a few characters, and the caller flushes `carry` through
+// normalizeHeadings when the stream ends.
 //
-// Before the chunk lands it self-triggers the load and returns the source as
-// an escaped, newline-preserving span. That markup matches the plain-text tail
-// MessageItem already renders mid-stream, so the fallback looks like the
-// existing streaming behaviour rather than a flash of unstyled content.
-export function renderMarkdown(src) {
-  if (impl) return impl.renderMarkdown(src);
-  loadMarkdown();
-  return `<span class="whitespace-pre-wrap">${escapeHtml(src ?? "")}</span>`;
+// ponytail: no code-fence awareness — a literal "…# Word" inside a fenced
+// block would get split too. The capital-after-# requirement makes that rare;
+// per-delta fence tracking is the upgrade path if it ever shows up.
+const HEADING_HOLD = /[.!?:;\u2014\u2013]\s*#{0,6}\s*$/;
+
+export function splitHeadingHold(carry, delta) {
+  const buf = (carry ?? "") + (delta ?? "");
+  const m = HEADING_HOLD.exec(buf);
+  const at = m ? m.index : buf.length;
+  return { emit: normalizeHeadings(buf.slice(0, at)), carry: buf.slice(at) };
 }

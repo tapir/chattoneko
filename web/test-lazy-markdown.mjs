@@ -1,11 +1,14 @@
 // Browser check for the lazily-loaded markdown pipeline.
 //
 // The node smoke test covers the pipeline itself, but the split introduced a
-// reactive contract that only a browser can verify: renderMarkdown() returns a
-// plain-text fallback until the dynamic chunk lands, and a component must
-// re-render when it does. A terminal (non-streaming) message is the dangerous
-// case -- nothing else about it changes after mount, so if the onMarkdownReady
-// subscription is broken it would stay stuck as plain text forever.
+// reactive contract that only a browser can verify: createRenderer() returns
+// null (and the message shows escaped plain text) until the dynamic chunk
+// lands, and a component must upgrade when it does. A terminal (non-streaming)
+// message is the dangerous case -- nothing else about it changes after mount,
+// so if the onMarkdownReady subscription is broken it would stay stuck as
+// plain text forever. This also checks the DOM patching half that node cannot
+// reach: block wrappers, the pre.codeblock markup the theme CSS targets, and
+// native MathML for display math.
 //
 // Run: npm run dev (in another shell) then `node test-lazy-markdown.mjs`
 // Needs: npm i --no-save playwright-core, plus a cached chromium in
@@ -45,8 +48,8 @@ const HARNESS_NAME = '__lazy-markdown-harness.html';
 const HARNESS = `<!doctype html><html><head><meta charset="utf-8"><title>harness</title></head><body>
   <script type="module">
     import {
-      renderMarkdown, stablePrefixLen, loadMarkdown,
-      isMarkdownReady, onMarkdownReady,
+      createRenderer, escapeHtml, normalizeHeadings, splitHeadingHold,
+      loadMarkdown, isMarkdownReady, onMarkdownReady,
     } from '/src/lib/markdown.js';
 
     const log = (k, v) => {
@@ -54,32 +57,43 @@ const HARNESS = `<!doctype html><html><head><meta charset="utf-8"><title>harness
       window.__results[k] = v;
     };
 
-    // 1. Synchronous call BEFORE the chunk has loaded -> escaped plain text,
+    const host = document.createElement('div');
+    host.className = 'md-body';
+    document.body.append(host);
+
+    // 1. BEFORE the chunk has loaded: createRenderer returns null (and
+    //    self-triggers the load), so MessageItem paints escaped plain text --
     //    never empty, never a throw.
     log('readyBefore', isMarkdownReady());
-    const before = renderMarkdown('# Title');
-    log('fallbackHtml', before);
-    log('fallbackIsPlainText', !before.includes('<h1>') && before.includes('# Title'));
+    log('rendererBefore', createRenderer(host) === null);
+    host.innerHTML = \`<span class="whitespace-pre-wrap">\${escapeHtml('# Title')}</span>\`;
+    log('fallbackHtml', host.innerHTML);
+    log('fallbackIsPlainText', !host.innerHTML.includes('<h1>') && host.innerHTML.includes('# Title'));
 
-    // 2. Pure helper must work immediately (it is in the entry chunk).
-    log('stablePrefixWorks', stablePrefixLen('a\\nb\\n') === 4);
+    // 2. Pure helpers must work immediately (they are in the entry chunk).
+    log('headingHelperWorks', normalizeHeadings('laws.# Power Law') === 'laws.\\n\\n# Power Law');
+    log('holdHelperWorks', splitHeadingHold('', 'laws.#').carry === '.#');
 
-    // 3. Mirror MessageItem: subscribe, flip state, re-render. This is the
+    // 3. Mirror MessageItem: subscribe, flip state, then feed. This is the
     //    terminal-message path the smoke test cannot reach.
     let mdReady = false;
-    let html = renderMarkdown('# Title');
-    onMarkdownReady(() => {
-      mdReady = true;
-      html = renderMarkdown('# Title');
-      log('afterReadyHtml', html);
-      log('mdReadyFlipped', mdReady);
-      log('upgradedToHeading', html.includes('<h1>'));
-    });
+    onMarkdownReady(() => { mdReady = true; });
 
     await loadMarkdown();
+    log('mdReadyFlipped', mdReady);
     log('readyAfter', isMarkdownReady());
-    log('finalHtml', renderMarkdown('# Title'));
-    log('finalHasHeading', renderMarkdown('# Title').includes('<h1>'));
+
+    const r = createRenderer(host);
+    log('rendererAfter', r !== null);
+    log('fallbackCleared', host.querySelector('span.whitespace-pre-wrap') === null);
+
+    r.setMarkdown(normalizeHeadings('# Title\\n\\nSome **bold**.\\n\\n\`\`\`js\\nconst x = 1;\\n\`\`\`\\n\\n$$y = x^2$$'));
+    log('finalHtml', host.innerHTML.slice(0, 400));
+    log('finalHasHeading', host.querySelector('h1') !== null);
+    log('boldRendered', host.querySelector('strong') !== null);
+    log('blockWrapper', host.querySelector('[data-incremark-block]') !== null);
+    log('codeblockMarkup', host.querySelector('pre.codeblock > code.hljs') !== null);
+    log('mathMarkup', host.querySelector('.incremark-math-block math') !== null);
     log('done', true);
   </script>
 `;
@@ -124,13 +138,20 @@ const assert = (cond, msg, extra) => {
 };
 
 assert(results.readyBefore === false, 'pipeline not ready before load (chunk really is lazy)');
-assert(results.stablePrefixWorks === true, 'stablePrefixLen works synchronously from entry chunk');
-assert(results.fallbackIsPlainText === true, 'fallback returns readable escaped text, not blank', results.fallbackHtml);
-assert(results.fallbackHtml.includes('whitespace-pre-wrap'), 'fallback uses the streaming tail markup', results.fallbackHtml);
+assert(results.rendererBefore === true, 'createRenderer returns null before the chunk lands');
+assert(results.headingHelperWorks === true, 'normalizeHeadings works synchronously from entry chunk');
+assert(results.holdHelperWorks === true, 'splitHeadingHold works synchronously from entry chunk');
+assert(results.fallbackIsPlainText === true, 'fallback paints readable escaped text, not blank', results.fallbackHtml);
+assert(results.fallbackHtml.includes('whitespace-pre-wrap'), 'fallback keeps the plain-text tail markup', results.fallbackHtml);
 assert(results.readyAfter === true, 'loadMarkdown() resolves');
 assert(results.mdReadyFlipped === true, 'onMarkdownReady subscription fired (terminal messages upgrade)');
-assert(results.upgradedToHeading === true, 'subscribed render upgraded to real <h1> markup', results.afterReadyHtml);
-assert(results.finalHasHeading === true, 'renderMarkdown returns full pipeline output once ready');
+assert(results.rendererAfter === true, 'createRenderer returns a renderer once ready');
+assert(results.fallbackCleared === true, 'creating the renderer clears the plain-text fallback');
+assert(results.finalHasHeading === true, 'setMarkdown produced a real <h1> in the DOM');
+assert(results.boldRendered === true, 'inline markup rendered', results.finalHtml);
+assert(results.blockWrapper === true, 'blocks patched in as [data-incremark-block] wrappers');
+assert(results.codeblockMarkup === true, 'code keeps the pre.codeblock markup the theme CSS targets');
+assert(results.mathMarkup === true, 'display math is native MathML inside the scroll wrapper');
 assert(errors.length === 0, 'no uncaught page errors', errors);
 assert(failedRequests.filter((u) => !isNoise(u)).length === 0, 'no failed module requests', failedRequests);
 

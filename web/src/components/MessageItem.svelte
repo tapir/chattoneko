@@ -1,12 +1,12 @@
 <script>
   import { app } from '../lib/state.svelte.js';
   import {
-    renderMarkdown,
-    stablePrefixLen,
-    closeOpenInline,
+    createRenderer,
     escapeHtml,
     isMarkdownReady,
+    normalizeHeadings,
     onMarkdownReady,
+    splitHeadingHold,
   } from '../lib/markdown.js';
   import { formatDuration, formatTokensOrDash } from '../lib/format.js';
   import { copyText } from '../lib/clipboard.js';
@@ -54,110 +54,39 @@
   let userImageFiles = $derived((msg.attachments ?? []).filter((a) => a.kind === 'image'));
   let userFiles = $derived((msg.attachments ?? []).filter((a) => a.kind !== 'image'));
 
-  // ---- streaming markdown: stable prefix + unfinished tail ----
-  // The typewriter grows `content` a few chars per animation frame. Parsing
-  // the WHOLE document with marked + highlight.js + DOMPurify on every frame
-  // is what made streaming stutter, so only complete lines (the stable
-  // prefix) go through the markdown pipeline, at most every PROMOTE_MS. The
-  // tail is a single unfinished line, so it is cheap to parse per frame once
-  // its open syntax is closed (tailHtml below) — no literal `**` mid-line.
-  const PROMOTE_MS = 90;
-  let stableText = $state('');
-  // The prefix ended inside an open ``` fence: the tail is a code line and
-  // must stay literal, or markdown would eat its #, * and backticks.
-  let tailCode = $state(false);
-  let lastPromote = 0;
-  let promoteTimer = null;
+  // ---- streaming markdown ----
+  // incremark-renderer patches blocks straight into `contentEl`: stabilized
+  // blocks stay mounted and only the mutable tail is re-lexed, so the
+  // typewriter's per-frame growth costs one small parse instead of a whole
+  // document re-render. `seen` is the raw prefix already fed to the renderer,
+  // `carry` the heading-normalization holdback (see splitHeadingHold).
+  let contentEl = $state(null);
+  let renderer = null;
+  let rendererEl = null; // the element `renderer` is bound to
+  let seen = '';
+  let carry = '';
+  let rendered = ''; // content already rendered in one terminal pass
 
-  function promoteNow() {
-    const c = content;
-    if (!c.startsWith(stableText)) stableText = '';
-    const cut = stablePrefixLen(c);
-    if (cut > stableText.length) stableText = c.slice(0, cut);
-    tailCode = ((stableText.match(/^\s*```/gm) ?? []).length) % 2 === 1;
-    lastPromote = Date.now();
-  }
-
-  $effect(() => {
-    const c = content;
-    if (!isLive) {
-      // Terminal/historical message: render everything in one pass.
-      clearTimeout(promoteTimer);
-      promoteTimer = null;
-      if (stableText !== c) stableText = c;
-      return;
-    }
-    // stream was reset
-    if (!c.startsWith(stableText)) {
-      stableText = '';
-      tailCode = false;
-    }
-    if (stablePrefixLen(c) <= stableText.length) return;
-    const elapsed = Date.now() - lastPromote;
-    if (elapsed >= PROMOTE_MS) {
-      clearTimeout(promoteTimer);
-      promoteTimer = null;
-      promoteNow();
-    } else if (promoteTimer == null) {
-      promoteTimer = setTimeout(() => {
-        promoteTimer = null;
-        if (isLive) promoteNow();
-      }, PROMOTE_MS - elapsed);
-    }
-  });
-
-  // Drop a pending promotion when the component unmounts (chat switch while
-  // streaming); the effect above re-arms it on every mount/content change.
-  $effect(() => () => clearTimeout(promoteTimer));
-
-  let tail = $derived(isLive ? content.slice(stableText.length) : '');
-
-  // The markdown pipeline (marked + Temml + highlight.js + DOMPurify) is a
-  // lazily-loaded chunk, so it may not have arrived when this first renders.
-  // renderMarkdown falls back to escaped plain text until it does; flipping
-  // this flag is what makes `html` below re-run and swap in real markup.
-  // Without the subscription a TERMINAL message would stay stuck on the
-  // fallback forever — nothing else about it changes after mount.
+  // The pipeline is a lazily-loaded chunk, so it may not have arrived when this
+  // first renders. Until it does the message shows escaped plain text — the
+  // shape the old streaming tail had, so nothing flashes — and flipping
+  // mdReady re-runs the effect below to upgrade in place. Without the
+  // subscription a TERMINAL message would stay stuck on the fallback forever:
+  // nothing else about it changes after mount.
   let mdReady = $state(isMarkdownReady());
   $effect(() => onMarkdownReady(() => (mdReady = true)));
 
-  // Single markdown parse per promotion while live (never per frame);
-  // terminal messages parse once, synchronously, from their full content.
-  let html = $derived.by(() => {
-    void mdReady; // dependency: re-run when the lazy chunk lands
-    if (msg.role !== 'assistant') return '';
-    return renderMarkdown(isLive ? stableText : content);
-  });
-
-  // The tail rendered as real markdown: close its open syntax and parse it —
-  // one unfinished line, so per-frame is cheap — then unwrap the <p>. The tail
-  // continues the prefix's last block, and a real paragraph would add block
-  // margins that collapse again at the next promotion. null from
-  // closeOpenInline (fence line, unclosed display math) and a prefix that ended
-  // inside a code fence keep the literal escaped span.
-  let tailHtml = $derived.by(() => {
-    void mdReady; // dependency: re-run when the lazy chunk lands
-    if (!tail) return '';
-    const closed = tailCode ? null : closeOpenInline(tail);
-    if (closed === null)
-      return `<span class="whitespace-pre-wrap">${escapeHtml(tail)}</span>`;
-    const md = renderMarkdown(closed);
-    const p = /^<p>([\s\S]*)<\/p>\s*$/.exec(md);
-    return p ? p[1] : md;
-  });
-
-  // Post-render decoration: per-code-block copy icon, top-right corner.
-  // Lucide copy/check inlined as strings — the button is created imperatively
-  // here, where a Svelte component cannot be mounted.
+  // Per-code-block copy icon, top-right corner. Lucide copy/check inlined as
+  // strings — the button is created imperatively here, where a Svelte
+  // component cannot be mounted. Runs after every patch, since the renderer
+  // replaces the streaming block node and takes its button with it.
   const ICON_COPY =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
   const ICON_CHECK =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
-  let contentEl = $state(null);
-  $effect(() => {
-    html; // re-run when rendered markdown changes
-    if (!contentEl) return;
-    for (const pre of contentEl.querySelectorAll('pre.codeblock')) {
+
+  function decorateCodeblocks(el) {
+    for (const pre of el.querySelectorAll('pre.codeblock')) {
       if (pre.querySelector(':scope > .codeblock-copy')) continue;
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -174,6 +103,64 @@
       };
       pre.append(btn);
     }
+  }
+
+  // One feed per content change. Reads content / contentEl / mdReady / isLive,
+  // so Svelte tracks all four as dependencies of this effect.
+  $effect(() => {
+    const el = contentEl;
+    const c = content ?? '';
+    if (!el) return; // {#if content} tore the div down
+    if (!mdReady) {
+      el.innerHTML = `<span class="whitespace-pre-wrap">${escapeHtml(c)}</span>`;
+      return;
+    }
+    // Bound by identity, not by nullness: Svelte can swap the div on a remount
+    // or chat switch without the effect ever observing contentEl === null,
+    // which would leave the renderer patching a detached node. A fresh
+    // renderer also clears the plain-text fallback and forgets what was fed.
+    if (rendererEl !== el) {
+      renderer = createRenderer(el);
+      rendererEl = el;
+      seen = '';
+      carry = '';
+      rendered = '';
+    }
+    let touched = false;
+    if (!isLive) {
+      if (rendered === c) return;
+      if (seen === c) {
+        // The stream just ended with everything already fed: flush the holdback
+        // and freeze the tail instead of re-parsing the whole message.
+        if (carry) renderer.append(normalizeHeadings(carry));
+        carry = '';
+        renderer.finalize();
+      } else {
+        // Terminal/historical message: render the whole document in one pass.
+        renderer.setMarkdown(normalizeHeadings(c));
+        seen = c;
+        carry = '';
+      }
+      rendered = c;
+      touched = true;
+    } else {
+      rendered = '';
+      // stream was reset (regenerate/edit): start the renderer over
+      if (!c.startsWith(seen)) {
+        renderer.reset();
+        seen = '';
+        carry = '';
+      }
+      const delta = c.slice(seen.length);
+      seen = c;
+      if (delta) {
+        const step = splitHeadingHold(carry, delta);
+        carry = step.carry;
+        if (step.emit) renderer.append(step.emit);
+        touched = true;
+      }
+    }
+    if (touched) decorateCodeblocks(el);
   });
 
   // Notify parent (MessageList) whenever the rendered content changes,
@@ -380,7 +367,9 @@
     {/each}
 
     {#if content}
-      <div bind:this={contentEl} class="md-body break-words">{@html html}{@html tailHtml}</div>
+      <!-- Children are patched in imperatively by the incremental renderer;
+           Svelte owns the div, the renderer owns what's inside it. -->
+      <div bind:this={contentEl} class="md-body break-words"></div>
     {/if}
 
     <!-- Continuous from the moment of sending: MessageList shows the same

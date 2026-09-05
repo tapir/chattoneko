@@ -1,10 +1,9 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
-/* Math typesetting: Temml emits native MathML, rendered with the browser's
-   system math fonts (Cambria Math / STIX / Noto) — no webfont downloads.
-   Temml-Local.css only ships one 9KB woff2 for \mathscr capitals. */
-@import 'temml/dist/Temml-Local.css';
+/* Math typesetting: incremark-renderer runs KaTeX in MathML mode, so formulas
+   come out as native <math> rendered with the browser's system math fonts
+   (Cambria Math / STIX / Noto) — no webfont downloads, no KaTeX CSS. */
 
 /* Code block syntax palettes: highlight.js token colors inlined below and
    scoped to the UI theme. Surfaces derive from the neutral theme palette
@@ -288,7 +287,13 @@
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
-.md-body > * + * {
+/* incremark-renderer wraps every block in a plain <div data-incremark-block>,
+   so spacing lives both between wrappers and between the elements one wrapper
+   can hold. Margins collapse through the wrapper (no border/padding), which
+   keeps the result identical to the unwrapped layout, and a heading's own
+   1.1em still wins over the 0.65em sibling gap. */
+.md-body > * + *,
+.md-body > [data-incremark-block] > * + * {
   margin-top: 0.65em;
 }
 .md-body h1,
@@ -456,18 +461,31 @@
 .hljs-addition { color: var(--code-green); background-color: color-mix(in oklab, var(--code-green) 12%, transparent); }
 .hljs-deletion { color: var(--code-red); background-color: color-mix(in oklab, var(--code-red) 12%, transparent); }
 
-/* --- Math (Temml / MathML) --- */
-/* Horizontal scrolling lives on the .math-scroll wrapper, NOT on <math>
-   itself: Firefox never turns a display:math box into a scroll container, so
-   overflow-x on <math> is ignored there and the formula would push a
-   horizontal scrollbar onto the whole chat (most visible on mobile). */
-.md-body .math-scroll {
+/* --- Math (KaTeX MathML output) --- */
+/* Horizontal scrolling lives on the .incremark-math-block wrapper, NOT on
+   <math> itself: Firefox never turns a display:math box into a scroll
+   container, so overflow-x on <math> is ignored there and the formula would
+   push a horizontal scrollbar onto the whole chat (most visible on mobile).
+   A plain block wrapper scrolls in every engine.
+
+   No vertical margin here: overflow-x makes this a block formatting context,
+   so its margins cannot collapse with the [data-incremark-block] wrapper
+   incremark puts around it and the two gaps would stack. The generic
+   `.md-body > * + *` block gap does the spacing instead, exactly as it does
+   for every other block. */
+.md-body .incremark-math-block {
   display: block;
   max-width: 100%;
-  margin: 0.6em 0;
+  margin: 0;
   padding: 0.1em 0;
   overflow-x: auto;
   overflow-y: hidden;
+}
+/* KaTeX wraps its <math> in an inline <span class="katex">. Left inline, the
+   surrounding strut adds ~3px to the formula box; as a block the box is the
+   formula's own height, matching the old Temml output. */
+.md-body .incremark-math-block > .katex {
+  display: block;
 }
 .md-body math {
   font-size: 1.05em;

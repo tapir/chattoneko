@@ -1,125 +1,63 @@
-// Heavy markdown pipeline: marked (GFM) + math ($$..$$ display, $..$ inline)
-// -> highlight.js (manual renderer override) -> DOMPurify. The copy icon is
-// attached post-render by MessageItem decoration.
+// Heavy markdown pipeline: incremark-renderer, a marked.js-based incremental
+// renderer built for streaming. It splits the source into stable blocks plus a
+// mutable tail, re-lexes only what changed, and patches block-level DOM nodes
+// in place — so a growing message never re-parses (or repaints) the whole
+// document.
+//
+// Math runs through KaTeX in MathML mode: native <math> rendered with the
+// browser's system math fonts, zero webfont downloads — the same output shape
+// Temml produced before, and incremark handles $$..$$, $..$, \[..\] and \(..\)
+// natively, including mid-stream.
 //
 // This module is ONLY reachable through the dynamic import in markdown.js, so
-// rolldown keeps it in a separate `markdown` chunk that is fetched after first
-// paint instead of sitting on the critical path. Do not import it statically
-// from a component — that would re-merge it into the entry chunk and undo the
-// split (which is exactly what the previous static-import version did).
+// rolldown keeps it in a separate `markdown` chunk fetched after first paint.
+// Do not import it statically from a component — that re-merges it into the
+// entry chunk and undoes the split.
 
-import { marked } from "marked";
-import temml from "temml";
-import hljs from "highlight.js/lib/common";
-import DOMPurify from "dompurify";
-import { escapeHtml, normalizeMathDelimiters } from "./markdown.core.js";
+import {
+  IncrementalDomRenderer,
+  createDefaultHtmlSanitizer,
+  renderMarkdownToString,
+} from "incremark-renderer";
 
-// Math: $...$ inline and $$...$$ display, rendered by Temml to native MathML
-// (browser math fonts — zero webfont downloads, unlike KaTeX's ~60 files).
-// throwOnError: false renders broken LaTeX as an error annotation in place
-// instead of throwing and losing the whole message.
-marked.use({
-  extensions: [
-    {
-      name: "inlineMath",
-      level: "inline",
-      start: (src) => src.indexOf("$"),
-      tokenizer(src) {
-        // (?!\$): a "$$" opener belongs to the block rule — without this the
-        // normalized "$$\n…\n$$" multi-line display block degrades to inline.
-        const m = /^\$(?!\$)([^$\n]+?)\$/.exec(src);
-        return m ? { type: "inlineMath", raw: m[0], text: m[1] } : undefined;
-      },
-      renderer: (tok) =>
-        temml.renderToString(tok.text, { throwOnError: false }),
-    },
-    {
-      name: "blockMath",
-      level: "block",
-      tokenizer(src) {
-        const m = /^\$\$([\s\S]+?)\$\$/.exec(src);
-        return m
-          ? { type: "blockMath", raw: m[0], text: m[1].replace(/^\n+|\n+$/g, "") }
-          : undefined;
-      },
-      renderer: (tok) =>
-        // .math-scroll wrapper: Firefox ignores overflow-x: auto on <math>
-        // (display:math boxes never become scroll containers), so a wide
-        // formula would otherwise give the WHOLE chat a horizontal scrollbar
-        // on narrow screens. A plain block wrapper scrolls in every engine.
-        '<span class="math-scroll">' +
-        temml.renderToString(tok.text, {
-          displayMode: true,
-          throwOnError: false,
-        }) +
-        "</span>\n",
-    },
-    {
-      // Display math that shares its line with text (e.g. normalized
-      // "before\n$$y$$\nafter" stays one paragraph with breaks:true, so the
-      // block rule never sees the "$$" at line start). Runs before
-      // inlineMath in the tokenizer list; requires a non-empty, non-"$"
-      // start so it can't shadow real inline math.
-      name: "blockMathInline",
-      level: "inline",
-      start: (src) => src.indexOf("$$"),
-      tokenizer(src) {
-        const m = /^\$\$([^$][\s\S]*?)\$\$/.exec(src);
-        return m
-          ? { type: "blockMathInline", raw: m[0], text: m[1].replace(/^\n+|\n+$/g, "") }
-          : undefined;
-      },
-      renderer: (tok) =>
-        // Same .math-scroll wrapper as blockMath (span keeps it valid inside
-        // a <p>; CSS makes it a block-level horizontal scroller).
-        '<span class="math-scroll">' +
-        temml.renderToString(tok.text, {
-          displayMode: true,
-          throwOnError: false,
-        }) +
-        "</span>",
-    },
-  ],
-});
+const sanitize = createDefaultHtmlSanitizer();
 
-// In the browser DOMPurify is a ready instance; in DOM-less environments
-// (node smoke tests) it is null. Regex fallback is only exercised there.
-const purify = DOMPurify?.sanitize
-  ? DOMPurify
-  : { sanitize: (raw, _cfg) => raw.replace(/<\/?script[^>]*>/gi, "") };
-
-const renderer = new marked.Renderer();
-
-renderer.code = ({ text, lang }) => {
-  const requested = (lang || "").trim().split(/\s+/)[0].toLowerCase();
-  const language =
-    requested && hljs.getLanguage(requested) ? requested : "plaintext";
-  let highlighted;
-  try {
-    highlighted = hljs.highlight(text, { language }).value;
-  } catch {
-    highlighted = escapeHtml(text);
-  }
-  return `<pre class="codeblock"><code class="hljs language-${escapeHtml(language)}">${highlighted}</code></pre>`;
+export const options = {
+  // breaks: a single newline becomes <br>, matching how models format replies.
+  marked: { gfm: true, breaks: true },
+  // Models don't emit ::: containers; leaving the parser off keeps a stray
+  // ":::" literal instead of swallowing it into an unstyled callout.
+  container: false,
+  highlight: {
+    // Emit the app's own <pre class="codeblock"> rather than incremark's
+    // .incremark-code-block wrapper: the theme CSS and MessageItem's per-block
+    // copy button both key off that markup, so the look stays identical.
+    renderBlock: ({ bodyHtml, codeClassName }) =>
+      `<pre class="codeblock"><code class="${codeClassName ?? "hljs"}">` +
+      // incremark always appends a trailing newline to the code text; inside a
+      // <pre> that renders as an extra blank line. Drop it, keeping any
+      // highlight spans that closed after it.
+      bodyHtml.replace(/\n(<\/span>)*$/, "$1") +
+      "</code></pre>",
+  },
+  // Links open in a new tab. marked's default renderer emits no target attr
+  // and setOptions would clobber incremark's own renderer wholesale, so the
+  // attributes go on after sanitizing — the href is already scheme-checked.
+  sanitizeHtml: {
+    sanitizer: (html) =>
+      sanitize(html).replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" '),
+  },
 };
 
-renderer.link = ({ href, title, text }) => {
-  const safeHref = escapeHtml(href || "");
-  const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
-  return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer"${titleAttr}>${text}</a>`;
-};
+// Browser-only: patches rendered blocks straight into `el`, leaving finished
+// blocks mounted while the stream grows. Clears the plain-text fallback the
+// caller may have painted before this chunk landed.
+export function createRenderer(el) {
+  el.innerHTML = "";
+  return new IncrementalDomRenderer(el, options);
+}
 
-export function renderMarkdown(src) {
-  const raw = marked.parse(normalizeMathDelimiters(src ?? ""), {
-    renderer,
-    gfm: true,
-    breaks: true,
-    async: false,
-  });
-  // mathMl profile: Temml's math output IS MathML — without this profile
-  // DOMPurify strips the entire rendered formula.
-  return purify.sanitize(raw, {
-    USE_PROFILES: { html: true, mathMl: true },
-    ADD_ATTR: ["target", "rel", "display"],
-  });
+// DOM-free one-shot render for a complete string (node smoke tests).
+export function renderToString(src) {
+  return renderMarkdownToString(src ?? "", options);
 }

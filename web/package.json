@@ -25,13 +25,10 @@
     "@lucide/svelte": "^1.40.0",
     "bits-ui": "^2.19.0",
     "clsx": "^2.1.1",
-    "dompurify": "^3.2.0",
-    "highlight.js": "^11.11.0",
-    "marked": "^18.0.11",
+    "incremark-renderer": "^1.1.1",
     "svelte-sonner": "^1.2.1",
     "tailwind-merge": "^3.6.0",
     "tailwind-variants": "^3.3.1",
-    "temml": "^0.13.5",
     "vaul-svelte": "^1.0.0-next.7"
   },
   "allowScripts": {

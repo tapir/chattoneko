@@ -83,12 +83,22 @@ function mediaUrl(media) {
 
 // Camera: launches the device camera app; the shot comes back as a single
 // JPEG. The drawer is already closed by the caller before this runs.
+//
+// CAPTURE_SIDE caps the long side: the stock camera app returns a full-sensor
+// photo (several MB) the server downscales to 2048px anyway. Both target
+// options are required — the plugin ignores a lone value; aspect is preserved.
+// ponytail: gallery picks stay full-size — resizing re-encodes them to JPEG,
+// softening screenshots the vision model reads.
+const CAPTURE_SIDE = 1280;
+
 export async function capturePhoto() {
   const { Camera } = await import("@capacitor/camera");
   try {
     const photo = await Camera.takePhoto({
       quality: 90,
       correctOrientation: true,
+      targetWidth: CAPTURE_SIDE,
+      targetHeight: CAPTURE_SIDE,
     });
     return [photoFile(await fetchBlob(mediaUrl(photo), "camera photo"), "camera")];
   } catch (e) {

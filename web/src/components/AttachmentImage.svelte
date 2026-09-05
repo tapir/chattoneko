@@ -3,26 +3,28 @@
   //  - staged (att.previewUrl): only the local file exists; show it.
   //  - just uploaded (app.previewFor(id)): the local copy is still on screen
   //    from the pending bubble, so keep painting THAT until the server copy
-  //    is fully decoded, then flip. A fresh <img> on the server URL would
-  //    paint progressively over a slow link — a picture already on screen
-  //    visibly re-drawing itself.
+  //    is fully decoded, then drop the preview — which flips `src` to the
+  //    server URL by itself. A fresh <img> on that URL would paint
+  //    progressively over a slow link — a picture already on screen visibly
+  //    re-drawing itself.
   //  - persisted: the server URL.
   import { api } from '../lib/api.js';
   import { app } from '../lib/state.svelte.js';
 
   let { att, ...rest } = $props();
 
-  const server = api.attachmentUrl(att.id);
-  let src = $state(att.previewUrl || app.previewFor(att.id) || server);
+  const server = $derived(api.attachmentUrl(att.id));
+  const src = $derived(att.previewUrl || app.previewFor(att.id) || server);
+  let swapping = false;
 
   $effect(() => {
     const blob = app.previewFor(att.id);
-    if (att.previewUrl || !blob || src === server) return;
+    if (att.previewUrl || !blob || swapping) return;
+    swapping = true;
     const im = new Image();
     im.src = server;
     im.decode().then(() => {
       // Same bytes are now in the browser cache, decoded: this is one paint.
-      src = server;
       URL.revokeObjectURL(blob);
       app.forgetPreview(att.id);
     }, () => {

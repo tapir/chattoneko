@@ -71,6 +71,36 @@ export function normalizeMathDelimiters(src) {
     .join("\n");
 }
 
+// Close the markdown syntax a mid-line stream cut left open, so the incomplete
+// tail can go through the real pipeline and render bold/code/links the way it
+// finally will, instead of showing literal `**` and backticks until the line
+// completes. Returns null when the tail must stay literal text: a fence line,
+// or an unclosed $$ / \[ display-math block — exactly the cases stablePrefixLen
+// pushed into the tail on purpose, so half-parsed LaTeX never reaches Temml.
+//
+// ponytail: naive run counting. Ignores emphasis inside code spans and skips
+// single * and _ (ambiguous with "3 * 4" and snake_case); a wrong closer shows
+// one stray marker for under a line and self-corrects at the next promotion.
+export function closeOpenInline(src) {
+  const s = src ?? "";
+  const n = (re) => (s.match(re) ?? []).length;
+  if (/^\s*```/.test(s)) return null;
+  if (n(/\$\$/g) % 2 === 1) return null;
+  if (n(/\\\[/g) > n(/\\\]/g)) return null;
+  // Code span: an opener run is closed only by a run of the same length.
+  let tick = null;
+  for (const run of s.match(/`+/g) ?? []) {
+    if (tick === null) tick = run;
+    else if (run === tick) tick = null;
+  }
+  if (tick) return s + tick; // inside code: nothing else can be open
+  let out = s;
+  if (n(/\*\*/g) % 2 === 1) out += "**";
+  if (n(/~~/g) % 2 === 1) out += "~~";
+  if (/\]\([^)]*$/.test(s)) out += ")";
+  return out;
+}
+
 // Streaming split point: the longest prefix of `src` ending at a line
 // boundary. While tokens stream in, only this stable prefix goes through the
 // full markdown pipeline (marked + hljs + DOMPurify); the incomplete tail

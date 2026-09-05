@@ -19,7 +19,12 @@
 
 import { escapeHtml } from "./markdown.core.js";
 
-export { escapeHtml, normalizeMathDelimiters, stablePrefixLen } from "./markdown.core.js";
+export {
+  escapeHtml,
+  normalizeMathDelimiters,
+  stablePrefixLen,
+  closeOpenInline,
+} from "./markdown.core.js";
 
 let impl = null;
 let pending = null;

@@ -3,6 +3,8 @@
   import {
     renderMarkdown,
     stablePrefixLen,
+    closeOpenInline,
+    escapeHtml,
     isMarkdownReady,
     onMarkdownReady,
   } from '../lib/markdown.js';
@@ -52,14 +54,18 @@
   let userImageFiles = $derived((msg.attachments ?? []).filter((a) => a.kind === 'image'));
   let userFiles = $derived((msg.attachments ?? []).filter((a) => a.kind !== 'image'));
 
-  // ---- streaming markdown: stable prefix + plain-text tail ----
+  // ---- streaming markdown: stable prefix + unfinished tail ----
   // The typewriter grows `content` a few chars per animation frame. Parsing
   // the WHOLE document with marked + highlight.js + DOMPurify on every frame
   // is what made streaming stutter, so only complete lines (the stable
-  // prefix) go through the markdown pipeline, at most every PROMOTE_MS; the
-  // incomplete tail streams as a plain-text span at zero parse cost.
+  // prefix) go through the markdown pipeline, at most every PROMOTE_MS. The
+  // tail is a single unfinished line, so it is cheap to parse per frame once
+  // its open syntax is closed (tailHtml below) — no literal `**` mid-line.
   const PROMOTE_MS = 90;
   let stableText = $state('');
+  // The prefix ended inside an open ``` fence: the tail is a code line and
+  // must stay literal, or markdown would eat its #, * and backticks.
+  let tailCode = $state(false);
   let lastPromote = 0;
   let promoteTimer = null;
 
@@ -68,6 +74,7 @@
     if (!c.startsWith(stableText)) stableText = '';
     const cut = stablePrefixLen(c);
     if (cut > stableText.length) stableText = c.slice(0, cut);
+    tailCode = ((stableText.match(/^\s*```/gm) ?? []).length) % 2 === 1;
     lastPromote = Date.now();
   }
 
@@ -80,7 +87,11 @@
       if (stableText !== c) stableText = c;
       return;
     }
-    if (!c.startsWith(stableText)) stableText = ''; // stream was reset
+    // stream was reset
+    if (!c.startsWith(stableText)) {
+      stableText = '';
+      tailCode = false;
+    }
     if (stablePrefixLen(c) <= stableText.length) return;
     const elapsed = Date.now() - lastPromote;
     if (elapsed >= PROMOTE_MS) {
@@ -116,6 +127,23 @@
     void mdReady; // dependency: re-run when the lazy chunk lands
     if (msg.role !== 'assistant') return '';
     return renderMarkdown(isLive ? stableText : content);
+  });
+
+  // The tail rendered as real markdown: close its open syntax and parse it —
+  // one unfinished line, so per-frame is cheap — then unwrap the <p>. The tail
+  // continues the prefix's last block, and a real paragraph would add block
+  // margins that collapse again at the next promotion. null from
+  // closeOpenInline (fence line, unclosed display math) and a prefix that ended
+  // inside a code fence keep the literal escaped span.
+  let tailHtml = $derived.by(() => {
+    void mdReady; // dependency: re-run when the lazy chunk lands
+    if (!tail) return '';
+    const closed = tailCode ? null : closeOpenInline(tail);
+    if (closed === null)
+      return `<span class="whitespace-pre-wrap">${escapeHtml(tail)}</span>`;
+    const md = renderMarkdown(closed);
+    const p = /^<p>([\s\S]*)<\/p>\s*$/.exec(md);
+    return p ? p[1] : md;
   });
 
   // Post-render decoration: per-code-block copy button.
@@ -349,7 +377,7 @@
     {/each}
 
     {#if content}
-      <div bind:this={contentEl} class="md-body break-words">{@html html}{#if tail}<span class="whitespace-pre-wrap">{tail}</span>{/if}</div>
+      <div bind:this={contentEl} class="md-body break-words">{@html html}{@html tailHtml}</div>
     {/if}
 
     <!-- Continuous from the moment of sending: MessageList shows the same

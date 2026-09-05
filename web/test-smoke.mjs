@@ -2,7 +2,7 @@
 // Run: node test-smoke.mjs
 
 import { Typewriter } from './src/lib/typewriter.js';
-import { renderMarkdown, stablePrefixLen, loadMarkdown } from './src/lib/markdown.js';
+import { renderMarkdown, stablePrefixLen, closeOpenInline, loadMarkdown } from './src/lib/markdown.js';
 
 // The heavy pipeline is a dynamic import in the browser so it stays off the
 // critical path; await it here so renderMarkdown below hits the real marked +
@@ -92,6 +92,21 @@ const bracketMid = 'Intro\n\\[\ny = x\n';
 assert(bracketMid.slice(0, stablePrefixLen(bracketMid)) === 'Intro\n', 'split backs out of open \\[ block');
 assert(stablePrefixLen('\\[x\\]\nmore\n') === 11, 'closed \\[...\\] block promotes fully');
 console.log('OK streaming math split');
+
+// --- streaming tail: close the syntax a mid-line cut left open ---
+assert(closeOpenInline('the **bold') === 'the **bold**', 'unclosed ** gets a closer');
+assert(closeOpenInline('a `code') === 'a `code`', 'unclosed backtick gets a closer');
+assert(closeOpenInline('~~gone') === '~~gone~~', 'unclosed ~~ gets a closer');
+assert(closeOpenInline('see [doc](https://x.y') === 'see [doc](https://x.y)', 'unclosed link gets a )');
+assert(closeOpenInline('plain **text** here') === 'plain **text** here', 'balanced markers untouched');
+assert(closeOpenInline('snake_case_name and 3 * 4') === 'snake_case_name and 3 * 4', 'single * and _ are never closed');
+assert(closeOpenInline('```js') === null, 'fence line stays literal');
+assert(closeOpenInline('$$\\frac{a}') === null, 'unclosed $$ display math stays literal');
+assert(closeOpenInline('\\[y = x') === null, 'unclosed \\[ block stays literal');
+// the point of closing: the tail renders formatted instead of showing markers
+assert(renderMarkdown(closeOpenInline('the **bold')).includes('<strong>bold</strong>'), 'closed tail renders bold');
+assert(!renderMarkdown(closeOpenInline('a `code')).includes('`'), 'closed tail renders inline code');
+console.log('OK streaming tail closing');
 
 function assert(cond, msg) {
   if (!cond) {

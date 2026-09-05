@@ -97,10 +97,6 @@ class AppState {
   messages = $state([]);
   chatLoading = $state(false);
   generating = $state(false);
-  // Local id of the optimistic user bubble send() draws before the network
-  // round trips finish; cleared once the persisted copy replaces it. Not
-  // $state — nothing renders from it.
-  pendingUserId = "";
   // Chats with an in-flight generation (for the sidebar breathing title, #3).
   // SvelteSet: add/delete must be reactive — a plain Set in $state is not
   // tracked, so background-chat breathing titles silently never updated.
@@ -657,9 +653,7 @@ class AppState {
     );
     this.chats.unshift(chat);
     this.chat = chat;
-    // No `messages = []` here: a brand-new chat already has none, and send()
-    // pushes the optimistic user bubble BEFORE this resolves — resetting would
-    // wipe it straight back off the screen.
+    this.messages = [];
     this.activeChatId = chat.id;
     this.generating = false;
     this.attachStream(chat.id);
@@ -667,53 +661,9 @@ class AppState {
     return { chatId: chat.id, created: true };
   }
 
-  // Replace the optimistic bubble with the persisted user message. Both insert
-  // paths go through here (the POST response and the SSE `user_message`
-  // broadcast, either of which can win the race). Swap the object rather than
-  // mutating its id: MessageList keys its {#each} on m.id.
-  adoptUserMessage(m) {
-    const pending = this.pendingUserId;
-    this.pendingUserId = "";
-    const at = pending ? this.messages.findIndex((x) => x.id === pending) : -1;
-    if (at >= 0) {
-      this.messages[at] = normalizeMessage(m);
-      return;
-    }
-    if (!this.messages.some((x) => x.id === m.id))
-      this.messages.push(normalizeMessage(m));
-  }
-
-  // Drop an optimistic bubble that never got a persisted copy: the send
-  // failed, or the response omitted user_message (refreshChat() on `done`
-  // brings the real one back either way).
-  dropPendingUser() {
-    const pending = this.pendingUserId;
-    this.pendingUserId = "";
-    const at = pending ? this.messages.findIndex((x) => x.id === pending) : -1;
-    if (at >= 0) this.messages.splice(at, 1);
-  }
-
   // attachments: staged pending entries ({file, previewUrl, ...}); they
   // reach the server only now, at send time.
   async send(content, attachments = []) {
-    // Draw the user's bubble before any round trip. On a slow link the
-    // create-chat + upload + send sequence otherwise leaves the message area
-    // blank (neko splash and all) until the POST response lands.
-    // ponytail: text only — staged files have local ids that don't resolve
-    // against api.attachmentUrl(), so images still appear when the POST does.
-    const tempId = pendingId();
-    this.pendingUserId = tempId;
-    this.messages.push(
-      normalizeMessage({
-        id: tempId,
-        chat_id: this.activeChatId ?? "",
-        role: "user",
-        content,
-        seq: Number.MAX_SAFE_INTEGER,
-        created_at: Date.now(),
-        updated_at: Date.now(),
-      }),
-    );
     try {
       const { chatId, created } = await this.ensureChat();
       try {
@@ -727,8 +677,9 @@ class AppState {
         }
         const res = await api.sendMessage(chatId, content, ids);
         const um = res?.user_message ?? res?.message;
-        if (um) this.adoptUserMessage(um);
-        else this.dropPendingUser();
+        if (um && !this.messages.some((m) => m.id === um.id)) {
+          this.messages.push(normalizeMessage(um));
+        }
         const aid = res?.assistant_message_id ?? res?.assistant_id;
         if (aid) {
           this.generating = true;
@@ -756,10 +707,6 @@ class AppState {
         throw e;
       }
     } catch (e) {
-      // Also catches ensureChat() failing (the inner catch rethrows): never
-      // leave an optimistic bubble behind for a message that was never sent.
-      // Composer restores the draft + staged files, so nothing is lost.
-      this.dropPendingUser();
       this.toast("error", `Failed to send: ${e.message}`);
       throw e;
     }
@@ -1148,11 +1095,10 @@ class AppState {
         break;
       }
       case "user_message": {
-        // ponytail: if ANOTHER client sends during our own send round trip, its
-        // broadcast adopts our optimistic bubble and shows their text until
-        // refreshChat() on `done` corrects it. Two clients racing in one chat
-        // is rare enough not to guard; compare content here if it isn't.
-        if (ev.message) this.adoptUserMessage(ev.message);
+        const m = ev.message;
+        if (m && !this.messages.some((x) => x.id === m.id)) {
+          this.messages.push(normalizeMessage(m));
+        }
         break;
       }
       case "chat_updated": {

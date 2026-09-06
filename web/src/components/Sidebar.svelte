@@ -30,6 +30,10 @@ import logoUrl from '$lib/logo.svg';
   // Which list to show: search results while a query is active, else recents.
   let displayedChats = $derived(app.searchResults ?? app.chats);
   let searching = $derived(app.searchResults !== null);
+  // First load of either list: skeletons instead of the empty message.
+  let loadingList = $derived(
+    searching ? app.searchLoading : app.chatsLoading && app.chats.length === 0,
+  );
 
   // Mobile long-press delete: the id of the single row currently showing
   // its delete icon. Revealing another row replaces it (hiding the previous
@@ -168,7 +172,7 @@ import logoUrl from '$lib/logo.svg';
   <!-- [contain:inline-size] excludes the (unbounded-length) chat titles from
        the sidebar's intrinsic width, so only the header row defines the
        content-derived min-width enforced in App.svelte. Safe here: the
-       ConfirmModal dialog is top-layer (showModal) and the hover overlay is
+       Confirm dialog is top-layer (showModal) and the hover overlay is
        anchored to its relative <a> parent, neither relies on nav as a
        containing block. -->
   <nav
@@ -197,29 +201,16 @@ import logoUrl from '$lib/logo.svg';
         {/if}
       </div>
     </div>
-    {#if searching}
-      {#if app.searchLoading}
-        <div class="flex flex-col gap-1.5 px-1 pt-1">
-          <Skeleton class="h-8 bg-sidebar-accent/60" />
-          <Skeleton class="h-8 bg-sidebar-accent/60" />
-        </div>
-      {:else if displayedChats.length === 0}
-        <p class="px-3 py-8 text-center text-sm text-muted-foreground">No chats match “{app.searchQuery}”</p>
-      {:else}
-        <ul class="flex flex-col gap-0.5">
-          {#each displayedChats as chat (chat.id)}
-            <SidebarItem {chat} active={chat.id === app.activeChatId} revealed={deleteRevealId === chat.id} onreveal={(id) => (deleteRevealId = id)} />
-          {/each}
-        </ul>
-      {/if}
-    {:else if app.chatsLoading && app.chats.length === 0}
+    {#if loadingList}
       <div class="flex flex-col gap-1.5 px-1 pt-1">
-        <Skeleton class="h-8 bg-sidebar-accent/60" />
-        <Skeleton class="h-8 bg-sidebar-accent/60" />
-        <Skeleton class="h-8 bg-sidebar-accent/60" />
+        {#each Array(searching ? 2 : 3) as _, i (i)}
+          <Skeleton class="h-8 bg-sidebar-accent/60" />
+        {/each}
       </div>
-    {:else if app.chats.length === 0}
-      <p class="px-3 py-8 text-center text-sm text-muted-foreground">No chats yet</p>
+    {:else if displayedChats.length === 0}
+      <p class="px-3 py-8 text-center text-sm text-muted-foreground">{searching
+        ? `No chats match “${app.searchQuery}”`
+        : 'No chats yet'}</p>
     {:else}
       <ul class="flex flex-col gap-0.5">
         {#each displayedChats as chat (chat.id)}

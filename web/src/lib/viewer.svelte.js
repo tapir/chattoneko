@@ -39,14 +39,6 @@ class ViewerState {
     this.attachment = this.items[(((i + delta) % n) + n) % n];
   }
 
-  next() {
-    this.step(1);
-  }
-
-  prev() {
-    this.step(-1);
-  }
-
   close() {
     this.attachment = null;
     this.items = null;

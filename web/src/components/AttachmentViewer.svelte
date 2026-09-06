@@ -4,7 +4,7 @@
   // attachment in a message (viewer.open() in lib/viewer.svelte.js) —
   // App.svelte mounts this once at the root.
   //
-  // A native <dialog> (the same primitive ConfirmModal uses) puts the
+  // A native <dialog> (the same primitive Confirm uses) puts the
   // overlay in the browser TOP LAYER: it escapes every stacking context,
   // traps focus, and closes on Escape for free — no z-index needed.
   //
@@ -58,7 +58,7 @@
   const NAV_BTN =
     'absolute top-1/2 z-10 hidden size-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/30 text-white/70 backdrop-blur transition-colors hover:bg-black/50 hover:text-white focus-visible:bg-black/50 focus-visible:text-white [@media(pointer:fine)]:flex';
 
-  let dlg;
+  let dlg = $state();
   let unregisterBack;
 
   onMount(() => {

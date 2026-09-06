@@ -2,7 +2,7 @@
   import { app } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
   import { formatTokens } from '../lib/format.js';
-  import { themeState, toggleTheme as toggleThemeMode } from '../lib/theme.svelte.js';
+  import { themeState, toggleTheme } from '../lib/theme.svelte.js';
   import { EllipsisVertical, FileText, Info, LogOut, Moon, PanelLeft, Plus, Server, Settings, Sun, Wrench } from '@lucide/svelte';
   import CopyButton from './CopyButton.svelte';
   import Spinner from './Spinner.svelte';
@@ -20,9 +20,6 @@
   // ---- theme ----
   // Reactive: tracks live system theme changes until an explicit choice is stored.
   let theme = $derived(themeState.current);
-  function toggleTheme() {
-    toggleThemeMode();
-  }
 
   // ---- model (for context-window stats; the picker lives in the Composer) ----
   let currentModel = $derived(chat ? (chat.model ?? '') : app.newChatModel);
@@ -131,15 +128,9 @@
       storageKey="chattoneko-logs-width"
       title="Logs"
       description="Plain-text debug log of the whole conversation — models, tool calls, usage, errors."
-      triggerTitle="Full conversation log (models, tool calls, usage, errors)"
-      disabled={!chat}
       bind:open={logsOpen}
       onOpenChange={(open) => open && loadLog()}
     >
-      {#snippet trigger()}
-        <FileText class="size-4" strokeWidth={1.75} aria-hidden="true" />
-        <span class="hidden sm:inline">Logs</span>
-      {/snippet}
       {#snippet headerExtra()}
         <CopyButton text={() => logText} label="Copy entire log to clipboard" size="sm" />
       {/snippet}
@@ -159,16 +150,8 @@
       storageKey="chattoneko-tools-width"
       bind:open={toolsOpen}
       title="Tools"
-      triggerTitle="Tools available to the assistant in this chat"
       description="Tools available to the assistant in this chat. Toggles are saved for this chat; a new chat starts from the defaults in Settings."
     >
-      {#snippet trigger()}
-        <Wrench class="size-4" strokeWidth={1.75} aria-hidden="true" />
-        <span class="hidden sm:inline">Tools</span>
-        {#if enabledTools.length > 0}
-          <Badge variant="secondary" class="px-1.5 text-[10px] tabular-nums">{enabledTools.length}</Badge>
-        {/if}
-      {/snippet}
       <div class="flex flex-col gap-0.5">
         {#each config?.tools ?? [] as tool (tool.name)}
           <div class="flex items-center gap-3 rounded-md p-2 transition-colors hover:bg-accent/50">
@@ -196,13 +179,8 @@
       storageKey="chattoneko-system-width"
       bind:open={systemOpen}
       title="System prompt"
-      triggerTitle="System prompt used for this chat"
       description="The effective system prompt sent with this conversation — the configured prompt plus the definitions of the enabled tools, so the model knows what it can call."
     >
-      {#snippet trigger()}
-        <Info class="size-4" strokeWidth={1.75} aria-hidden="true" />
-        <span class="hidden sm:inline">System</span>
-      {/snippet}
       {#if app.systemPrompt || config?.system_prompt}
         <pre class="whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">{app.systemPrompt || config?.system_prompt}</pre>
       {:else}

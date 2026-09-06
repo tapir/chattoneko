@@ -2,8 +2,7 @@
   import { app } from '../lib/state.svelte.js';
   import { Trash2 } from '@lucide/svelte';
   import IconButton from './IconButton.svelte';
-  import ConfirmModal from './ConfirmModal.svelte';
-  import ConfirmSheet from './ConfirmSheet.svelte';
+  import Confirm from './Confirm.svelte';
 
   // revealed/onreveal: mobile long-press delete affordance. The parent
   // sidebar owns which row is revealed so only one chat at a time shows its
@@ -21,9 +20,6 @@
   );
 
   let confirmingDelete = $state(false);
-  // Decided at open time: below the sm breakpoint the confirmation renders
-  // as a bottom action sheet (mobile-native), otherwise as a centered dialog.
-  let deleteViaSheet = $state(false);
 
   // Long-press (touch) reveals the delete icon. The row is an <a>, so the
   // click that follows a long-press must be suppressed to avoid navigating.
@@ -87,7 +83,6 @@
   function openDelete(e) {
     e.preventDefault();
     e.stopPropagation();
-    deleteViaSheet = matchMedia('(max-width: 639px)').matches;
     confirmingDelete = true;
   }
 </script>
@@ -137,15 +132,11 @@
 </li>
 
 {#if confirmingDelete}
-  {@const props = {
-    title: 'Delete chat?',
-    body: `"${displayTitle()}" and all its messages will be permanently deleted.`,
-    onconfirm: () => { confirmingDelete = false; app.deleteChat(chat.id); },
-    oncancel: () => (confirmingDelete = false),
-  }}
-  {#if deleteViaSheet}
-    <ConfirmSheet {...props} confirmLabel="Delete Chat" />
-  {:else}
-    <ConfirmModal {...props} />
-  {/if}
+  <Confirm
+    title="Delete chat?"
+    body={`"${displayTitle()}" and all its messages will be permanently deleted.`}
+    confirmLabel="Delete Chat"
+    onconfirm={() => { confirmingDelete = false; app.deleteChat(chat.id); }}
+    oncancel={() => (confirmingDelete = false)}
+  />
 {/if}

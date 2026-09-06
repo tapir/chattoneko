@@ -7,34 +7,11 @@
 
 import { Capacitor } from "@capacitor/core";
 
-// MIME filter for the Files picker — mirrors the image + text/code formats
-// in state.svelte.js (IMAGE_EXTS/TEXT_EXTS). text/* covers plain-text
-// extensions on most devices; the explicit application/* entries cover
-// structured formats Android doesn't classify as text.
-//
-// octet-stream is what Android reports for any extension it can't map (.go,
-// .rs, .sh, .toml…) — file-picker 8.1.0 started honouring `types` on
-// multi-select picks, so without it those code files became unselectable.
-// addAttachments() revalidates by extension regardless, so nothing
-// unsupported can slip through.
-const FILE_MIME_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "text/*",
-  "application/json",
-  "application/ld+json",
-  "application/xml",
-  "application/javascript",
-  "application/typescript",
-  "application/x-yaml",
-  "application/yaml",
-  "application/toml",
-  "application/sql",
-  "application/x-sh",
-  "application/octet-stream",
-];
+// MIME filter for the Files picker: none. Android reports application/
+// octet-stream for every extension it can't map (.go, .rs, .sh, .toml…), so
+// any allow-list either hides those files or includes the catch-all and
+// filters nothing. addAttachments() validates by extension against the same
+// list the server enforces, so the picker stays out of it.
 
 const MIME_EXT = {
   "image/jpeg": "jpg",
@@ -159,11 +136,7 @@ export function pickPhotos() {
   return pickVia((FilePicker) => FilePicker.pickImages(), "gallery photo");
 }
 
-// Files: opens the system file manager (SAF) filtered to the attachable
-// formats.
+// Files: opens the system file manager (SAF), unfiltered — see the note above.
 export function pickFiles() {
-  return pickVia(
-    (FilePicker) => FilePicker.pickFiles({ types: FILE_MIME_TYPES }),
-    "file",
-  );
+  return pickVia((FilePicker) => FilePicker.pickFiles(), "file");
 }

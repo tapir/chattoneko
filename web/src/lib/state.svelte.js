@@ -1087,14 +1087,21 @@ class AppState {
               tool_calls: finalCalls,
               // Keep tool-created files visible until refreshChat lands.
               attachments: [...(this.live?.attachments ?? [])],
+              // done carries per-turn usage and is replayed, so stamping it
+              // here can't be lost between reconnects (#5).
+              ...(ev.prompt_tokens || ev.completion_tokens || ev.duration_ms
+                ? {
+                    prompt_tokens: ev.prompt_tokens ?? 0,
+                    completion_tokens: ev.completion_tokens ?? 0,
+                    duration_ms: ev.duration_ms ?? 0,
+                  }
+                : {}),
             };
           }
         }
         this.destroyLive();
         this.generating = false;
         if (this.activeChatId) this.chatGeneratingIds.delete(this.activeChatId);
-        // done carries per-turn usage and is replayed, so applying it here
-        // can't be lost between reconnects.
         if (ev.prompt_tokens || ev.completion_tokens || ev.duration_ms) {
           const cur = this.chatUsage ?? {
             prompt_tokens: 0,
@@ -1105,18 +1112,6 @@ class AppState {
             completion_tokens:
               cur.completion_tokens + (ev.completion_tokens ?? 0),
           };
-          // Stamp the assistant message with its per-turn stats (#5).
-          if (mid) {
-            const idx = this.messages.findIndex((m) => m.id === mid);
-            if (idx >= 0) {
-              this.messages[idx] = {
-                ...this.messages[idx],
-                prompt_tokens: ev.prompt_tokens ?? 0,
-                completion_tokens: ev.completion_tokens ?? 0,
-                duration_ms: ev.duration_ms ?? 0,
-              };
-            }
-          }
         }
         // Sync persisted state (real seq ordering, tool result messages).
         this.refreshChat();

@@ -1,22 +1,15 @@
 // Pointer-drag resizing for user-resizable panels (sidebar, tools sheet,
 // system sheet). Widths persist to localStorage.
 
+import { lsGet, lsSet } from "./persist.js";
+
 export function loadPanelWidth(key, fallback, { min, max }) {
-  try {
-    const v = parseInt(localStorage.getItem(key) ?? "", 10);
-    if (Number.isFinite(v)) return Math.min(max, Math.max(min, v));
-  } catch {
-    /* private mode */
-  }
-  return fallback;
+  const v = parseInt(lsGet(key), 10);
+  return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
 }
 
 export function savePanelWidth(key, w) {
-  try {
-    localStorage.setItem(key, String(w));
-  } catch {
-    /* private mode */
-  }
+  lsSet(key, w);
 }
 
 // Start a pointer-drag resize. `start` = current width, `invert` = true when

@@ -14,6 +14,7 @@
   import SettingsSheet from './components/SettingsSheet.svelte';
   import AttachmentViewer from './components/AttachmentViewer.svelte';
   import { viewer } from './lib/viewer.svelte.js';
+  import { lsGet, lsSet } from './lib/persist.js';
   import Spinner from './components/Spinner.svelte';
   import ResizeHandle from './components/ResizeHandle.svelte';
   import { cubicOut } from 'svelte/easing';
@@ -23,17 +24,11 @@
   // Desktop sidebar collapse (persisted). The header toggle collapses the
   // inline sidebar on lg+ screens and opens the mobile Sheet below lg.
   const SIDEBAR_KEY = 'chattoneko-sidebar-collapsed';
-  let desktopSidebarCollapsed = $state(
-    typeof localStorage !== 'undefined' && localStorage.getItem(SIDEBAR_KEY) === '1',
-  );
+  let desktopSidebarCollapsed = $state(lsGet(SIDEBAR_KEY) === '1');
 
   function toggleDesktopSidebar() {
     desktopSidebarCollapsed = !desktopSidebarCollapsed;
-    try {
-      localStorage.setItem(SIDEBAR_KEY, desktopSidebarCollapsed ? '1' : '0');
-    } catch {
-      /* private mode */
-    }
+    lsSet(SIDEBAR_KEY, desktopSidebarCollapsed ? '1' : '0');
   }
 
   // User-resizable desktop sidebar width (persisted by ResizeHandle).
@@ -258,8 +253,8 @@
     attachment={viewer.attachment}
     items={viewer.items}
     onclose={() => viewer.close()}
-    onprev={() => viewer.prev()}
-    onnext={() => viewer.next()}
+    onprev={() => viewer.step(-1)}
+    onnext={() => viewer.step(1)}
   />
 {/if}
 

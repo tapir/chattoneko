@@ -1,12 +1,11 @@
 <script>
   // Right-side panel sheet shared by Logs / Tools / System prompt.
   // Owns the user-resizable width (persisted under `storageKey`) and the
-  // left-edge drag handle, so callers only supply trigger + body snippets.
+  // left-edge drag handle, so callers only supply a body snippet.
   // Mobile (<sm): no resize handle, the sheet is truly fullscreen
   // (100% width — the max-sm !important overrides beat the inline
   // width/max-width below). At every size the sheet is opened from the
-  // top bar's 3-dot menu via the bound `open` prop — the trigger is
-  // rendered hidden so the Sheet keeps its open/close machinery.
+  // top bar's 3-dot menu through the bound `open` prop.
   import * as Sheet from '$lib/components/ui/sheet';
   import ResizeHandle from './ResizeHandle.svelte';
   import { registerOverlay } from '../lib/overlays.svelte.js';
@@ -15,11 +14,8 @@
     storageKey,
     title,
     description = '',
-    trigger, // snippet
     headerExtra = null, // optional snippet rendered next to the title
     children,
-    disabled = false,
-    triggerTitle = '',
     open = $bindable(false),
     onOpenChange = null,
   } = $props();
@@ -40,13 +36,6 @@
 </script>
 
 <Sheet.Root {open} onOpenChange={handleOpenChange}>
-  <Sheet.Trigger
-    class="hidden"
-    title={triggerTitle}
-    {disabled}
-  >
-    {@render trigger()}
-  </Sheet.Trigger>
   <Sheet.Content side="right" class="w-full gap-0 max-sm:w-full! max-sm:max-w-full! sm:max-w-none" style="width: {width}px; max-width: 94vw;">
     <div class="max-sm:hidden">
       <ResizeHandle bind:width {storageKey} invert label="Resize {title} panel" />

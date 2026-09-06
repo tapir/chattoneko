@@ -2,6 +2,8 @@
 // persists to localStorage only once the user sets a theme explicitly.
 // Until then, live system changes are followed too.
 
+import { lsGet, lsSet } from './persist.js';
+
 const KEY = 'chattoneko-theme';
 
 const media =
@@ -18,12 +20,8 @@ function systemTheme() {
 export const themeState = $state({ current: 'dark' });
 
 function read() {
-  try {
-    const t = localStorage.getItem(KEY);
-    return t === 'light' || t === 'dark' ? t : null;
-  } catch {
-    return null;
-  }
+  const t = lsGet(KEY);
+  return t === 'light' || t === 'dark' ? t : null;
 }
 
 function getTheme() {
@@ -55,11 +53,7 @@ function syncSystemBars(dark) {
 
 export function setTheme(theme) {
   applyTheme(theme);
-  try {
-    localStorage.setItem(KEY, theme);
-  } catch {
-    /* private mode */
-  }
+  lsSet(KEY, theme);
 }
 
 export function toggleTheme() {

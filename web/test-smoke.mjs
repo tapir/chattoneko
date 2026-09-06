@@ -8,7 +8,7 @@ import { loadMarkdown, normalizeHeadings, splitHeadingHold } from './src/lib/mar
 // critical path; await it here so the checks below hit the real
 // incremark-renderer stack (marked + KaTeX-as-MathML + highlight.js + xss)
 // instead of the plain-text fallback. renderToString is DOM-free, so this runs
-// in node; the DOM patching contract lives in test-lazy-markdown.mjs.
+// in node; the DOM patching half needs a browser and is not covered here.
 const impl = await loadMarkdown();
 const render = impl.renderToString;
 

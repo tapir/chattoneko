@@ -5,17 +5,10 @@
 // once (login screen); the URL and the JWT persist in localStorage under
 // the WebView's origin.
 
+import { lsGet, lsSet } from "./persist.js";
+
 const URL_KEY = "chattoneko-server-url";
 const TOKEN_KEY = "chattoneko-token";
-const LEGACY_KEY_KEY = "chattoneko-api-key"; // pre-JWT builds
-
-// One-time cleanup of the pre-JWT API key: it is worthless against a
-// JWT-only server, so drop it wherever it exists.
-try {
-  localStorage.removeItem(LEGACY_KEY_KEY);
-} catch {
-  /* private mode */
-}
 
 // Capacitor injects window.Capacitor into the WebView — no npm dependency
 // needed for detection.
@@ -26,19 +19,11 @@ export function isNative() {
 }
 
 export function getServerUrl() {
-  try {
-    return localStorage.getItem(URL_KEY) || "";
-  } catch {
-    return "";
-  }
+  return lsGet(URL_KEY);
 }
 
 export function getToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || "";
-  } catch {
-    return "";
-  }
+  return lsGet(TOKEN_KEY);
 }
 
 // normalizeServerUrl trims input, adds a default http:// scheme, and drops
@@ -58,20 +43,11 @@ export function normalizeServerUrl(raw) {
 }
 
 export function setServerUrl(url) {
-  try {
-    localStorage.setItem(URL_KEY, url);
-  } catch {
-    /* private mode */
-  }
+  lsSet(URL_KEY, url);
 }
 
 export function setToken(token) {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* private mode */
-  }
+  lsSet(TOKEN_KEY, token);
 }
 
 // isTokenExpired decodes the JWT payload (no signature check — the server

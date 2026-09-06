@@ -34,9 +34,14 @@ export function setUnauthorizedHandler(fn) {
   onUnauthorized = fn;
 }
 
-async function request(method, path, body) {
+// One fetch path for every endpoint. `body` may be a plain object (sent as
+// JSON) or a FormData (sent as-is, so the browser sets the multipart
+// boundary); `{ text: true }` returns the raw body instead of parsing it.
+async function request(method, path, body, { text = false } = {}) {
   const init = { method };
-  if (body !== undefined) {
+  if (body instanceof FormData) {
+    init.body = body;
+  } else if (body !== undefined) {
     init.headers = { "Content-Type": "application/json" };
     init.body = JSON.stringify(body);
   }
@@ -47,23 +52,26 @@ async function request(method, path, body) {
     throw new ApiError(0, "Cannot reach server");
   }
   if (res.status === 401) onUnauthorized();
-  if (res.status === 204) return null;
-  const text = await res.text();
-  let data = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = null;
-    }
-  }
+  const raw = res.status === 204 ? "" : await res.text();
   if (!res.ok) {
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      /* non-JSON error body */
+    }
     throw new ApiError(
       res.status,
       (data && data.error) || res.statusText || `HTTP ${res.status}`,
     );
   }
-  return data;
+  if (text) return raw;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 function parseMaybeJson(v, fallback) {
@@ -150,18 +158,7 @@ export const api = {
     return { chat, messages, usage, systemPrompt };
   },
   // Full conversation log (plain text), shown in the Logs panel (#6).
-  chatLog: async (id) => {
-    let res;
-    try {
-      res = await fetch(`${base()}/chats/${id}/log`, baseInit());
-    } catch {
-      throw new ApiError(0, "Cannot reach server");
-    }
-    if (res.status === 401) onUnauthorized();
-    const text = await res.text();
-    if (!res.ok) throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`);
-    return text;
-  },
+  chatLog: (id) => request("GET", `/chats/${id}/log`, undefined, { text: true }),
   // Search chats by title (#4). Returns [] for empty query.
   searchChats: async (q) => {
     const data = await request("GET", `/chats?q=${encodeURIComponent(q)}`);
@@ -190,27 +187,7 @@ export const api = {
   uploadAttachments: async (id, files) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f, f.name);
-    let res;
-    try {
-      res = await fetch(`${base()}/chats/${id}/attachments`, baseInit({
-        method: "POST",
-        body: fd,
-      }));
-    } catch {
-      throw new ApiError(0, "Cannot reach server");
-    }
-    if (res.status === 401) onUnauthorized();
-    let data = null;
-    try {
-      data = await res.json();
-    } catch {
-      data = null;
-    }
-    if (!res.ok)
-      throw new ApiError(
-        res.status,
-        data?.error || res.statusText || `HTTP ${res.status}`,
-      );
+    const data = await request("POST", `/chats/${id}/attachments`, fd);
     return Array.isArray(data) ? data : (data?.attachments ?? []);
   },
   // <img>/<a> targets can't carry the Authorization header; GET requests
@@ -223,41 +200,13 @@ export const api = {
   // Plain-text body of a text attachment (the viewer overlay). The server
   // serves text attachments as text/plain regardless of their detected mime,
   // so the body is always safe to render as inert text.
-  attachmentText: async (id) => {
-    let res;
-    try {
-      res = await fetch(`${base()}/attachments/${id}`, baseInit());
-    } catch {
-      throw new ApiError(0, "Cannot reach server");
-    }
-    if (res.status === 401) onUnauthorized();
-    const text = await res.text();
-    if (!res.ok) {
-      let message = res.statusText || `HTTP ${res.status}`;
-      try {
-        message = JSON.parse(text)?.error || message;
-      } catch {
-        /* non-JSON error body */
-      }
-      throw new ApiError(res.status, message);
-    }
-    return text;
-  },
+  attachmentText: (id) =>
+    request("GET", `/attachments/${id}`, undefined, { text: true }),
   // Vision-model description of an image attachment (the text the chat model
   // is shown in place of the image). 404 when the attachment was never
   // described.
-  attachmentDescription: async (id) => {
-    let res;
-    try {
-      res = await fetch(`${base()}/attachments/${id}/description`, baseInit());
-    } catch {
-      throw new ApiError(0, "Cannot reach server");
-    }
-    if (res.status === 401) onUnauthorized();
-    const text = await res.text();
-    if (!res.ok) throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`);
-    return text;
-  },
+  attachmentDescription: (id) =>
+    request("GET", `/attachments/${id}/description`, undefined, { text: true }),
 
   // Probe a candidate server URL (native setup flow): GET /api/meta without
   // any auth. 5s timeout — the browser default on unreachable hosts can wait

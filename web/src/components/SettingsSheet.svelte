@@ -157,46 +157,35 @@
   });
 
   // ---- models ----
-  // Adds a whitelisted model: fetches (and server-side persists) its
-  // metadata from the provider BEFORE the card appears, so the card opens
-  // populated with real data. Unconfigured provider or an unknown model id
-  // falls back to defaults; a failed request adds nothing.
+  // Adds a whitelisted model: the card is pushed first, then filled by the
+  // same provider fetch the per-card "fetch data" button uses (which also
+  // persists the metadata server-side). A failed fetch removes the card again
+  // rather than leaving a half-populated one behind.
   async function addModel() {
     const id = newModel.trim();
-    if (!id || adding || !providerReady) return;
+    if (!id || adding || fetchingId || !providerReady) return;
     if (modelCards.some((c) => c.id === id)) {
       app.toast('error', `${id} is already whitelisted`);
       return;
     }
     adding = true;
+    modelCards = [
+      {
+        id,
+        contextLength: String(DEFAULT_CONTEXT),
+        inputModality: ['text'],
+        outputModality: ['text'],
+        reasoningEfforts: [...DEFAULT_EFFORTS],
+        effortOptions: [...DEFAULT_EFFORTS],
+        reasoningDefault: DEFAULT_EFFORTS[1],
+      },
+      ...modelCards,
+    ];
+    newModel = '';
     try {
-      const res = await api.setupModels([id], providerOverrides());
-      const m = res?.models?.find((x) => x.id === id);
-      const fromProvider = res?.source?.[id] === 'provider' && !!m;
-      const reported = m?.reasoning_efforts ?? DEFAULT_EFFORTS;
-      // Modalities mirror what the provider's /models reported (the backend
-      // already falls back per field to defaults); a failed/unknown fetch
-      // falls back to the hardcoded default effort list. The chip universe
-      // is exactly the reported/default list (never padded with well-known
-      // levels), so a freshly added card matches what a reload would show.
-      modelCards = [
-        {
-          id,
-          contextLength: String(m?.context_window ?? DEFAULT_CONTEXT),
-          inputModality: [...(m?.input_modality ?? ['text'])],
-          outputModality: [...(m?.output_modality ?? ['text'])],
-          reasoningEfforts: [...reported],
-          effortOptions: [...reported],
-          reasoningDefault: fromProvider ? (m.reasoning_default ?? DEFAULT_EFFORTS[1]) : DEFAULT_EFFORTS[1],
-        },
-        ...modelCards,
-      ];
-      newModel = '';
-      await app.loadConfig(); // refresh chat-facing model_info
-      const src = res?.source?.[id];
-      app.toast('success', src === 'provider' ? `Added ${id}` : `Added ${id} with default metadata`);
-    } catch (e) {
-      app.toast('error', `Could not add ${id}: ${e.message}`);
+      if (!(await fetchModelData(id, { added: true }))) {
+        modelCards = modelCards.filter((c) => c.id !== id);
+      }
     } finally {
       adding = false;
     }
@@ -244,8 +233,10 @@
   // Fetches metadata for ONE card from the provider's /models endpoint. The
   // server persists it immediately, so if the rest of the form has no
   // unsaved edits the dirty baseline is refreshed and Save stays disabled.
-  async function fetchModelData(id) {
-    if (fetchingId || !providerReady) return;
+  // Returns false when the request failed (`added` only picks the toast
+  // wording: a brand-new card reads "Added", a refresh reads "Fetched").
+  async function fetchModelData(id, { added = false } = {}) {
+    if (fetchingId || !providerReady) return false;
     const wasDirty = snapshot() !== baseline;
     fetchingId = id;
     try {
@@ -279,9 +270,16 @@
       await app.loadConfig(); // refresh chat-facing model_info (context %, efforts)
       if (!wasDirty) baseline = snapshot();
       const src = res?.source?.[id];
-      app.toast('success', src === 'provider' ? `Fetched data for ${id}` : `No provider data for ${id} — defaults stored`);
+      app.toast(
+        'success',
+        src === 'provider'
+          ? added ? `Added ${id}` : `Fetched data for ${id}`
+          : added ? `Added ${id} with default metadata` : `No provider data for ${id} — defaults stored`,
+      );
+      return true;
     } catch (e) {
-      app.toast('error', `Fetch data failed: ${e.message}`);
+      app.toast('error', added ? `Could not add ${id}: ${e.message}` : `Fetch data failed: ${e.message}`);
+      return false;
     } finally {
       fetchingId = '';
     }

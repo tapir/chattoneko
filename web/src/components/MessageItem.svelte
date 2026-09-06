@@ -56,13 +56,10 @@
   // popping in mid-stream above text that is still typing.
   let attachments = $derived(live ? [] : (msg.attachments ?? []));
   // Image attachments render inline (show_image exists so the user SEES the
-  // picture); everything else keeps the download-chip treatment.
+  // picture); everything else keeps the download-chip treatment. User rows are
+  // never live, so the same two lists feed both sides.
   let imageFiles = $derived(attachments.filter((a) => a.kind === 'image'));
   let files = $derived(attachments.filter((a) => a.kind !== 'image'));
-  // User-message attachments, split the same way for the non-editing view:
-  // images go to the gallery, everything else keeps the chip row.
-  let userImageFiles = $derived((msg.attachments ?? []).filter((a) => a.kind === 'image'));
-  let userFiles = $derived((msg.attachments ?? []).filter((a) => a.kind !== 'image'));
 
   // ---- streaming markdown ----
   // incremark-renderer patches blocks straight into `contentEl`: stabilized
@@ -335,14 +332,14 @@
               <!-- Uploaded pictures get the same gallery as assistant replies;
                    the description badge rides along as a per-cell overlay. -->
               <ImageGallery
-                items={userImageFiles}
+                items={imageFiles}
                 singleClass="max-h-40"
                 widthClass="w-64 sm:w-80"
                 overlay={descBadge}
               />
-              {#if userFiles.length}
+              {#if files.length}
                 <div class="flex flex-wrap gap-1.5">
-                  {#each userFiles as att (att.id)}
+                  {#each files as att (att.id)}
                     <!-- Opens the lightbox rather than a new tab: the URL still
                          exists (and the viewer's download button exposes it),
                          but the click stays inside the app. -->

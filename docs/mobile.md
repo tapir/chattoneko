@@ -43,7 +43,7 @@ The SPA renders these mobile variants from the same components (viewport/`pointe
 | --- | --- |
 | File input for attachments | `AttachmentSheet` bottom drawer → camera / photo gallery / file picker (`lib/native-attachments.js`) |
 | Popover `Select` for model + reasoning effort | `ModelPickerSheet` bottom drawer (segmented effort control, large tappable model rows) |
-| `ConfirmModal` centered `<dialog>` | `ConfirmSheet` bottom action sheet — any dismissal reports cancel |
+| `Confirm` centered `<dialog>` | `Confirm` bottom action sheet — any dismissal reports cancel |
 | Resizable `PanelSheet` side panels | fullscreen sheets, no resize handle |
 | Header refresh button | pull-to-refresh on the sidebar list |
 | Inline resizable sidebar | fullscreen left `Sheet` |

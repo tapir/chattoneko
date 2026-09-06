@@ -1,9 +1,18 @@
 import { streamUrl } from "./server.js";
 
-// SSE stream manager for one chat. Implements the B4 resume contract:
-// events are deduped by seq, reconnects pass ?after=<lastSeq>, and the
-// stream reconnects on a slow poll after clean closes (idle/done) so
-// generations started from other clients are picked up within seconds.
+// The app's ONE SSE connection per tab.
+//
+// Browsers cap an origin at 6 concurrent HTTP/1.1 connections. This used to
+// be three persistent streams per tab (per-chat deltas, all-chats lifecycle,
+// titles), so two open tabs saturated the pool and every fetch from the
+// second tab — including the send that starts a generation — queued inside
+// the browser until the first tab happened to free a socket.
+//
+// One multiplexed connection instead: /api/stream always carries the
+// lifecycle + title events of every chat, and ?chat=<id>&after=<seq> adds the
+// open chat's delta half. That half implements the B4 resume contract:
+// events are deduped by seq, reconnects pass ?after=<lastSeq>, and the stream
+// reconnects on a slow poll after clean closes (idle/done).
 
 const RETRY_MS = 1000; // unexpected drop
 const POLL_MS = 4000; // clean close (server sent idle/done)
@@ -12,6 +21,10 @@ const POLL_MS = 4000; // clean close (server sent idle/done)
 // open forever while the reply and its `done` land in a dead pipe and the UI
 // spins until a reload. Nothing at all for 3 pings' worth → reconnect.
 const STALL_MS = 60_000;
+
+// Types that only ever arrive on the global half (no per-chat copy), so they
+// route to the sidebar handler even when they name the open chat.
+const GLOBAL_ONLY = new Set(["generating_snapshot", "config_changed", "title"]);
 
 // One EventSource: JSON-decodes messages, swallows pings, and after STALL_MS
 // of silence closes itself and calls onStall so the owner can reconnect. The
@@ -45,10 +58,14 @@ function openStream(url, onEvent, onStall) {
   return es;
 }
 
-export class ChatStream {
-  constructor(chatId, onEvent) {
-    this.chatId = chatId;
-    this.onEvent = onEvent;
+export class AppStream {
+  // chatId: the open chat whose delta half this connection also carries, or
+  // null on the home view (global half only). onChat receives the open
+  // chat's own events, onGlobal everything else (sidebar/titles/config).
+  constructor(chatId, onChat, onGlobal) {
+    this.chatId = chatId ?? null;
+    this.onChat = onChat;
+    this.onGlobal = onGlobal;
     this.lastSeq = -1;
     this.epoch = null;
     this.es = null;
@@ -59,28 +76,50 @@ export class ChatStream {
   }
 
   url() {
-    return streamUrl(`/api/chats/${this.chatId}/stream`, { after: this.lastSeq });
+    const params = {};
+    if (this.chatId) {
+      params.chat = this.chatId;
+      params.after = this.lastSeq;
+    }
+    return streamUrl("/api/stream", params);
   }
 
   connect() {
     if (this.stopped) return;
-    const es = openStream(this.url(), (ev) => {
-      // The server's seq space resets when the chat hub is pruned and
-      // recreated (e.g. after a disconnect on an idle chat); every event
-      // carries the hub epoch so we can detect that and reset the dedupe
-      // baseline — with a stale lastSeq the entire next generation
-      // (deltas, done) would be silently dropped.
-      if (ev.epoch && ev.epoch !== this.epoch) {
-        this.epoch = ev.epoch;
-        this.lastSeq = -1;
-      }
-      if (typeof ev.seq === "number") {
-        if (ev.seq <= this.lastSeq) return; // dedupe replayed events
-        this.lastSeq = ev.seq;
-      }
-      if (ev.type === "done" || ev.type === "idle") this.cleanClose = true;
-      this.onEvent(ev);
-    }, () => this.kick());
+    const es = openStream(
+      this.url(),
+      (ev) => {
+        const own = !!this.chatId && ev.chat_id === this.chatId;
+        if (own) {
+          // Seq and epoch belong to the SUBSCRIBED chat's space. The global
+          // half also carries other chats' lifecycle events, stamped with
+          // THEIR hub's seq/epoch — feeding those to the dedupe below would
+          // poison the baseline and silently drop the open chat's deltas.
+          //
+          // The server's seq space resets when the chat hub is pruned and
+          // recreated (e.g. after a disconnect on an idle chat); every event
+          // carries the hub epoch so we can detect that and reset the dedupe
+          // baseline — with a stale lastSeq the entire next generation
+          // (deltas, done) would be silently dropped.
+          if (ev.epoch && ev.epoch !== this.epoch) {
+            this.epoch = ev.epoch;
+            this.lastSeq = -1;
+          }
+          // The open chat's lifecycle events (generation_started / done /
+          // chat_updated) reach us on BOTH halves — the engine fans every
+          // chat event out to global subscribers too. Both copies carry the
+          // same seq, so this dedupe drops the second one.
+          if (typeof ev.seq === "number") {
+            if (ev.seq <= this.lastSeq) return;
+            this.lastSeq = ev.seq;
+          }
+          if (ev.type === "done" || ev.type === "idle") this.cleanClose = true;
+        }
+        if (own && !GLOBAL_ONLY.has(ev.type)) this.onChat(ev);
+        else this.onGlobal(ev);
+      },
+      () => this.kick(),
+    );
     this.es = es;
     es.onerror = () => {
       es.close();
@@ -106,46 +145,5 @@ export class ChatStream {
     clearTimeout(this.timer);
     if (this.es) this.es.close();
     this.es = null;
-  }
-}
-
-// Global and title streams need no resume parameters: they rely on
-// EventSource's built-in auto-reconnect for closed sockets and on the stall
-// watchdog for half-open ones (a stall just opens a fresh EventSource).
-class SimpleStream {
-  constructor(path, onEvent) {
-    this.path = path;
-    this.onEvent = onEvent;
-    this.connect();
-  }
-
-  connect() {
-    this.es = openStream(streamUrl(this.path), this.onEvent, () => this.connect());
-  }
-
-  close() {
-    this.es?.close();
-    this.es = null;
-  }
-}
-
-// Global (all-chats) lifecycle stream: generation_started / done /
-// chat_updated for EVERY chat, so the sidebar tracks background generations
-// (breathing titles) without a per-chat stream each. The server sends a
-// generating_snapshot first on every (re)connect, so reconnects self-heal.
-export class GlobalStream extends SimpleStream {
-  constructor(onEvent) {
-    super("/api/stream", onEvent);
-  }
-}
-
-// Title stream: the title task's DEDICATED channel. Carries only
-// {chat_id, title} events (an auto-generated title became final), fully
-// independent from the engine streams so generation traffic can never delay
-// or drop a title update. A missed event only delays a sidebar label until
-// the next chat-list load (title events are idempotent: chat id + title).
-export class TitleStream extends SimpleStream {
-  constructor(onEvent) {
-    super("/api/stream/titles", onEvent);
   }
 }

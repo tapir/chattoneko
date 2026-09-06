@@ -97,9 +97,11 @@ Every chat hub keeps: a chat-scoped monotonic event `seq`, an `epoch` (hub incar
 - Chat-level events (`user_message`, `chat_updated`, `settings_updated`, `messages_reset`) go to current subscribers; `chat_updated` is additionally replayed during the grace period so a rename landing right after `done` is not lost to a reconnecting client.
 - Subscribing (`Subscribe(chatID, after)`) replays every buffered event with `seq > after` losslessly; with no generation present, an `idle` event is emitted immediately.
 
-**Global (all-chats) stream.** Sidebar-relevant lifecycle events — `generation_started`, `done`, `chat_updated` — are additionally fanned out to engine-level global subscribers so clients can track background generations (breathing titles) without attaching a stream to every chat; `config_changed` rides the same stream to tell clients the MCP tool catalog was rebuilt after a config save (refetch `/api/config`). On subscribe, clients first receive a `generating_snapshot` listing every chat with a running generation, so (re)connecting reconciles without polling.
+**Global (all-chats) half.** Sidebar-relevant lifecycle events — `generation_started`, `done`, `chat_updated` — are additionally fanned out to engine-level global subscribers so clients can track background generations (breathing titles) without attaching a stream to every chat; `config_changed` and the title task's `title` events ride the same fan-out. On subscribe, clients first receive a `generating_snapshot` listing every chat with a running generation, so (re)connecting reconciles without polling.
 
-Wire event vocabulary (`WireEvent`): `generation_started`, `delta`, `reasoning_delta`, `tool_call_started`, `tool_call_delta`, `tool_call_done`, `tool_result`, `attachment_created`, `status`, `done` (carries per-turn usage + duration), `idle`, `user_message`, `chat_updated`, `settings_updated`, `messages_reset` (history truncated elsewhere — refetch), `generating_snapshot`, `config_changed` (global).
+**One endpoint, both halves.** `GET /api/stream` is the app's ONLY SSE endpoint: it always carries the global half, and `?chat=<id>&after=<seq>` additionally subscribes that chat's replayable half (the handler selects over both channels; a nil channel — no `chat` param, home view — simply never fires). Browsers cap an origin at 6 concurrent HTTP/1.1 connections, and one persistent socket per event class meant two open tabs held six: every fetch from the second tab, including the send that starts a generation, queued inside the browser until the first tab freed a socket. **Do not add a second long-lived endpoint per tab.** A `chat` id that does not exist simply yields `idle` on its half rather than a 404 (`GET /api/chats/{id}` is what reports a missing chat; a 404 here would cut the sidebar's lifecycle events and leave the client retry-looping). Because `deliver` fans every chat event out to global subscribers too, the subscribed chat's lifecycle events arrive on BOTH halves with the same `seq` — clients dedupe by seq and drop the second copy.
+
+Wire event vocabulary (`WireEvent`): `generation_started`, `delta`, `reasoning_delta`, `tool_call_started`, `tool_call_delta`, `tool_call_done`, `tool_result`, `attachment_created`, `status`, `done` (carries per-turn usage + duration), `idle`, `user_message`, `chat_updated`, `settings_updated`, `messages_reset` (history truncated elsewhere — refetch), `generating_snapshot`, `config_changed`, `title` (global).
 
 ## Provider (internal/provider)
 
@@ -130,7 +132,7 @@ MCP hub (`mcphub`): connects every `mcp_servers` entry at startup (stdio via `ex
 
 Background task that is the ONLY writer of auto-generated titles. A polling loop (1s cadence, at most 16 chats per sweep) finds chats with `title_generated = 0` and picks the source from the first user message: its text (capped at 1000 runes) goes to `GenerateFromText`; a text-only first message goes to `GenerateFromFile` with the filename + content; an image-only first message gets the fixed title `User Image Input` with no model call. The model call uses a dedicated NON-streaming client (same provider endpoint, task model + its stored default effort, `max_output_tokens = 1024` so reasoning models can't spend the whole budget before emitting content, 30s per-call timeout). Transient failures retry with exponential backoff (2s → 30s cap) at most 5 times per chat, after which the chat keeps "New Chat". The result is capped at 60 runes and written conditionally (`SetGeneratedTitle` only while `title_generated = 0`) — a concurrent manual rename wins; the task then marks the title final either way.
 
-Results are published on the task's own independent SSE hub (`/api/stream/titles`): separate mutex, channels and event type from the engine's machinery, so a stalled generation or slow chat subscriber can never delay or drop a title update. Title events are self-contained (chat id + title) and idempotent — no replay buffer needed.
+Results are handed to a publish callback (wired to `Engine.PublishTitle`), which fans them out as `title` events on the global half of `/api/stream` — the task itself still shares no locks, channels or buffers with the generation machinery, so a stalled generation cannot delay a title. Title events are self-contained (chat id + title) and idempotent — no replay buffer needed: a dropped one costs a stale sidebar label until the next chat-list load (which focus/visibility triggers).
 
 ## Attachments (internal/attach)
 
@@ -164,8 +166,7 @@ Route table (`ServeMux` with method patterns):
 | `PUT /api/setup` | partial config update — only provided fields change (any `auth` field is ignored). `models.metas` upserts per-model metadata (models dropped from the whitelist lose theirs); `tool_defaults` replaces the whole global per-tool default map. Returns the full config. |
 | `POST /api/setup/models` | accepts `{"model_ids":[...]}`; fetches the provider's `/models`, stores per-model metadata (defaults where unreported), returns the stored rows + per-id source |
 | `GET /api/chats` | cursor-paginated chat list (`limit`, `before`, `before_id`) or `?q=` text search |
-| `GET /api/stream` | global all-chats SSE stream |
-| `GET /api/stream/titles` | title task's SSE stream |
+| `GET /api/stream?chat=<id>&after=<seq>` | the ONE SSE endpoint: all-chats lifecycle + title events, plus chat `<id>`'s replayable half when `chat` is given |
 | `POST /api/chats` | create empty chat ("New Chat"; optional model/params/tools) |
 | `GET /api/chats/{id}` | chat + messages (seq-ordered) + `active` + effective system prompt + token totals |
 | `GET /api/chats/{id}/log` | plain-text debug dump of the whole conversation |
@@ -175,7 +176,6 @@ Route table (`ServeMux` with method patterns):
 | `PATCH /api/chats/{id}/messages/{mid}` | edit a user message (optional attachment keep-list), truncate everything after it, re-generate; broadcasts `messages_reset` |
 | `POST /api/chats/{id}/regenerate` | delete the last assistant message + everything after it (reap dangling attachments), re-generate; broadcasts `messages_reset` |
 | `DELETE /api/chats/{id}/generation` | stop the active generation (partial output kept) |
-| `GET /api/chats/{id}/stream?after=<seq>` | per-chat SSE stream with lossless replay |
 | `POST /api/chats/{id}/attachments` | multipart upload, field `files` (≤8 files) |
 | `GET /api/attachments/{id}` | stored bytes (image/png or text/plain download) |
 | `GET /api/attachments/{id}/description` | cached vision-model text description of an image attachment (404 until generated) |

@@ -139,10 +139,10 @@ func run() error {
 	}
 
 	// Background title task: the ONLY writer of auto-generated titles. Runs
-	// on the server context; its dedicated SSE hub fans title events out
-	// independently of the engine's generation streams. It reads its provider
-	// + task model live from the config store.
-	titleSvc := titlegen.New(st, cfgStore)
+	// on the server context and publishes finals on the engine's global SSE
+	// stream (the app's one stream endpoint — see api.handleStream). It reads
+	// its provider + task model live from the config store.
+	titleSvc := titlegen.New(st, cfgStore, eng.PublishTitle)
 	go titleSvc.Run(serverCtx)
 
 	distFS, err := fs.Sub(webFS, "web/dist")
@@ -150,7 +150,7 @@ func run() error {
 		return fmt.Errorf("embedded frontend: %w", err)
 	}
 	a := auth.New(cfgStore)
-	srv := api.New(cfgStore, st, a, eng, catalog, titleSvc.Hub(), distFS)
+	srv := api.New(cfgStore, st, a, eng, catalog, distFS)
 
 	// Live config wiring: re-dial the provider and reconcile MCP servers
 	// whenever the relevant settings change. Both can take real time (MCP

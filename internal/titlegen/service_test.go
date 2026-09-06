@@ -54,11 +54,22 @@ func (f *fakeGen) GenerateFromFile(_ context.Context, _, _ string) (string, erro
 	return f.fileResult, f.fileErr
 }
 
+// titleEvent records one published title. Production wires publish to
+// engine.PublishTitle (the global SSE stream); tests capture into a channel.
+type titleEvent struct{ chatID, title string }
+
+// recordTitles points svc's publish callback at a buffered channel.
+func recordTitles(svc *Service) chan titleEvent {
+	ch := make(chan titleEvent, 16)
+	svc.publish = func(id, title string) { ch <- titleEvent{id, title} }
+	return ch
+}
+
 func newService(st *store.Store, gen generator) *Service {
 	return &Service{
 		store:    st,
 		gen:      gen,
-		hub:      NewHub(),
+		publish:  func(string, string) {},
 		interval: time.Millisecond,
 		timeout:  5 * time.Second,
 		batch:    16,
@@ -141,8 +152,7 @@ func TestTitlesFromText(t *testing.T) {
 	gen := &fakeGen{textResult: "Go For Loops"}
 	svc := newService(st, gen)
 
-	events, unsub := svc.hub.Subscribe()
-	defer unsub()
+	events := recordTitles(svc)
 
 	svc.sweep(context.Background())
 
@@ -157,7 +167,7 @@ func TestTitlesFromText(t *testing.T) {
 	}
 	select {
 	case ev := <-events:
-		if ev.ChatID != chat.ID || ev.Title != "Go For Loops" {
+		if ev.chatID != chat.ID || ev.title != "Go For Loops" {
 			t.Fatalf("event = %+v", ev)
 		}
 	case <-time.After(time.Second):
@@ -241,7 +251,7 @@ func TestSweepUnconfiguredDoesNotPanic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := New(st, cfgs) // production wiring, no provider configured
+	svc := New(st, cfgs, func(string, string) {}) // production wiring, no provider configured
 	svc.sweep(context.Background())
 
 	if !needsTitle(t, st, chat.ID) {
@@ -329,8 +339,7 @@ func TestRenameDuringGenerationWins(t *testing.T) {
 	}
 	svc := newService(st, gen)
 
-	events, unsub := svc.hub.Subscribe()
-	defer unsub()
+	events := recordTitles(svc)
 
 	svc.sweep(context.Background())
 
@@ -526,7 +535,7 @@ func TestTaskClientUsesDatabaseDefaultEffort(t *testing.T) {
 	meta.ReasoningDefault = "high"
 	cfgs, _ := taskConfig(t, "task-m", &meta)
 
-	svc := New(testStore(t), cfgs)
+	svc := New(testStore(t), cfgs, func(string, string) {})
 	cli := svc.taskClient(context.Background())
 	if cli == nil {
 		t.Fatal("task client nil despite provider/task model configured")
@@ -540,7 +549,7 @@ func TestTaskClientDefaultEffortWithoutStoredRow(t *testing.T) {
 	// No metadata row: ModelMetas applies the spec defaults (default medium).
 	cfgs, _ := taskConfig(t, "task-m", nil)
 
-	svc := New(testStore(t), cfgs)
+	svc := New(testStore(t), cfgs, func(string, string) {})
 	cli := svc.taskClient(context.Background())
 	if cli == nil {
 		t.Fatal("task client nil")
@@ -555,7 +564,7 @@ func TestTaskClientRebuildsOnEffortChange(t *testing.T) {
 	meta.ReasoningDefault = "low"
 	cfgs, _ := taskConfig(t, "task-m", &meta)
 
-	svc := New(testStore(t), cfgs)
+	svc := New(testStore(t), cfgs, func(string, string) {})
 	ctx := context.Background()
 	first := svc.taskClient(ctx)
 	if first == nil || first.effort != "low" {
@@ -583,7 +592,7 @@ func TestTaskClientFallsBackOnMetaLoadFailure(t *testing.T) {
 	meta := config.DefaultModelMeta("task-m")
 	cfgs, sqlDB := taskConfig(t, "task-m", &meta)
 
-	svc := New(testStore(t), cfgs)
+	svc := New(testStore(t), cfgs, func(string, string) {})
 	// Break the models table; metadata reads fail but titles must not stall.
 	if _, err := sqlDB.Exec(`DROP TABLE models`); err != nil {
 		t.Fatalf("drop models table: %v", err)

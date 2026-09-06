@@ -8,7 +8,7 @@ import {
   normalizeChat,
   normalizeMessage,
 } from "./api.js";
-import { ChatStream, GlobalStream, TitleStream } from "./stream.svelte.js";
+import { AppStream } from "./stream.svelte.js";
 import {
   isNative,
   getServerUrl,
@@ -160,40 +160,26 @@ class AppState {
   drafts = $state({});
 
   // non-reactive internals
+  // The one SSE connection: all-chats lifecycle + titles, plus the open
+  // chat's deltas (see lib/stream.svelte.js for why it is a single socket).
   stream = null;
   tw = null; // content typewriter
   twr = null; // reasoning typewriter
   liveContent = "";
   liveReasoning = "";
-  gstream = null; // global (all-chats) lifecycle stream
-  tstream = null; // title task's dedicated stream
 
   constructor() {
     setUnauthorizedHandler(() => {
       if (this.authEnabled && this.authed) {
-        // The streams were opened with the now-dead token baked into their
-        // URLs and cannot re-authenticate — close them so they stop
-        // replaying/retrying forever on the login screen.
-        this.closeAllStreams();
+        // The stream was opened with the now-dead token baked into its URL
+        // and cannot re-authenticate — close it so it stops replaying/retrying
+        // forever on the login screen. login() attaches a fresh one.
+        this.detachStream();
         setToken(""); // the rejected token is dead — drop it
         this.authed = false;
         this.toast("error", "Session expired — please log in again");
       }
     });
-  }
-
-  // Closes every SSE stream (per-chat, global, titles). login() re-attaches
-  // fresh ones built with the new token.
-  closeAllStreams() {
-    this.detachStream();
-    if (this.gstream) {
-      this.gstream.close();
-      this.gstream = null;
-    }
-    if (this.tstream) {
-      this.tstream.close();
-      this.tstream = null;
-    }
   }
 
   // ---- boot / auth ----
@@ -235,8 +221,7 @@ class AppState {
     }
     this.authChecked = true;
     if (this.authed) {
-      this.attachGlobalStream();
-      this.attachTitleStream();
+      this.attachStream(this.activeChatId);
       await Promise.all([this.loadConfig(), this.loadChats()]);
     }
   }
@@ -283,15 +268,14 @@ class AppState {
     this.authed = true;
     this.needsServerSetup = false; // mobile: leave the setup screen behind
     this.username = username;
-    this.attachGlobalStream();
-    this.attachTitleStream();
+    this.attachStream(this.activeChatId);
     await Promise.all([this.loadConfig(), this.loadChats()]);
   }
 
   async logout() {
     // JWTs are stateless: there is nothing to invalidate server-side —
     // discarding the token IS the logout (same on web and native).
-    this.closeAllStreams();
+    this.detachStream();
     setToken("");
     location.reload();
   }
@@ -413,40 +397,24 @@ class AppState {
     }
   }
 
-  // ---- global stream: sidebar state for background chats (#3) ----
-
-  // Only the ACTIVE chat has a per-chat SSE stream; the global stream
-  // (attachGlobalStream) pushes lifecycle events for every chat so the
-  // sidebar can breathe/unbreathe and pick up renames without it.
-  attachGlobalStream() {
-    if (this.gstream) return;
-    this.gstream = new GlobalStream((ev) => this.handleGlobalEvent(ev));
-  }
-
-  // ---- title stream: auto-generated titles pushed by the title task ----
-
-  // The title task's dedicated stream carries ONLY title events, so sidebar
-  // titles update live without being queued behind generation traffic.
-  attachTitleStream() {
-    if (this.tstream) return;
-    this.tstream = new TitleStream((ev) => this.handleTitleEvent(ev));
-  }
-
-  handleTitleEvent(ev) {
-    if (!ev.chat_id || ev.title == null) return;
-    // Sidebar entry.
-    const c = this.chats.find((c) => c.id === ev.chat_id);
-    if (c) c.title = ev.title;
-    // Active chat (header, document title).
-    if (this.chat && this.chat.id === ev.chat_id) {
-      this.chat = { ...this.chat, title: ev.title };
-    }
-  }
+  // ---- the stream: sidebar state for background chats (#3) + titles ----
 
   handleGlobalEvent(ev) {
-    // The active chat's own stream owns its state; global events for it are
-    // duplicates (applying them is idempotent but unnecessary).
+    // The open chat's own half owns its state; global events for it are
+    // duplicates (the stream's seq dedupe drops most of them).
     switch (ev.type) {
+      case "title": {
+        // The title task's final auto-generated title.
+        if (!ev.chat_id || ev.title == null) break;
+        // Sidebar entry.
+        const c = this.chats.find((c) => c.id === ev.chat_id);
+        if (c) c.title = ev.title;
+        // Open chat (header, document title).
+        if (this.chat && this.chat.id === ev.chat_id) {
+          this.chat = { ...this.chat, title: ev.title };
+        }
+        break;
+      }
       case "generating_snapshot": {
         // Full server-side truth on (re)connect: additions and removals are
         // both safe. The active chat is excluded — its stream owns it.
@@ -519,9 +487,16 @@ class AppState {
 
   // ---- active chat ----
 
-  attachStream(chatId) {
+  // (Re)open the one SSE connection. chatId null = home view: the global
+  // half only. Switching chats reconnects, because the subscribed chat is a
+  // query parameter — the snapshot on reconnect re-syncs the sidebar.
+  attachStream(chatId = null) {
     this.detachStream();
-    this.stream = new ChatStream(chatId, (ev) => this.handleStreamEvent(ev));
+    this.stream = new AppStream(
+      chatId,
+      (ev) => this.handleStreamEvent(ev),
+      (ev) => this.handleGlobalEvent(ev),
+    );
   }
 
   detachStream() {
@@ -577,6 +552,7 @@ class AppState {
   }
 
   closeChat() {
+    const attached = !!this.stream;
     this.detachStream();
     this.destroyLive();
     if (this.generating && this.activeChatId) {
@@ -589,6 +565,8 @@ class AppState {
     this.chatUsage = null;
     this.systemPrompt = "";
     this.chatToolOverrides = {};
+    // Drop the closed chat's delta half but stay connected for the sidebar.
+    if (attached && this.authed) this.attachStream();
   }
 
   async refreshChat() {

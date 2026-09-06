@@ -72,10 +72,10 @@ func newChatHub(id string, global func(WireEvent)) *chatHub {
 
 // deliver sends an event to every subscriber; a subscriber whose buffer is
 // full is detached (its channel is closed) and must reconnect — the replay
-// buffer covers the gap. The event is also stamped with the chat id and
-// fanned out to global (all-chats) subscribers, which filter by type.
+// buffer covers the gap. The event is also fanned out to global (all-chats)
+// subscribers, which filter by type. Callers stamp ChatID (publishers must
+// set it BEFORE buffering, so replays carry it too).
 func (h *chatHub) deliver(ev WireEvent) {
-	ev.ChatID = h.id
 	for id, ch := range h.subs {
 		select {
 		case ch <- ev:
@@ -119,6 +119,9 @@ func (h *chatHub) publishGen(ev WireEvent) {
 	if h.gen == nil {
 		return
 	}
+	// Stamped BEFORE buffering so replayed events carry it too — the merged
+	// /api/stream routes by chat_id.
+	ev.ChatID = h.id
 	h.seq++
 	ev.Seq = h.seq
 	ev.Epoch = h.epoch
@@ -136,6 +139,7 @@ func (h *chatHub) publishGen(ev WireEvent) {
 // the sidebar title stale until a full reload.
 // Caller holds chatHub.mu.
 func (h *chatHub) publishChat(ev WireEvent) {
+	ev.ChatID = h.id // see publishGen
 	ev.Epoch = h.epoch
 	if ev.Type == "chat_updated" && h.gen != nil {
 		h.seq++

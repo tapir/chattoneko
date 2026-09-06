@@ -1,13 +1,13 @@
 // Package titlegen runs the background title-generation task: it polls for
 // chats whose title is not final yet (title_generated = 0), derives a title
 // from the first user message via a dedicated (non-chat) OpenAI-compatible
-// client, and publishes the result on its own independent SSE fan-out.
+// client, and hands the result to a publish callback (wired to the engine's
+// global SSE stream).
 //
-// Independence contract: the Hub, the polling loop and the LLM client share
-// NO locks, channels or buffers with the engine's generation machinery — a
-// stalled chat generation or a slow per-chat SSE subscriber can never delay
-// or drop a title update. The store's conditional write
-// (SetGeneratedTitle) makes a concurrent manual rename win over the task.
+// The polling loop and the LLM client share NO locks, channels or buffers
+// with the engine's generation machinery — a stalled chat generation can
+// never delay a title. The store's conditional write (SetGeneratedTitle)
+// makes a concurrent manual rename win over the task.
 package titlegen
 
 import (
@@ -72,7 +72,8 @@ type Service struct {
 	store *store.Store
 	cfgs  *config.Store
 	gen   generator // test override; nil in production
-	hub   *Hub
+	// publish announces a final title (engine.PublishTitle in production).
+	publish func(chatID, title string)
 
 	interval time.Duration
 	timeout  time.Duration
@@ -88,11 +89,11 @@ type Service struct {
 // New builds the task. The title client (separate from the chat provider;
 // same endpoint/key, task model from config) is created lazily from the live
 // config, so provider/model changes take effect without a restart.
-func New(st *store.Store, cfgs *config.Store) *Service {
+func New(st *store.Store, cfgs *config.Store, publish func(chatID, title string)) *Service {
 	return &Service{
 		store:    st,
 		cfgs:     cfgs,
-		hub:      NewHub(),
+		publish:  publish,
 		interval: defaultInterval,
 		timeout:  defaultTimeout,
 		batch:    defaultBatch,
@@ -141,9 +142,6 @@ func (s *Service) taskClient(ctx context.Context) *client {
 	}
 	return s.cli
 }
-
-// Hub returns the title-event fan-out (for the SSE endpoint).
-func (s *Service) Hub() *Hub { return s.hub }
 
 // Run polls until ctx is cancelled. Serial: one sweep at a time, one chat at
 // a time — a slow provider delays later chats by at most timeout each, and
@@ -280,7 +278,7 @@ func (s *Service) applyTitle(ctx context.Context, chatID, title string) {
 	if !ok {
 		return
 	}
-	s.hub.Publish(chatID, title)
+	s.publish(chatID, title)
 }
 
 // fail records a transient failure with backoff; after maxFailures it gives

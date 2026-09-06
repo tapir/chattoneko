@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +23,6 @@ import (
 	"chattoneko/internal/mcphub"
 	"chattoneko/internal/provider"
 	"chattoneko/internal/store"
-	"chattoneko/internal/titlegen"
 )
 
 // testPassword is the plaintext password used by auth-enabled test servers
@@ -73,7 +73,6 @@ type testServer struct {
 	cfg    *config.Store
 	auth   *auth.Auth
 	engine *engine.Engine
-	titles *titlegen.Hub
 }
 
 var testStatic = fstest.MapFS{
@@ -111,8 +110,7 @@ func newTestServer(t *testing.T, prov provider.Provider, authEnabled bool) *test
 	eng := engine.New(serverCtx, st, prov, emptyMCP{}, cfg, nil)
 	hub := mcphub.New(cfg)
 	a := auth.New(cfg)
-	titles := titlegen.NewHub()
-	srv := New(cfg, st, a, eng, hub, titles, testStatic)
+	srv := New(cfg, st, a, eng, hub, testStatic)
 	ts := &testServer{
 		server: httptest.NewServer(srv.Handler()),
 		store:  st,
@@ -120,7 +118,6 @@ func newTestServer(t *testing.T, prov provider.Provider, authEnabled bool) *test
 		cfg:    cfg,
 		auth:   a,
 		engine: eng,
-		titles: titles,
 	}
 	t.Cleanup(ts.server.Close)
 	return ts
@@ -590,10 +587,6 @@ func TestAuthMiddlewareGating(t *testing.T) {
 	if rec.Code != 401 {
 		t.Fatalf("token on POST route: %d", rec.Code)
 	}
-	rec = ts.do(t, "GET", "/api/chats/nope/stream?token="+token, nil, nil)
-	if rec.Code != 404 { // passes auth, chat missing
-		t.Fatalf("token on stream route: %d", rec.Code)
-	}
 
 	// Rate limiting: ~5 rapid failures.
 	for i := 0; i < 6; i++ {
@@ -657,47 +650,92 @@ func TestAPIJSONResponsesAreNoStore(t *testing.T) {
 	}
 }
 
+// sse opens an SSE connection and returns the response once the headers have
+// flushed — by then the server-side subscription is registered, so events
+// published afterwards cannot be missed.
+func (ts *testServer) sse(t *testing.T, path string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest("GET", ts.server.URL+path, nil)
+	resp, err := ts.server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content-type = %q", ct)
+	}
+	return resp
+}
+
+// readSSE accumulates events off an SSE body until want shows up (each event
+// is its own flushed write, so one Read is not enough).
+func readSSE(body io.Reader, want string) string {
+	buf := make([]byte, 4096)
+	got := ""
+	for i := 0; i < 10 && !strings.Contains(got, want); i++ {
+		n, err := body.Read(buf)
+		got += string(buf[:n])
+		if err != nil {
+			break
+		}
+	}
+	return got
+}
+
 func TestSSEIdleEvent(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 	chatID := ts.createChat(t)
 
-	req, _ := http.NewRequest("GET", ts.server.URL+"/api/chats/"+chatID+"/stream", nil)
-	resp, err := ts.server.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := ts.sse(t, "/api/stream?chat="+chatID)
 	defer resp.Body.Close()
-	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
-		t.Fatalf("content-type = %q", ct)
-	}
-	// The first event for a chat with no generation must be "idle".
-	buf := make([]byte, 4096)
-	n, _ := resp.Body.Read(buf)
-	if !strings.Contains(string(buf[:n]), `"type":"idle"`) {
-		t.Fatalf("first event not idle: %q", string(buf[:n]))
+	// The merged stream opens with the global snapshot, then the subscribed
+	// chat's "idle" (no generation running).
+	if got := readSSE(resp.Body, `"type":"idle"`); !strings.Contains(got, `"type":"idle"`) {
+		t.Fatalf("no idle event: %q", got)
 	}
 }
 
-func TestTitleStreamPublishesTitleEvents(t *testing.T) {
+func TestStreamPublishesTitleEvents(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 
-	req, _ := http.NewRequest("GET", ts.server.URL+"/api/stream/titles", nil)
-	resp, err := ts.server.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := ts.sse(t, "/api/stream")
 	defer resp.Body.Close()
-	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
-		t.Fatalf("content-type = %q", ct)
-	}
-	// By the time Do returns (headers flushed), the subscription is already
-	// registered server-side, so this publish cannot be missed.
-	ts.titles.Publish("chat-1", "Generated Title")
-	buf := make([]byte, 4096)
-	n, _ := resp.Body.Read(buf)
-	got := string(buf[:n])
+	ts.engine.PublishTitle("chat-1", "Generated Title")
+	got := readSSE(resp.Body, `"title":"Generated Title"`)
 	if !strings.Contains(got, `"chat_id":"chat-1"`) || !strings.Contains(got, `"title":"Generated Title"`) {
 		t.Fatalf("title event not received: %q", got)
+	}
+}
+
+// The ONE connection per tab carries both halves: the open chat's deltas
+// (stamped with its chat_id, which is how the client routes them) and, on a
+// second connection with no chat subscribed — another tab sitting on the
+// home view — the lifecycle events for that same chat.
+func TestMergedStreamCarriesGeneration(t *testing.T) {
+	ts := newTestServer(t, quickProvider{}, false)
+	chatID := ts.createChat(t)
+
+	chatTab := ts.sse(t, "/api/stream?chat="+chatID)
+	defer chatTab.Body.Close()
+	homeTab := ts.sse(t, "/api/stream")
+	defer homeTab.Body.Close()
+
+	if rec := ts.do(t, "POST", "/api/chats/"+chatID+"/messages", map[string]any{"content": "hi"}, nil); rec.Code != 200 {
+		t.Fatalf("send: %d %s", rec.Code, rec.Body)
+	}
+
+	got := readSSE(chatTab.Body, `"type":"done"`)
+	for _, want := range []string{`"type":"generation_started"`, `"type":"delta"`, `"content":"answer"`, `"type":"done"`, `"chat_id":"` + chatID + `"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("chat half missing %s: %q", want, got)
+		}
+	}
+	// The home-view tab sees the same generation as sidebar lifecycle events.
+	got = readSSE(homeTab.Body, `"type":"done"`)
+	if !strings.Contains(got, `"type":"generation_started"`) || !strings.Contains(got, `"chat_id":"`+chatID+`"`) {
+		t.Fatalf("global half missed the lifecycle events: %q", got)
+	}
+	if strings.Contains(got, `"type":"delta"`) {
+		t.Fatalf("global half must not carry deltas: %q", got)
 	}
 }
 

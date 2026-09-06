@@ -15,7 +15,6 @@ import (
 	"chattoneko/internal/engine"
 	"chattoneko/internal/mcphub"
 	"chattoneko/internal/store"
-	"chattoneko/internal/titlegen"
 )
 
 // ToolCatalog is the subset of the aggregated tool catalog the API needs
@@ -32,15 +31,13 @@ type Server struct {
 	auth   *auth.Auth
 	engine *engine.Engine
 	tools  ToolCatalog
-	// titles is the title task's independent event fan-out (SSE below).
-	titles *titlegen.Hub
 
 	staticFS fs.FS
 }
 
 // New builds the server. staticFS is the embedded web/dist tree.
-func New(cfg *config.Store, st *store.Store, a *auth.Auth, eng *engine.Engine, tools ToolCatalog, titles *titlegen.Hub, staticFS fs.FS) *Server {
-	return &Server{cfg: cfg, store: st, auth: a, engine: eng, tools: tools, titles: titles, staticFS: staticFS}
+func New(cfg *config.Store, st *store.Store, a *auth.Auth, eng *engine.Engine, tools ToolCatalog, staticFS fs.FS) *Server {
+	return &Server{cfg: cfg, store: st, auth: a, engine: eng, tools: tools, staticFS: staticFS}
 }
 
 // Handler returns the root mux. http.Server MUST NOT set WriteTimeout
@@ -61,8 +58,7 @@ func (s *Server) Handler() http.Handler {
 	gated("PUT /api/setup", s.handlePutSetup)
 	gated("POST /api/setup/models", s.handleSetupModels)
 	gated("GET /api/chats", s.handleListChats)
-	gated("GET /api/stream", s.handleGlobalStream)
-	gated("GET /api/stream/titles", s.handleTitleStream)
+	gated("GET /api/stream", s.handleStream)
 	gated("POST /api/chats", s.handleCreateChat)
 	gated("GET /api/chats/{id}", s.handleGetChat)
 	gated("GET /api/chats/{id}/log", s.handleChatLog)
@@ -72,7 +68,6 @@ func (s *Server) Handler() http.Handler {
 	gated("PATCH /api/chats/{id}/messages/{mid}", s.handleEditMessage)
 	gated("POST /api/chats/{id}/regenerate", s.handleRegenerate)
 	gated("DELETE /api/chats/{id}/generation", s.handleStopGeneration)
-	gated("GET /api/chats/{id}/stream", s.handleStream)
 	gated("POST /api/chats/{id}/attachments", s.handleUpload)
 	gated("GET /api/attachments/{id}", s.handleGetAttachment)
 	gated("GET /api/attachments/{id}/description", s.handleGetAttachmentDescription)
@@ -165,13 +160,10 @@ func logRequests(next http.Handler) http.Handler {
 	})
 }
 
-// isSSEPath reports whether the path is one of the long-lived SSE
-// endpoints (chat stream, global stream, title stream): the connections
-// stay open for hours, so a per-request log line for them is noise.
+// isSSEPath reports whether the path is the long-lived SSE endpoint: the
+// connection stays open for hours, so a per-request log line for it is noise.
 func isSSEPath(path string) bool {
-	return path == "/api/stream" ||
-		strings.HasPrefix(path, "/api/stream/") ||
-		strings.HasSuffix(path, "/stream")
+	return path == "/api/stream"
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

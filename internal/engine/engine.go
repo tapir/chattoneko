@@ -184,15 +184,20 @@ func (e *Engine) ActiveGenerationChatIDs() []string {
 }
 
 // globalEventTypes is the whitelist fanned out to the all-chats stream:
-// sidebar-relevant lifecycle events plus config-change notifications. Per-chat
-// deltas/tool events stay on the per-chat stream — the global one exists so
-// clients can track background generations (breathing title) without
-// attaching a stream to every chat.
+// sidebar-relevant lifecycle events plus config-change and title
+// notifications. Per-chat deltas/tool events stay on the per-chat half —
+// the global one exists so clients can track background generations
+// (breathing title) without attaching a stream to every chat.
+//
+// The three lifecycle types also reach a subscriber of their own chat, so a
+// client subscribed to both halves (the merged /api/stream) sees them twice;
+// both copies carry the same seq and the client's dedupe drops the second.
 var globalEventTypes = map[string]bool{
 	"generation_started": true,
 	"done":               true,
 	"chat_updated":       true,
 	"config_changed":     true,
+	"title":              true,
 }
 
 // deliverGlobal fans an event out to global subscribers; a subscriber whose
@@ -212,6 +217,14 @@ func (e *Engine) deliverGlobal(ev WireEvent) {
 			delete(e.gsubs, id)
 		}
 	}
+}
+
+// PublishTitle tells global-stream subscribers that a chat's auto-generated
+// title became final. Rides the global stream (it used to have its own SSE
+// endpoint): every extra endpoint cost one persistent browser connection,
+// and browsers cap an origin at 6 concurrent HTTP/1.1 connections.
+func (e *Engine) PublishTitle(chatID, title string) {
+	e.deliverGlobal(WireEvent{Type: "title", ChatID: chatID, Title: title})
 }
 
 // PublishConfigChanged tells global-stream subscribers that /api/config may
@@ -271,7 +284,7 @@ func (e *Engine) Subscribe(chatID string, after int64) (<-chan WireEvent, func()
 		ch <- ev
 	}
 	if h.gen == nil {
-		ch <- WireEvent{Type: "idle", Epoch: h.epoch}
+		ch <- WireEvent{Type: "idle", ChatID: h.id, Epoch: h.epoch}
 	}
 	unsub := func() {
 		h.mu.Lock()

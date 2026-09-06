@@ -131,6 +131,44 @@ stream.finalize();
 assert(stream.renderToString() === render(normalizeHeadings(doc)), 'char-by-char stream equals one-shot render');
 console.log('OK streaming parity');
 
+// --- AppStream: ONE connection, two halves (routing + seq dedupe) ---
+{
+  const urls = [];
+  class FakeES {
+    constructor(url) {
+      this.url = url;
+      urls.push(url);
+      FakeES.live = this;
+    }
+    close() {}
+  }
+  globalThis.EventSource = FakeES;
+  const { AppStream } = await import('./src/lib/stream.svelte.js');
+  const chat = [];
+  const glob = [];
+  const st = new AppStream('c1', (ev) => chat.push(ev.type), (ev) => glob.push(ev.type));
+  assert(urls[0] === '/api/stream?chat=c1&after=-1', `url carries the chat half: ${urls[0]}`);
+  const feed = (o) => FakeES.live.onmessage({ data: JSON.stringify(o) });
+
+  feed({ type: 'delta', chat_id: 'c1', seq: 1, epoch: 'e', content: 'a' });
+  // The engine fans the open chat's lifecycle events out to the global half
+  // too: same seq, so the second copy must be dropped, not handled twice.
+  feed({ type: 'generation_started', chat_id: 'c1', seq: 2, epoch: 'e' });
+  feed({ type: 'generation_started', chat_id: 'c1', seq: 2, epoch: 'e' });
+  // Another chat's lifecycle goes to the sidebar half, and its seq/epoch must
+  // NOT poison the open chat's dedupe baseline.
+  feed({ type: 'done', chat_id: 'other', seq: 99, epoch: 'zz' });
+  feed({ type: 'delta', chat_id: 'c1', seq: 3, epoch: 'e', content: 'b' });
+  // Global-only types name a chat but still belong to the sidebar half.
+  feed({ type: 'title', chat_id: 'c1', title: 'T' });
+  feed({ type: 'generating_snapshot', chat_ids: ['other'] });
+
+  assert(chat.join() === 'delta,generation_started,delta', `chat half got ${chat.join()}`);
+  assert(glob.join() === 'done,title,generating_snapshot', `global half got ${glob.join()}`);
+  st.close();
+  console.log('OK AppStream routing + dedupe');
+}
+
 function assert(cond, msg) {
   if (!cond) {
     console.error('FAIL:', msg);

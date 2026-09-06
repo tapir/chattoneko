@@ -291,7 +291,7 @@ func TestValidateRequestPaths(t *testing.T) {
 
 	// Query param ?token=: accepted on GET routes (EventSource and <img>
 	// can't set headers); non-GET requests still require the Bearer header.
-	r2 := httptest.NewRequest("GET", "/api/chats/abc/stream?token="+token, nil)
+	r2 := httptest.NewRequest("GET", "/api/stream?chat=abc&token="+token, nil)
 	if !a.ValidateRequest(r2) {
 		t.Fatal("token rejected on stream route")
 	}

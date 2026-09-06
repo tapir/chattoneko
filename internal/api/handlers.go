@@ -944,48 +944,46 @@ func (s *Server) handleStopGeneration(w http.ResponseWriter, r *http.Request) {
 
 // ---- SSE ----
 
+// handleStream is the app's ONE SSE endpoint. Browsers cap an origin at 6
+// concurrent HTTP/1.1 connections; the SPA used to hold three sockets per
+// tab (per-chat deltas, all-chats lifecycle, titles), so two open tabs
+// saturated the pool and every fetch from the second tab — the send that
+// starts a generation — queued inside the browser until the first tab
+// happened to free a socket. One multiplexed connection per tab instead:
+//
+//	GET /api/stream                      lifecycle + title events, all chats
+//	GET /api/stream?chat=<id>&after=<n>  ... plus chat <id>'s replayable half
+//
+// A chat id that does not exist just yields `idle` on its half (openChat's
+// own GET is what reports a missing chat); 404ing here would cut the
+// sidebar's lifecycle events too and leave the client retry-looping.
+//
+// The subscribed chat's lifecycle events arrive on BOTH halves (deliver fans
+// every chat event out to global subscribers). They carry the same seq, and
+// the client's per-chat dedupe drops the second copy.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if !s.chatExists(w, r.Context(), id) {
-		return
-	}
-	var after int64
-	if v := r.URL.Query().Get("after"); v != "" {
-		after, _ = strconv.ParseInt(v, 10, 64)
-	}
-	ch, unsub := s.engine.Subscribe(id, after)
-	defer unsub()
-	serveEventStream(w, r, ch)
-}
-
-// handleGlobalStream is the all-chats lifecycle stream (generation_started /
-// done / chat_updated for every chat, plus a generating_snapshot on connect).
-// It lets the sidebar track background generations without attaching a
-// per-chat stream to each one.
-func (s *Server) handleGlobalStream(w http.ResponseWriter, r *http.Request) {
-	ch, unsub := s.engine.SubscribeGlobal()
-	defer unsub()
-	serveEventStream(w, r, ch)
-}
-
-// handleTitleStream is the title task's DEDICATED stream: it carries only
-// title events (a chat's auto-generated title became final). Fully
-// independent from the engine streams — no shared locks, buffers or event
-// types — so generation traffic can never delay or drop a title update.
-func (s *Server) handleTitleStream(w http.ResponseWriter, r *http.Request) {
-	ch, unsub := s.titles.Subscribe()
-	defer unsub()
-	serveEventStream(w, r, ch)
-}
-
-// serveEventStream writes ch as an SSE stream (event: message, JSON data).
-// Generic over the event payload: any JSON-marshalable event type works.
-func serveEventStream[T any](w http.ResponseWriter, r *http.Request, ch <-chan T) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
+	q := r.URL.Query()
+	var after int64
+	if v := q.Get("after"); v != "" {
+		after, _ = strconv.ParseInt(v, 10, 64)
+	}
+
+	gch, gunsub := s.engine.SubscribeGlobal()
+	defer gunsub()
+	// A nil channel blocks forever in a select, which is exactly the
+	// no-chat-subscribed case (home view).
+	var cch <-chan engine.WireEvent
+	if id := q.Get("chat"); id != "" {
+		var cunsub func()
+		cch, cunsub = s.engine.Subscribe(id, after)
+		defer cunsub()
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -993,30 +991,40 @@ func serveEventStream[T any](w http.ResponseWriter, r *http.Request, ch <-chan T
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	emit := func(ev engine.WireEvent) bool {
+		data, err := json.Marshal(ev)
+		if err != nil {
+			return true // unencodable payload: skip the event, keep the stream
+		}
+		if _, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", data); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
-		case ev, ok := <-ch:
-			if !ok {
-				return // detached (slow subscriber); client reconnects
-			}
-			data, err := json.Marshal(ev)
-			if err != nil {
-				continue
-			}
-			if _, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", data); err != nil {
+		// A CLOSED channel means this subscriber was detached (its buffer
+		// filled up): end the stream, the client reconnects and the
+		// snapshot + replay cover the gap.
+		case ev, ok := <-gch:
+			if !ok || !emit(ev) {
 				return
 			}
-			flusher.Flush()
+		case ev, ok := <-cch:
+			if !ok || !emit(ev) {
+				return
+			}
 		case <-ticker.C:
 			// A real event, not an SSE comment: EventSource never surfaces
 			// comments, so the client could not tell a quiet stream from a
 			// half-open socket. Clients reconnect after ~3 missed pings.
-			if _, err := fmt.Fprint(w, "event: message\ndata: {\"type\":\"ping\"}\n\n"); err != nil {
+			if !emit(engine.WireEvent{Type: "ping"}) {
 				return
 			}
-			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}

@@ -1,7 +1,7 @@
 {
   "appId": "com.chattoneko.app",
   "appName": "ChattoNeko",
-  "webDir": "www",
+  "webDir": "../web/dist",
   "server": {
     "androidScheme": "http",
     "cleartext": true

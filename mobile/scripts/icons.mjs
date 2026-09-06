@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Regenerate all Android launcher icon PNGs from the canonical SVGs:
 //   icons/app-icon-bg.svg       — full-bleed background
 //   icons/app-icon-fg.svg       — cat face, transparent margins (safe zone)
@@ -11,29 +10,27 @@
 //
 // Requires: rsvg-convert.
 import { execFileSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { cpSync } from "node:fs";
+import { join } from "node:path";
 
-const iconsDir = resolve(dirname(fileURLToPath(import.meta.url)), "..", "icons");
-const resDir = resolve(iconsDir, "..", "android", "app", "src", "main", "res");
+const iconsDir = join(import.meta.dirname, "..", "icons");
+const resDir = join(iconsDir, "..", "android", "app", "src", "main", "res");
 const BG = join(iconsDir, "app-icon-bg.svg");
 const FG = join(iconsDir, "app-icon-fg.svg");
 const COMBINED = join(iconsDir, "app-icon-combined.svg");
 
-// 108dp per density bucket (adaptive icon layers).
-const LAYER = { mdpi: 108, hdpi: 162, xhdpi: 216, xxhdpi: 324, xxxhdpi: 432 };
-// Launcher glyph sizes (legacy, non-adaptive fallback).
-const LEGACY = { mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 };
+// Density scale: adaptive layers are 108dp, legacy glyphs 48dp.
+const DENSITY = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
 
 const render = (svg, px, out) =>
   execFileSync("rsvg-convert", ["-w", String(px), "-h", String(px), svg, "-o", out]);
 
-for (const density of Object.keys(LAYER)) {
+for (const [density, s] of Object.entries(DENSITY)) {
   const dir = join(resDir, `mipmap-${density}`);
-  render(BG, LAYER[density], join(dir, "ic_launcher_background.png"));
-  render(FG, LAYER[density], join(dir, "ic_launcher_foreground.png"));
-  render(COMBINED, LEGACY[density], join(dir, "ic_launcher.png"));
-  render(COMBINED, LEGACY[density], join(dir, "ic_launcher_round.png"));
-  console.log(`${density}: bg/fg ${LAYER[density]}px, legacy ${LEGACY[density]}px`);
+  render(BG, 108 * s, join(dir, "ic_launcher_background.png"));
+  render(FG, 108 * s, join(dir, "ic_launcher_foreground.png"));
+  const legacy = join(dir, "ic_launcher.png");
+  render(COMBINED, 48 * s, legacy);
+  cpSync(legacy, join(dir, "ic_launcher_round.png")); // identical bytes, no second render
 }
 console.log("✓ icons regenerated from app-icon-{bg,fg,combined}.svg");

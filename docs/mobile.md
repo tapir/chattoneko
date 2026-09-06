@@ -5,12 +5,10 @@ The mobile app is an Android client for Chattoneko. It is **not** a separate pro
 ```
 mobile/
   capacitor.config.json    app identity + WebView server settings
-  package.json             scripts: icons, sync, apk, adb:install
+  package.json             scripts: icons, sync
   scripts/
     icons.mjs              launcher icons from canonical SVGs (rsvg-convert)
-    sync.mjs               builds ../web, copies dist → www/, cap sync android
   icons/                   canonical SVG sources (background, foreground, combined)
-  www/                     generated web bundle (gitignored, rebuilt by every sync)
   android/                 committed Capacitor Android project
     app/src/main/java/com/chattoneko/app/MainActivity.java
     app/src/main/AndroidManifest.xml
@@ -20,7 +18,7 @@ mobile/
 
 ## How it runs
 
-- **Capacitor 8** (`@capacitor/android`, `@capacitor/core`) hosts the SPA in a WebView. `capacitor.config.json`: appId `com.chattoneko.app`, appName `ChattoNeko`, `webDir: www`, `server.androidScheme: http` with `cleartext: true` — so the app can talk to plain-HTTP servers on a LAN (a typical self-hosted setup) — and `android.adjustMarginsForEdgeToEdge: "disable"`, which leaves edge-to-edge inset handling to the SPA's own `.p-safe` CSS.
+- **Capacitor 8** (`@capacitor/android`, `@capacitor/core`) hosts the SPA in a WebView. `capacitor.config.json`: appId `com.chattoneko.app`, appName `ChattoNeko`, `webDir: ../web/dist` (the Vite output is copied straight into the APK — no staging dir), `server.androidScheme: http` with `cleartext: true` — so the app can talk to plain-HTTP servers on a LAN (a typical self-hosted setup) — and `android.adjustMarginsForEdgeToEdge: "disable"`, which leaves edge-to-edge inset handling to the SPA's own `.p-safe` CSS.
 - The WebView serves the bundled SPA from its own origin (`http://localhost` on Android) and talks to the user's server **cross-origin**. The server cooperates: its CORS middleware whitelists exactly the Capacitor origins (`http://localhost`, `https://localhost`, `capacitor://localhost`) and answers preflights before auth. Credentials are deliberately OFF — the app authenticates with Bearer tokens, never cookies.
 - `MainActivity` is an empty `com.getcapacitor.BridgeActivity` subclass: there is no custom Java/Kotlin code. Native capability comes entirely from npm plugins — `@capacitor/app` (back button, `exitApp`), `@capacitor/camera` (camera only), `@capacitor/status-bar` (bar style/color follow the theme) and `@capawesome/capacitor-file-picker` (photo picker + documents — its `pickImages` is the AndroidX photo picker, used instead of `@capacitor/camera`'s gallery path, which routes through Ionic's `ioncameralib` and paints its own trampoline activity and loading overlay). `cap sync` generates their Gradle wiring (`capacitor.settings.gradle`, `app/capacitor.build.gradle`); each is reached from the SPA through a dynamic `import()` guarded by `isNative()`, so the web bundle never evaluates them.
 - The only Android permission the app declares is `INTERNET`, and none of the plugins add more (the camera and pickers go through system intents). A `FileProvider` (`res/xml/file_paths.xml`: external + cache paths) is registered for serving downloaded attachment files.
@@ -55,15 +53,15 @@ The drawers are `vaul-svelte` behind the vendored `ui/drawer` component.
 
 ## Build pipeline
 
-The Android project is committed, but the web bundle is always regenerated (`www/` is gitignored):
+The Android project is committed, but the web bundle is always regenerated from `web/`:
 
 1. `scripts/icons.mjs` — renders all launcher icon PNGs from the canonical SVGs with `rsvg-convert`: adaptive-icon layers (background + foreground) at 108dp per density bucket (mdpi 108 → xxxhdpi 432px), non-adaptive glyphs (`ic_launcher`, `ic_launcher_round`) at launcher sizes (48 → 192px).
-2. `scripts/sync.mjs` — `npm run build` in `web/`, replaces `mobile/www/` with the fresh `web/dist`, then `npx cap sync android` (copies the web assets into the Android project and regenerates plugin wiring).
+2. `npm run sync` — `npm run build` in `web/`, then `npx cap sync android` (copies `web/dist` into the Android project's assets and regenerates plugin wiring).
 3. `cd mobile/android && ./gradlew assembleDebug` → APK at `app/build/outputs/apk/debug/app-debug.apk`.
 
 Gradle/Android versions: Android Gradle Plugin 8.13, Java 21 source/target compatibility, `minSdk 24`, `compileSdk`/`targetSdk 36`.
 
-npm scripts (in `mobile/`): `icons`, `sync` (icons + sync), `apk` (sync + assembleDebug), `adb:install`.
+npm scripts (in `mobile/`): `icons`, `sync` (icons + web build + cap sync). Building and installing the APK goes through the Makefile (`mobile-apk`, `mobile-install`).
 
 Repo-root Makefile targets wrap emulator development (`ANDROID_SDK`, `AVD=chattoneko`, `DEVICE=emulator-5554`, `SYS_IMG=system-images;android-36;google_apis;x86_64`, `AVD_DEVICE=pixel_8`, all overridable):
 

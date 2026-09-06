@@ -576,7 +576,15 @@ class AppState {
       const { chat, messages, usage, systemPrompt } = await api.getChat(id);
       if (this.activeChatId !== id) return;
       this.chat = chat;
-      this.messages = messages;
+      // Assign only on a real change. A focus refresh (the WebView fires
+      // `focus` when a native picker/camera closes, and on every alt-tab)
+      // usually returns the very same conversation; swapping in fresh object
+      // identities anyway rebuilds MessageList's `items`, re-fires every row's
+      // track effect and re-scrolls the pane — the visible "refresh" flicker.
+      // ponytail: JSON compare, O(chat size) per refresh — an id+updated_at
+      // signature is the upgrade path if long chats ever make it show up.
+      if (JSON.stringify(messages) !== JSON.stringify(this.messages))
+        this.messages = messages;
       if (usage) this.chatUsage = usage;
       if (systemPrompt != null) this.systemPrompt = systemPrompt;
       // Keep the sidebar entry in sync with the freshly fetched title.

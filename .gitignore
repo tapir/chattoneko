@@ -2,6 +2,7 @@
 node_modules/
 web/dist/
 /chattoneko
+/chattoneko.upx
 /todo.txt
 /TODO.md
 tmp

@@ -21,7 +21,7 @@
     "@capacitor/camera": "^8.2.4",
     "@capacitor/core": "^8.5.1",
     "@capacitor/status-bar": "^8.0.3",
-    "@capawesome/capacitor-file-picker": "^8.0.5",
+    "@capawesome/capacitor-file-picker": "^8.1.0",
     "@lucide/svelte": "^1.40.0",
     "bits-ui": "^2.19.0",
     "clsx": "^2.1.1",

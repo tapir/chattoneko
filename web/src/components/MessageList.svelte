@@ -61,6 +61,19 @@
     return out;
   });
 
+  // ---- tap-to-reveal message actions (touch) ----
+  // One message at a time, owned here so revealing another hides the previous.
+  // ponytail: no dismiss on tapping empty space — tapping another message or
+  // the same one again covers it; add a container-level listener if it annoys.
+  let revealId = $state(null);
+
+  function reveal(id) {
+    revealId = id;
+    // The row adds height under the tapped message; a pinned list follows so
+    // the actions don't land below the fold on the last message.
+    trackContent();
+  }
+
   let lastAssistantId = $derived.by(() => {
     for (let i = items.length - 1; i >= 0; i--) {
       if (items[i].msg.role === 'assistant') return items[i].msg.id;
@@ -179,6 +192,8 @@
           isLive={!!app.live && app.live.messageId === item.msg.id}
           isLastAssistant={item.msg.id === lastAssistantId}
           track={trackContent}
+          revealed={revealId === item.msg.id}
+          onreveal={reveal}
         />
       {/each}
       {#if sending}

@@ -24,7 +24,17 @@
   import { Button } from '$lib/components/ui/button';
   import * as Popover from '$lib/components/ui/popover';
 
-  let { item, isLive = false, isLastAssistant = false, track = null } = $props();
+  // revealed/onreveal: touch action-row affordance (same contract as
+  // SidebarItem). The parent MessageList owns WHICH message is revealed, so
+  // only one shows its actions and tapping another moves the reveal.
+  let {
+    item,
+    isLive = false,
+    isLastAssistant = false,
+    track = null,
+    revealed = false,
+    onreveal = null,
+  } = $props();
 
   let msg = $derived(item.msg);
   let live = $derived(isLive ? app.live : null);
@@ -170,6 +180,26 @@
     track?.(content, reasoning, toolCalls);
   });
 
+  // ---- tap to reveal actions (touch) ----
+  // Hover reveals the row on pointer devices; touch has no hover, so a tap on
+  // the message toggles it. Clicks that belong to something inside (links,
+  // code-copy, gallery cells, the actions themselves, the edit form) are left
+  // alone, and a live text selection means the "tap" was a long-press.
+  const INTERACTIVE = 'a, button, input, textarea, select, summary, label';
+  function onBubbleClick(e) {
+    if (e.target.closest(INTERACTIVE)) return;
+    if (window.getSelection()?.toString()) return;
+    onreveal?.(revealed ? null : msg.id);
+  }
+
+  // Resting state is invisible everywhere; `[@media(hover:hover)]` keeps the
+  // desktop hover reveal, `[@media(hover:none)]` makes the tap reveal apply
+  // only where there is no pointer to hover with (a stray `revealed` on a
+  // desktop click is then a no-op instead of a row pinned open forever).
+  const ACTIONS =
+    'transition-opacity opacity-0 group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100';
+  let actionsClass = $derived(revealed ? `${ACTIONS} [@media(hover:none)]:opacity-100` : ACTIONS);
+
   // ---- inline edit (user messages) ----
   let editing = $state(false);
   let editValue = $state('');
@@ -273,7 +303,10 @@
 {/snippet}
 
 {#if msg.role === 'user'}
-  <div class="group mt-5 flex justify-end">
+  <!-- Tap-to-reveal is a touch convenience (no hover); keyboard gets the row
+       via group-focus-within, and this is a message container, not a control. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="group mt-5 flex justify-end" onclick={onBubbleClick}>
     <div class="max-w-[85%] sm:max-w-[75%]">
       <div class="rounded-2xl rounded-br-sm bg-accent px-4 py-2.5">
         {#if (editing ? editAttachments : (msg.attachments ?? [])).length}
@@ -345,7 +378,7 @@
       </div>
       <!-- No actions on a message that hasn't reached the server yet (app.outgoing). -->
       {#if !editing && msg.status !== 'outgoing'}
-        <div class="mt-0.5 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        <div class="mt-0.5 flex justify-end gap-0.5 {actionsClass}">
           <CopyButton text={() => msg.content} label="Copy message" size="sm" />
           <IconButton icon={Pencil} label="Edit & resend" size="sm" onclick={startEdit} />
         </div>
@@ -353,7 +386,8 @@
     </div>
   </div>
 {:else}
-  <div class="group mt-6">
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="group mt-6" onclick={onBubbleClick}>
     {#if reasoning || waiting}
       <ThinkingBlock
         text={reasoning}
@@ -410,7 +444,7 @@
     {/if}
 
     {#if !app.generating && !generationError && status !== 'generating'}
-      <div class="mt-1.5 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      <div class="mt-1.5 flex items-center gap-1 {actionsClass}">
         {#if isLastAssistant}
           <IconButton icon={RotateCcw} label="Regenerate" onclick={() => app.regenerate()} />
         {/if}

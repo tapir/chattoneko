@@ -234,8 +234,8 @@ func TestSetupModelsFetchAndDefaults(t *testing.T) {
 
 	var out struct {
 		Models []struct {
-			ID               string   `json:"id"`
-			ContextWindow    int64    `json:"context_window"`
+			ID               string   `json:"model_id"`
+			ContextWindow    int64    `json:"context_length"`
 			InputModality    []string `json:"input_modality"`
 			OutputModality   []string `json:"output_modality"`
 			ReasoningEfforts []string `json:"reasoning_efforts"`
@@ -312,8 +312,8 @@ func TestSetupModelsValidationAndUnconfigured(t *testing.T) {
 	}
 	var out struct {
 		Models []struct {
-			ID            string `json:"id"`
-			ContextWindow int64  `json:"context_window"`
+			ID            string `json:"model_id"`
+			ContextWindow int64  `json:"context_length"`
 		} `json:"models"`
 		Source   map[string]string `json:"source"`
 		Provider string            `json:"provider"`
@@ -361,8 +361,8 @@ func TestSetupModelsProviderOverrides(t *testing.T) {
 	}
 	var out struct {
 		Models []struct {
-			ID            string `json:"id"`
-			ContextWindow int64  `json:"context_window"`
+			ID            string `json:"model_id"`
+			ContextWindow int64  `json:"context_length"`
 		} `json:"models"`
 		Source   map[string]string `json:"source"`
 		Provider string            `json:"provider"`

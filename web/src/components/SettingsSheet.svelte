@@ -241,11 +241,11 @@
     fetchingId = id;
     try {
       const res = await api.setupModels([id], providerOverrides());
-      const m = res?.models?.find((x) => x.id === id);
+      const m = res?.models?.find((x) => x.model_id === id);
       const card = modelCards.find((c) => c.id === id);
       const fromProvider = res?.source?.[id] === 'provider' && !!m;
       if (card) {
-        if (m) card.contextLength = String(m.context_window ?? card.contextLength);
+        if (m) card.contextLength = String(m.context_length ?? card.contextLength);
         // The chip universe and the selected levels are exactly what was
         // reported (never padded with well-known levels), so a fetched card
         // matches what a reload shows; a failed fetch falls back to the

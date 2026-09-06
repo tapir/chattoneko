@@ -137,7 +137,7 @@ class AppState {
 
   // top-bar stats (#6): per-chat token totals + context window for the active model
   chatUsage = $state(null); // {prompt_tokens, completion_tokens}
-  modelInfo = $state([]); // [{id, context_window}] from /api/config
+  modelInfo = $state([]); // [{model_id, context_length}] from /api/config
 
   // Per-chat tool toggles: sparse map of overrides on top of the configured
   // defaults (tool_defaults, else the catalog's default_enabled). Persisted
@@ -285,7 +285,7 @@ class AppState {
       this.config = await api.config();
       if (!this.newChatModel)
         this.newChatModel = this.config?.models?.default_chat_model ?? "";
-      // model_info: [{id, context_window}] for the whitelist (#6 top-bar context %)
+      // model_info: [{model_id, context_length}] for the whitelist (#6 top-bar context %)
       this.modelInfo = Array.isArray(this.config?.model_info)
         ? this.config.model_info
         : [];
@@ -314,15 +314,15 @@ class AppState {
   // Context window (tokens) for a model id; 0 = unknown.
   contextWindowFor(modelId) {
     if (!modelId) return 0;
-    const info = this.modelInfo.find((m) => m.id === modelId);
-    return info?.context_window ?? 0;
+    const info = this.modelInfo.find((m) => m.model_id === modelId);
+    return info?.context_length ?? 0;
   }
 
   // Reasoning-effort levels a model accepts (from the provider's /models
   // endpoint, served via /api/config model_info). Empty = not applicable.
   effortOptionsFor(modelId) {
     if (!modelId) return [];
-    const opts = this.modelInfo.find((m) => m.id === modelId)?.reasoning_efforts;
+    const opts = this.modelInfo.find((m) => m.model_id === modelId)?.reasoning_efforts;
     return Array.isArray(opts) ? opts : [];
   }
 
@@ -332,7 +332,7 @@ class AppState {
     const opts = this.effortOptionsFor(modelId);
     if (opts.length === 0) return "";
     if (opts.includes("medium")) return "medium";
-    const d = this.modelInfo.find((m) => m.id === modelId)?.reasoning_default;
+    const d = this.modelInfo.find((m) => m.model_id === modelId)?.reasoning_default;
     if (d && opts.includes(d)) return d;
     return opts[Math.floor(opts.length / 2)] ?? opts[0];
   }

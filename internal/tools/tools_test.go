@@ -141,7 +141,7 @@ func TestMerge(t *testing.T) {
 			out:     "from-" + server,
 		}
 	}
-	m := Merge(mk("time_location", "builtin"), mk("time_location", "mcp-a"), mk("search", "mcp-a"))
+	m := Merge(nil, mk("time_location", "builtin"), mk("time_location", "mcp-a"), mk("search", "mcp-a"))
 
 	entries := m.Tools()
 	if len(entries) != 2 {

@@ -34,7 +34,7 @@ func TestDefaultsOverridesCatalogDefault(t *testing.T) {
 	}}
 
 	got := map[string]bool{}
-	for _, e := range WithDefaults(src, cfg).Tools() {
+	for _, e := range Merge(cfg, src).Tools() {
 		got[e.Display] = e.DefaultEnabled
 	}
 	if got["on_tool"] != true || got["off_tool"] != false || got["untouched"] != true {
@@ -45,7 +45,7 @@ func TestDefaultsOverridesCatalogDefault(t *testing.T) {
 	if _, err := cfg.Update(ctx, config.Patch{ToolDefaults: &map[string]bool{"untouched": false}}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	for _, e := range WithDefaults(src, cfg).Tools() {
+	for _, e := range Merge(cfg, src).Tools() {
 		if e.Display == "untouched" && e.DefaultEnabled {
 			t.Fatal("untouched should follow the updated config")
 		}

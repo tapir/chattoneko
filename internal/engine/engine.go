@@ -157,11 +157,11 @@ func (e *Engine) HasActiveGeneration(chatID string) bool {
 	return genActive(h)
 }
 
-// ActiveGenerationChatIDs returns the IDs of all chats with a running
+// activeGenerationChatIDs returns the IDs of all chats with a running
 // generation. Powers the sidebar breathing-title reconciliation: background
 // chats have no SSE stream attached, so the client polls this to learn when
 // a background generation finished.
-func (e *Engine) ActiveGenerationChatIDs() []string {
+func (e *Engine) activeGenerationChatIDs() []string {
 	type entry struct {
 		id string
 		h  *chatHub
@@ -245,7 +245,7 @@ func (e *Engine) SubscribeGlobal() (<-chan WireEvent, func()) {
 	e.nextG++
 	e.gsubs[id] = ch
 	e.gmu.Unlock()
-	ch <- WireEvent{Type: "generating_snapshot", ChatIDs: e.ActiveGenerationChatIDs()}
+	ch <- WireEvent{Type: "generating_snapshot", ChatIDs: e.activeGenerationChatIDs()}
 	unsub := func() {
 		e.gmu.Lock()
 		delete(e.gsubs, id)
@@ -295,32 +295,11 @@ func (e *Engine) Subscribe(chatID string, after int64) (<-chan WireEvent, func()
 	return ch, unsub
 }
 
-// BroadcastUserMessage publishes a user message created via REST (multi-client coherence).
-func (e *Engine) BroadcastUserMessage(chatID string, msg *store.Message) {
-	e.broadcastChat(chatID, WireEvent{Type: "user_message", Message: msg})
-}
-
-// BroadcastChatUpdated publishes a changed chat title (manual rename).
-func (e *Engine) BroadcastChatUpdated(chatID, title string) {
-	e.broadcastChat(chatID, WireEvent{Type: "chat_updated", Title: title})
-}
-
-// BroadcastSettingsUpdated publishes persisted per-chat settings with the
-// updated chat payload so other clients can apply them without refetching.
-func (e *Engine) BroadcastSettingsUpdated(chatID string, chat *store.Chat) {
-	e.broadcastChat(chatID, WireEvent{Type: "settings_updated", Chat: chat})
-}
-
-// BroadcastMessagesReset tells clients the history was truncated
-// (edit-and-resend or regenerate) and must be re-fetched.
-func (e *Engine) BroadcastMessagesReset(chatID string) {
-	e.broadcastChat(chatID, WireEvent{Type: "messages_reset"})
-}
-
-// broadcastChat delivers a chat-level event to current subscribers. It never
+// BroadcastChat delivers a chat-level event (user_message, chat_updated,
+// settings_updated, messages_reset, ...) to current subscribers. It never
 // creates a hub: a chat without a hub has no subscribers to notify, and
 // creating hubs for every broadcast would grow engine.hubs unboundedly.
-func (e *Engine) broadcastChat(chatID string, ev WireEvent) {
+func (e *Engine) BroadcastChat(chatID string, ev WireEvent) {
 	h := e.hubIfExists(chatID)
 	if h == nil {
 		// No hub (no subscribers, no generation): per-chat delivery is a

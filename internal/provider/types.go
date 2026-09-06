@@ -79,20 +79,19 @@ type StreamEvent struct {
 	Usage  Usage  // set on EventDone: token usage (0 = not reported)
 }
 
-// EventStream is a pull-based iterator over stream events.
+// EventStream is a stream of events handed from ONE producer goroutine to
+// ONE consumer.
 //
-// Concurrency contract: ONE producer goroutine calls Publish and Finish;
-// the consumer calls Next/Event/Err and may call Close at any time from any
-// goroutine. The channel is buffered; Next blocks until an event arrives or
-// the stream closes. After Next returns false, Err reports the terminal
-// error (nil on clean finish).
+// Concurrency contract: the producer calls Publish and then Finish exactly
+// once; the consumer ranges over Events() and may call Close at any time from
+// any goroutine. The channel is buffered; after it drains and closes, Err
+// reports the terminal error (nil on clean finish).
 //
 // Close is the consumer-side cancel: it unblocks a producer sitting in
 // Publish (which then returns false) and runs the cancel function the
 // producer registered in NewEventStream.
 type EventStream struct {
 	ch         chan StreamEvent
-	cur        StreamEvent
 	errMu      sync.Mutex // guards err (consumer may call Err while the producer is mid-Finish)
 	err        error
 	done       bool // producer-only: Finish has been called
@@ -147,21 +146,11 @@ func (s *EventStream) Finish(err error) {
 	})
 }
 
-// Next advances to the next event.
-func (s *EventStream) Next() bool {
-	ev, ok := <-s.ch
-	if !ok {
-		return false
-	}
-	s.cur = ev
-	return true
-}
-
-// Event returns the current event.
-func (s *EventStream) Event() StreamEvent { return s.cur }
+// Events is the channel the consumer ranges over; Finish closes it.
+func (s *EventStream) Events() <-chan StreamEvent { return s.ch }
 
 // Err returns the terminal error. Safe to call at any time; meaningful once
-// Next returns false.
+// the Events channel has drained and closed.
 func (s *EventStream) Err() error {
 	s.errMu.Lock()
 	defer s.errMu.Unlock()

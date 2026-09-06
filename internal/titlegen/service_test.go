@@ -2,7 +2,6 @@ package titlegen
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -135,8 +134,8 @@ func chatTitle(t *testing.T, st *store.Store, chatID string) string {
 	return chat.Title
 }
 
-// clearBackoff simulates the backoff window expiring.
-func clearBackoff(s *Service, chatID string) {
+// clearRetryDelay simulates the retry delay expiring.
+func clearRetryDelay(s *Service, chatID string) {
 	if r, ok := s.retries[chatID]; ok {
 		r.next = time.Now().Add(-time.Hour)
 	}
@@ -353,7 +352,7 @@ func TestRenameDuringGenerationWins(t *testing.T) {
 	}
 }
 
-func TestTransientFailureRetriesWithBackoff(t *testing.T) {
+func TestTransientFailureRetriesAfterDelay(t *testing.T) {
 	st := testStore(t)
 	chat := newChat(t, st)
 	addUserMessage(t, st, chat.ID, "hello")
@@ -371,12 +370,12 @@ func TestTransientFailureRetriesWithBackoff(t *testing.T) {
 	// Immediate second sweep: the chat is backing off, no new call.
 	svc.sweep(context.Background())
 	if gen.textCalls != 1 {
-		t.Fatal("backoff not honored: generator called while backing off")
+		t.Fatal("retry delay not honored: generator called while waiting")
 	}
-	// After the backoff expires, it retries — and can still succeed.
+	// After the delay expires, it retries — and can still succeed.
 	gen.textErr = nil
 	gen.textResult = "Recovered Title"
-	clearBackoff(svc, chat.ID)
+	clearRetryDelay(svc, chat.ID)
 	svc.sweep(context.Background())
 	if got := chatTitle(t, st, chat.ID); got != "Recovered Title" {
 		t.Fatalf("title = %q after recovery", got)
@@ -392,7 +391,7 @@ func TestGivesUpAfterMaxFailures(t *testing.T) {
 	svc := newService(st, gen)
 
 	for i := 0; i < maxFailures; i++ {
-		clearBackoff(svc, chat.ID)
+		clearRetryDelay(svc, chat.ID)
 		svc.sweep(context.Background())
 	}
 
@@ -407,7 +406,7 @@ func TestGivesUpAfterMaxFailures(t *testing.T) {
 	}
 	// And it stops trying entirely.
 	calls := gen.textCalls
-	clearBackoff(svc, chat.ID)
+	clearRetryDelay(svc, chat.ID)
 	svc.sweep(context.Background())
 	if gen.textCalls != calls {
 		t.Fatal("generator called after give-up")
@@ -487,122 +486,6 @@ func TestSanitizeTitleLengthCap(t *testing.T) {
 	}
 	if strings.HasSuffix(got, " ") {
 		t.Fatal("trailing space after truncation")
-	}
-}
-
-// ---- task client (reasoning effort from the models table) ----
-
-func ptr[T any](v T) *T { return &v }
-
-// taskConfig builds a config store with provider + models configured and,
-// when meta is non-nil, a stored metadata row for the task model. The raw
-// DB is returned alongside for tests that need to break it.
-func taskConfig(t *testing.T, taskModel string, meta *config.ModelMeta) (*config.Store, *sql.DB) {
-	t.Helper()
-	sqlDB, err := db.Open(t.TempDir() + "/test.db")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := db.Migrate(sqlDB); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	ctx := context.Background()
-	cfgs, err := config.NewStore(ctx, sqlDB)
-	if err != nil {
-		t.Fatalf("config store: %v", err)
-	}
-	patch := config.Patch{
-		Provider: &config.ProviderPatch{BaseURL: ptr("https://p.example/api"), APIKey: ptr("sk-test")},
-		Models: &config.ModelsPatch{
-			Whitelist:        &[]string{taskModel},
-			DefaultChatModel: ptr(taskModel),
-			DefaultTaskModel: ptr(taskModel),
-		},
-	}
-	if meta != nil {
-		patch.Models.Metas = &[]config.ModelMeta{*meta}
-	}
-	if _, err := cfgs.Update(ctx, patch); err != nil {
-		t.Fatalf("update config: %v", err)
-	}
-	return cfgs, sqlDB
-}
-
-func TestTaskClientUsesDatabaseDefaultEffort(t *testing.T) {
-	meta := config.DefaultModelMeta("task-m")
-	meta.ReasoningEfforts = []string{"low", "high"}
-	meta.ReasoningDefault = "high"
-	cfgs, _ := taskConfig(t, "task-m", &meta)
-
-	svc := New(testStore(t), cfgs, func(string, string) {})
-	cli := svc.taskClient(context.Background())
-	if cli == nil {
-		t.Fatal("task client nil despite provider/task model configured")
-	}
-	if cli.effort != "high" {
-		t.Fatalf("effort = %q, want the stored default %q", cli.effort, "high")
-	}
-}
-
-func TestTaskClientDefaultEffortWithoutStoredRow(t *testing.T) {
-	// No metadata row: ModelMetas applies the spec defaults (default medium).
-	cfgs, _ := taskConfig(t, "task-m", nil)
-
-	svc := New(testStore(t), cfgs, func(string, string) {})
-	cli := svc.taskClient(context.Background())
-	if cli == nil {
-		t.Fatal("task client nil")
-	}
-	if cli.effort != config.DefaultModelMeta("task-m").ReasoningDefault {
-		t.Fatalf("effort = %q, want spec default", cli.effort)
-	}
-}
-
-func TestTaskClientRebuildsOnEffortChange(t *testing.T) {
-	meta := config.DefaultModelMeta("task-m")
-	meta.ReasoningDefault = "low"
-	cfgs, _ := taskConfig(t, "task-m", &meta)
-
-	svc := New(testStore(t), cfgs, func(string, string) {})
-	ctx := context.Background()
-	first := svc.taskClient(ctx)
-	if first == nil || first.effort != "low" {
-		t.Fatalf("first client = %+v", first)
-	}
-	// Same settings: the cached client is reused.
-	if got := svc.taskClient(ctx); got != first {
-		t.Fatal("client rebuilt without config change")
-	}
-	// Admin changes the stored default effort: the client must be rebuilt.
-	meta.ReasoningDefault = "high"
-	if err := cfgs.UpsertModelMetas(ctx, []config.ModelMeta{meta}); err != nil {
-		t.Fatalf("upsert metas: %v", err)
-	}
-	second := svc.taskClient(ctx)
-	if second == first {
-		t.Fatal("client not rebuilt after effort change")
-	}
-	if second.effort != "high" {
-		t.Fatalf("effort = %q, want high", second.effort)
-	}
-}
-
-func TestTaskClientFallsBackOnMetaLoadFailure(t *testing.T) {
-	meta := config.DefaultModelMeta("task-m")
-	cfgs, sqlDB := taskConfig(t, "task-m", &meta)
-
-	svc := New(testStore(t), cfgs, func(string, string) {})
-	// Break the models table; metadata reads fail but titles must not stall.
-	if _, err := sqlDB.Exec(`DROP TABLE models`); err != nil {
-		t.Fatalf("drop models table: %v", err)
-	}
-	cli := svc.taskClient(context.Background())
-	if cli == nil {
-		t.Fatal("task client nil on metadata failure; want provider-default fallback")
-	}
-	if cli.effort != "" {
-		t.Fatalf("effort = %q, want empty (provider default)", cli.effort)
 	}
 }
 

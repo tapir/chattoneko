@@ -780,7 +780,7 @@ func TestBroadcastChatUpdatedReachesGlobalWithoutHub(t *testing.T) {
 	if eng.hubIfExists(chat.ID) != nil {
 		t.Fatal("precondition broken: chat should have no hub")
 	}
-	eng.BroadcastChatUpdated(chat.ID, "Renamed While Idle")
+	eng.BroadcastChat(chat.ID, WireEvent{Type: "chat_updated", Title: "Renamed While Idle"})
 	select {
 	case ev := <-ch:
 		if ev.Type != "chat_updated" || ev.Title != "Renamed While Idle" || ev.ChatID != chat.ID {

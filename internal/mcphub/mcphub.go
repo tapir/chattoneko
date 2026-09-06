@@ -38,7 +38,6 @@ type Entry struct {
 	Server         string          `json:"server"`          // config server name
 	Schema         json.RawMessage `json:"schema"`          // JSON schema for arguments
 	DefaultEnabled bool            `json:"default_enabled"` // config default toggle
-	realName       string          // name on the MCP server
 }
 
 // connectTimeout bounds dialing + tool listing for one MCP server so a dead
@@ -52,20 +51,14 @@ type serverState struct {
 	entries []Entry
 }
 
-// route is what Call needs to dispatch one display name.
-type route struct {
-	session  *mcp.ClientSession
-	realName string
-}
-
 // Hub owns one ClientSession per connected MCP server.
 type Hub struct {
 	store *config.Store
 
-	mu      sync.RWMutex
-	servers map[string]*serverState // by config server name
-	entries []Entry                 // merged catalog with collision suffixes
-	routes  map[string]route        // by display name, for Call
+	mu       sync.RWMutex
+	servers  map[string]*serverState       // by config server name
+	entries  []Entry                       // merged catalog, first server wins name collisions
+	sessions map[string]*mcp.ClientSession // by display name, for Call
 
 	reloadMu sync.Mutex // serializes Connect/Reload reconciliation
 }
@@ -197,21 +190,27 @@ func (h *Hub) reconcileLocked(ctx context.Context, desired []config.MCPServerCon
 	return len(toClose) > 0 || connected > 0
 }
 
-// rebuildEntriesLocked merges per-server entries in config order and makes
-// display names unique. Callers must hold h.mu for writing.
+// rebuildEntriesLocked merges per-server entries in config order and indexes
+// the session that owns each display name. On a name collision the FIRST
+// server in config order wins and the later entry is dropped — the same
+// policy the merged catalog applies across sources (tools.Merge).
+// Callers must hold h.mu for writing.
 func (h *Hub) rebuildEntriesLocked(order []string) {
 	h.entries = nil
+	h.sessions = make(map[string]*mcp.ClientSession)
 	for _, name := range order {
-		if st := h.servers[name]; st != nil {
-			h.entries = append(h.entries, st.entries...)
+		st := h.servers[name]
+		if st == nil {
+			continue
 		}
-	}
-	h.applyCollisionSuffixesLocked()
-	h.routes = make(map[string]route, len(h.entries))
-	for i := range h.entries {
-		e := &h.entries[i]
-		if st := h.servers[e.Server]; st != nil {
-			h.routes[e.Display] = route{session: st.session, realName: e.realName}
+		for _, e := range st.entries {
+			if _, dup := h.sessions[e.Display]; dup {
+				slog.Warn("mcp tool name collision; dropping later entry",
+					"name", e.Display, "server", e.Server)
+				continue
+			}
+			h.entries = append(h.entries, e)
+			h.sessions[e.Display] = st.session
 		}
 	}
 }
@@ -281,7 +280,6 @@ func (h *Hub) listTools(ctx context.Context, session *mcp.ClientSession, sc conf
 				Server:         sc.Name,
 				Schema:         schema,
 				DefaultEnabled: sc.DefaultEnabled,
-				realName:       t.Name,
 			})
 		}
 		if res.NextCursor == "" {
@@ -290,26 +288,6 @@ func (h *Hub) listTools(ctx context.Context, session *mcp.ClientSession, sc conf
 		cursor = res.NextCursor
 	}
 	return out, nil
-}
-
-// applyCollisionSuffixesLocked makes display names unique across servers
-// (the first entry keeps the bare name; later collisions get _2, _3, ...).
-// Renamed names are reserved too, so a rename can never collide with an
-// existing or later entry. Callers must hold h.mu.
-func (h *Hub) applyCollisionSuffixesLocked() {
-	seen := make(map[string]bool, len(h.entries))
-	for i := range h.entries {
-		e := &h.entries[i]
-		name := e.Display
-		for n := 2; seen[name]; n++ {
-			name = fmt.Sprintf("%s_%d", e.Display, n)
-		}
-		if name != e.Display {
-			slog.Warn("mcp tool name collision; renamed", "from", e.Display, "to", name, "server", e.Server)
-			e.Display = name
-		}
-		seen[name] = true
-	}
 }
 
 // Tools returns the aggregated catalog.
@@ -327,7 +305,7 @@ func (h *Hub) Tools() []Entry {
 // tools don't use it.
 func (h *Hub) Call(ctx context.Context, display, argsJSON string, _ CallMeta) (string, bool, error) {
 	h.mu.RLock()
-	rt, ok := h.routes[display]
+	session, ok := h.sessions[display]
 	h.mu.RUnlock()
 	if !ok {
 		return "", false, fmt.Errorf("unknown tool %q", display)
@@ -349,7 +327,7 @@ func (h *Hub) Call(ctx context.Context, display, argsJSON string, _ CallMeta) (s
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	res, err := rt.session.CallTool(callCtx, &mcp.CallToolParams{Name: rt.realName, Arguments: args})
+	res, err := session.CallTool(callCtx, &mcp.CallToolParams{Name: display, Arguments: args})
 	if err != nil {
 		return "", false, fmt.Errorf("tool %q: %w", display, err)
 	}
@@ -409,7 +387,7 @@ func (h *Hub) Close() {
 	closing := h.servers
 	h.servers = map[string]*serverState{}
 	h.entries = nil
-	h.routes = nil
+	h.sessions = nil
 	h.mu.Unlock()
 	for name, st := range closing {
 		if err := st.session.Close(); err != nil {

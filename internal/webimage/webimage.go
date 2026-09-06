@@ -1,35 +1,43 @@
 // Package webimage fetches images from arbitrary web URLs while looking
-// like a real browser: identical TLS (JA3/JA4) and HTTP/2 fingerprints to a
-// current Chrome, matching User-Agent and browser-typical request headers.
-// Bot protection (Cloudflare, DataDome, hotlink guards, ...) blocks the
-// stdlib's Go TLS fingerprint on sight; tls-client's browser profiles make
-// our GET indistinguishable from a Chrome image request. Everything stays
-// in memory — fetched bytes never touch the disk.
+// like a real browser: for https it uses a uTLS ClientHello whose JA3/JA4
+// fingerprint matches current Chrome (impersonate-http, whose profiles track
+// utls's *_Auto templates) plus Chrome's own header values; for plain http
+// there is no handshake to fingerprint, so a stock net/http client carries
+// the same headers. Bot protection (Cloudflare, DataDome, hotlink guards,
+// ...) blocks the stdlib's Go TLS fingerprint on sight. Everything stays in
+// memory — fetched bytes never touch the disk.
 //
 // SSRF defense: the URLs come from the model (ultimately from chat input),
 // so every connection is vetted against a private/reserved-address blocklist
 // in two layers — once before the request (clean errors) and again in the
-// dial hook (the address actually connected to, covering redirect hops and
-// shrinking the DNS-rebinding window). Redirects are validated hop by hop;
-// HTTP/3 is disabled so nothing bypasses the dial hook.
+// dial function (the address actually connected to, covering redirect hops
+// and shrinking the DNS-rebinding window). Redirects are validated hop by
+// hop through the client's CheckRedirect.
+//
+// ponytail: the impersonating (https) client cannot be unit-tested —
+// impersonate-http exposes no InsecureSkipVerify, so httptest's self-signed
+// server is refused, and its transport always handshakes, so it cannot serve
+// plain-http fakes either. The scheme-independent logic (SSRF vetting,
+// headers, redirect hops, size cap, gzip, thumbnail fallback) is covered by
+// the http:// tests; the fingerprint itself is verified in production.
 package webimage
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	fhttp "github.com/bogdanfinn/fhttp"
-	tls_client "github.com/bogdanfinn/tls-client"
-	"github.com/bogdanfinn/tls-client/profiles"
+	"github.com/North-web-dev/impersonate-http"
 )
 
 // ErrTooLarge is returned when the response body exceeds the requested cap.
@@ -37,49 +45,54 @@ var ErrTooLarge = errors.New("image too large")
 
 // fetchTimeout bounds a single fetch. The tools layer additionally wraps
 // every call in its own 30s cap.
-const fetchTimeout = 25
+const fetchTimeout = 25 * time.Second
 
 // maxRedirects caps the redirect hops followed (browser-like, same as the
 // stdlib client's limit).
 const maxRedirects = 10
 
-// Profile + headers must stay in sync: anti-bot systems cross-check the
-// TLS fingerprint against the declared User-Agent, and a mismatch is an
-// instant block. Chrome_150 is the freshest profile shipped by tls-client
-// v1.16.x (Chrome profiles are the most frequently updated); bump the
-// profile AND both version strings below together on library upgrades.
-const (
-	userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-	secChUA   = `"Google Chrome";v="150", "Chromium";v="150", "Not=A?Brand";v="24"`
-)
-
 var (
 	clientOnce sync.Once
-	client     tls_client.HttpClient
-	clientErr  error
+	// tlsClient impersonates Chrome (https); plainClient is a stock client
+	// for http:// URLs, where there is no TLS handshake to fingerprint.
+	tlsClient, plainClient *http.Client
 )
 
-// httpClient returns the process-wide TLS client, built once. A shared
-// client keeps the cookie jar and TLS session cache across fetches, which
-// is what real browsers do (and what some anti-bot clearance flows expect).
-func httpClient() (tls_client.HttpClient, error) {
+// newClients builds both process-wide clients once. A shared client per
+// scheme keeps the cookie jar, the TLS session cache and the per-host
+// transports across fetches, which is what real browsers do (and what some
+// anti-bot clearance flows expect). Both are wired to the same SSRF dial
+// function and redirect policy.
+func newClients() (*http.Client, *http.Client) {
 	clientOnce.Do(func() {
-		client, clientErr = tls_client.NewHttpClient(tls_client.NewNoopLogger(),
-			tls_client.WithClientProfile(profiles.Chrome_150),
-			tls_client.WithTimeoutSeconds(fetchTimeout),
-			tls_client.WithCookieJar(tls_client.NewCookieJar()),
-			// Chrome randomizes TLS extension order; the profile adds
-			// GREASE values.
-			tls_client.WithRandomTLSExtensionOrder(),
-			tls_client.WithCatchPanics(),
-			// SSRF defense: vet every connection and every redirect hop.
-			// HTTP/3 is disabled so nothing can bypass the dial hook.
-			tls_client.WithDialContext(ssrfDialContext),
-			tls_client.WithCustomRedirectFunc(ssrfRedirectFunc),
-			tls_client.WithDisableHttp3(),
+		tlsClient = impersonate.New(impersonate.Chrome,
+			impersonate.WithDialer(ssrfDial),
+			impersonate.WithTimeout(fetchTimeout),
 		)
+		plainClient = &http.Client{
+			Timeout:   fetchTimeout,
+			Transport: &http.Transport{DialContext: ssrfDial},
+		}
+		// Same jar for both: clearance cookies are per-host, not per-scheme.
+		jar, err := cookiejar.New(nil)
+		if err == nil {
+			tlsClient.Jar, plainClient.Jar = jar, jar
+		}
+		tlsClient.CheckRedirect = ssrfCheckRedirect
+		plainClient.CheckRedirect = ssrfCheckRedirect
 	})
-	return client, clientErr
+	return tlsClient, plainClient
+}
+
+// clientFor returns the client that should fetch u: the impersonating one
+// for https, the stock one for plain http (impersonate-http always performs
+// a TLS handshake, so it cannot serve an http:// URL).
+func clientFor(u *url.URL) *http.Client {
+	tls, plain := newClients()
+	if u.Scheme == "https" {
+		return tls
+	}
+	return plain
 }
 
 // testAllowLoopback relaxes the blocklist for loopback addresses so tests
@@ -159,12 +172,13 @@ func checkHostPublic(ctx context.Context, host string) error {
 	return nil
 }
 
-// ssrfDialContext guards every TCP connection (initial request and every
-// redirect hop): the host's resolved addresses must all be public before
-// the dial. The hostname itself is dialed (not a resolved IP) so TLS SNI
-// keeps the name; the window between this check and the dialer's own
-// resolution is microseconds on the same resolver cache.
-func ssrfDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+// ssrfDial guards every TCP connection (initial request and every redirect
+// hop): the host's resolved addresses must all be public before the dial.
+// The hostname itself is dialed (not a resolved IP) so TLS SNI keeps the
+// name; the window between this check and the dialer's own resolution is
+// microseconds on the same resolver cache. It serves both as the impersonate
+// dialer and as the stock transport's DialContext.
+func ssrfDial(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
@@ -172,14 +186,14 @@ func ssrfDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	if err := checkHostPublic(ctx, host); err != nil {
 		return nil, err
 	}
-	d := net.Dialer{Timeout: time.Duration(fetchTimeout) * time.Second}
+	d := net.Dialer{Timeout: fetchTimeout}
 	return d.DialContext(ctx, network, addr)
 }
 
-// ssrfRedirectFunc vets every redirect hop before it is followed: an open
-// redirector must not route the fetch to an internal address or a
-// non-http(s) scheme.
-func ssrfRedirectFunc(req *fhttp.Request, via []*fhttp.Request) error {
+// ssrfCheckRedirect vets every redirect hop before it is followed: an open
+// redirector must not route the fetch to an internal address or a non-http(s)
+// scheme.
+func ssrfCheckRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxRedirects {
 		return fmt.Errorf("too many redirects (more than %d)", maxRedirects)
 	}
@@ -190,32 +204,27 @@ func ssrfRedirectFunc(req *fhttp.Request, via []*fhttp.Request) error {
 }
 
 // requestHeaders builds the headers of a Chrome image request (the shape a
-// browser sends when loading an <img> from another origin). Key order
-// matters: HeaderOrderKey fixes the HTTP/1.1 on-the-wire order; keys must
-// be lowercase. Accept-Encoding lists every codec we can decompress
-// (gzip, deflate, brotli, zstd — see get). The Accept list deliberately
-// omits image/avif and image/svg+xml even though real Chrome advertises
-// them: content-negotiating CDNs (imgix / Unsplash's auto=format) honor
-// avif by serving AVIF, which our conversion pipeline cannot decode, and
-// SVG is text we cannot rasterize either.
-func requestHeaders() fhttp.Header {
-	h := fhttp.Header{
-		"accept":             {"image/webp,image/apng,image/png,image/jpeg,image/*,*/*;q=0.8"},
-		"accept-language":    {"en-US,en;q=0.9"},
-		"sec-ch-ua":          {secChUA},
-		"sec-ch-ua-mobile":   {"?0"},
-		"sec-ch-ua-platform": {`"Windows"`},
-		"sec-fetch-dest":     {"image"},
-		"sec-fetch-mode":     {"no-cors"},
-		"sec-fetch-site":     {"cross-site"},
-		"user-agent":         {userAgent},
-		"accept-encoding":    {"gzip, deflate, br, zstd"},
-	}
-	h[fhttp.HeaderOrderKey] = []string{
-		"accept", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile",
-		"sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode",
-		"sec-fetch-site", "user-agent", "accept-encoding",
-	}
+// browser sends when loading an <img> from another origin). The base is the
+// library's Chrome profile, so the User-Agent and the sec-ch-ua version
+// strings stay in sync with the fingerprinted ClientHello on library upgrades
+// — no hardcoded version numbers here. The navigation-only headers are
+// dropped and the image-specific ones overridden.
+//
+// The Accept list deliberately omits image/avif and image/svg+xml even though
+// real Chrome advertises them: content-negotiating CDNs (imgix / Unsplash's
+// auto=format) honor avif by serving AVIF, which our conversion pipeline
+// cannot decode, and SVG is text we cannot rasterize either.
+func requestHeaders() http.Header {
+	h := impersonate.Chrome.Headers.Clone()
+	h.Del("Upgrade-Insecure-Requests") // navigation-only
+	h.Del("Sec-Fetch-User")            // navigation-only
+	h.Set("Accept", "image/webp,image/apng,image/png,image/jpeg,image/*,*/*;q=0.8")
+	h.Set("Sec-Fetch-Dest", "image")
+	h.Set("Sec-Fetch-Mode", "no-cors")
+	h.Set("Sec-Fetch-Site", "cross-site")
+	// gzip only: neither transport decompresses a caller-declared encoding,
+	// and br/zstd would need decoders we don't link (see getOnce).
+	h.Set("Accept-Encoding", "gzip")
 	return h
 }
 
@@ -232,17 +241,13 @@ func Fetch(ctx context.Context, rawURL string, maxBytes int64) ([]byte, *url.URL
 	if err := checkHostPublic(ctx, u.Hostname()); err != nil {
 		return nil, nil, "", err
 	}
-	c, err := httpClient()
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("http client unavailable: %w", err)
-	}
-	return get(ctx, c, u, maxBytes)
+	return get(ctx, clientFor(u), u, maxBytes)
 }
 
 // get performs one GET. On HTTP 400 for a MediaWiki-style thumbnail URL it
 // retries once against the original file (see originalOf); the retry result
 // (success or error) wins.
-func get(ctx context.Context, c tls_client.HttpClient, u *url.URL, maxBytes int64) ([]byte, *url.URL, string, error) {
+func get(ctx context.Context, c *http.Client, u *url.URL, maxBytes int64) ([]byte, *url.URL, string, error) {
 	data, final, ctype, status, err := getOnce(ctx, c, u, maxBytes)
 	if err == nil {
 		return data, final, ctype, nil
@@ -257,10 +262,10 @@ func get(ctx context.Context, c tls_client.HttpClient, u *url.URL, maxBytes int6
 }
 
 // getOnce is the raw single request: browser headers, redirect following,
-// status check, transparent decompression, size cap. It also reports the
-// HTTP status so callers can decide on fallbacks.
-func getOnce(ctx context.Context, c tls_client.HttpClient, u *url.URL, maxBytes int64) ([]byte, *url.URL, string, int, error) {
-	req, err := fhttp.NewRequestWithContext(ctx, fhttp.MethodGet, u.String(), nil)
+// status check, gzip decompression, size cap. It also reports the HTTP status
+// so callers can decide on fallbacks.
+func getOnce(ctx context.Context, c *http.Client, u *url.URL, maxBytes int64) ([]byte, *url.URL, string, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, nil, "", 0, err
 	}
@@ -274,12 +279,15 @@ func getOnce(ctx context.Context, c tls_client.HttpClient, u *url.URL, maxBytes 
 		return nil, nil, "", resp.StatusCode, fmt.Errorf("the server refused the request (HTTP %s)", resp.Status)
 	}
 	body := resp.Body
-	// On HTTP/2 the transport does NOT transparently decompress bodies when
-	// the caller set Accept-Encoding itself (only the HTTP/1.1 path does,
-	// where it also deletes the header). A still-present Content-Encoding
-	// therefore means a compressed body we must unpack ourselves.
-	if ce := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))); ce != "" && ce != "identity" {
-		body = fhttp.DecompressBodyByType(body, ce)
+	// We declare Accept-Encoding ourselves, so neither transport unpacks the
+	// body for us; gzip is the only encoding we advertise (see requestHeaders).
+	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
+		zr, err := gzip.NewReader(body)
+		if err != nil {
+			return nil, nil, "", resp.StatusCode, fmt.Errorf("the gzip-compressed image could not be unpacked: %w", err)
+		}
+		defer zr.Close()
+		body = zr
 	}
 	data, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
 	if err != nil {

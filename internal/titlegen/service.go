@@ -14,12 +14,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"chattoneko/internal/attach"
 	"chattoneko/internal/config"
+	"chattoneko/internal/llm"
 	"chattoneko/internal/store"
 )
 
@@ -44,6 +45,10 @@ const (
 	// outage, DB hiccup); afterwards the chat keeps "New Chat" and the task
 	// stops hammering a broken setup.
 	maxFailures = 5
+	// retryDelay is the fixed pause between two attempts for one chat, so a
+	// provider blip is retried a few times over ~a minute without the task
+	// calling it every sweep.
+	retryDelay = 10 * time.Second
 
 	// imageOnlyTitle is the fixed title for chats whose first message is
 	// image-only (no text to summarize).
@@ -55,15 +60,6 @@ const (
 type retryState struct {
 	failures int
 	next     time.Time // do not retry before this time
-}
-
-// backoff returns the delay before the next attempt after n failures.
-func backoff(failures int) time.Duration {
-	d := time.Duration(1<<failures) * time.Second // 2s, 4s, 8s, 16s, 32s
-	if d > 30*time.Second {
-		d = 30 * time.Second
-	}
-	return d
 }
 
 // Service is the background title-generation task. It is the ONLY component
@@ -81,9 +77,8 @@ type Service struct {
 
 	retries map[string]*retryState
 
-	cliMu  sync.Mutex
-	cli    *client
-	cliSig string // baseURL|apiKey|model signature of cli
+	// cache holds the live task client (endpoint/key/model/effort).
+	cache *llm.Cache
 }
 
 // New builds the task. The title client (separate from the chat provider;
@@ -98,6 +93,7 @@ func New(st *store.Store, cfgs *config.Store, publish func(chatID, title string)
 		timeout:  defaultTimeout,
 		batch:    defaultBatch,
 		retries:  map[string]*retryState{},
+		cache:    llm.NewCache(cfgs),
 	}
 }
 
@@ -117,30 +113,15 @@ func (s *Service) generator(ctx context.Context) generator {
 	return cli
 }
 
-// taskClient caches a client for the current (baseURL, apiKey, model, effort)
-// tuple and rebuilds it when any of them changes. The reasoning effort is
-// the task model's default from the models table; a metadata read failure
-// falls back to the provider's own default rather than stalling titles.
+// taskClient returns the title client for the current config (task model +
+// its stored default reasoning effort), or nil when the provider/task model
+// is not configured yet — see internal/llm for the caching.
 func (s *Service) taskClient(ctx context.Context) *client {
-	c := s.cfgs.Get()
-	if c.Provider.BaseURL == "" || c.Provider.APIKey == "" || c.Models.DefaultTaskModel == "" {
+	cli := s.cache.Get(ctx, s.cfgs.Get().Models.DefaultTaskModel)
+	if cli == nil {
 		return nil
 	}
-	effort := ""
-	metas, err := s.cfgs.ModelMetas(ctx, []string{c.Models.DefaultTaskModel})
-	if err != nil {
-		slog.Warn("title task: load model metadata", "model", c.Models.DefaultTaskModel, "error", err)
-	} else {
-		effort = metas[0].ReasoningDefault
-	}
-	sig := c.Provider.BaseURL + "\x00" + c.Provider.APIKey + "\x00" + c.Models.DefaultTaskModel + "\x00" + effort
-	s.cliMu.Lock()
-	defer s.cliMu.Unlock()
-	if s.cli == nil || s.cliSig != sig {
-		s.cli = newClient(c.Provider.BaseURL, c.Provider.APIKey, c.Models.DefaultTaskModel, effort)
-		s.cliSig = sig
-	}
-	return s.cli
+	return &client{llm: cli}
 }
 
 // Run polls until ctx is cancelled. Serial: one sweep at a time, one chat at
@@ -168,19 +149,13 @@ func (s *Service) sweep(ctx context.Context) {
 		}
 		return
 	}
-	// Prune retry state of chats that left the candidate list (deleted,
-	// renamed, or marked final) while backing off. Only safe when the
-	// candidate list is complete: at the batch cap a missing id might just
-	// sit beyond the window.
-	if len(ids) < int(s.batch) && len(s.retries) > 0 {
-		candidates := make(map[string]bool, len(ids))
-		for _, id := range ids {
-			candidates[id] = true
-		}
-		for id := range s.retries {
-			if !candidates[id] {
-				delete(s.retries, id)
-			}
+	// Drop the retry state of chats that left the candidate list (deleted,
+	// renamed, or titled) while backing off. At the batch cap the list may be
+	// truncated, so a chat beyond the window loses its state and is simply
+	// retried on the next sweep instead of after the delay.
+	for id := range s.retries {
+		if !slices.Contains(ids, id) {
+			delete(s.retries, id)
 		}
 	}
 	for _, id := range ids {
@@ -281,8 +256,9 @@ func (s *Service) applyTitle(ctx context.Context, chatID, title string) {
 	s.publish(chatID, title)
 }
 
-// fail records a transient failure with backoff; after maxFailures it gives
-// up, keeping "New Chat" and marking the title final.
+// fail records a transient failure and schedules the retry after retryDelay;
+// after maxFailures it gives up, keeping "New Chat" and marking the title
+// final.
 func (s *Service) fail(ctx context.Context, chatID, op string, err error) {
 	r := s.retries[chatID]
 	if r == nil {
@@ -296,7 +272,7 @@ func (s *Service) fail(ctx context.Context, chatID, op string, err error) {
 		s.markFinal(ctx, chatID)
 		return
 	}
-	r.next = time.Now().Add(backoff(r.failures))
+	r.next = time.Now().Add(retryDelay)
 	slog.Warn("title task: "+op+" failed, will retry",
 		"chat", chatID, "attempt", r.failures, "error", err)
 }

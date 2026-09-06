@@ -49,8 +49,8 @@ func captureServer(t *testing.T, sseBody string) (*httptest.Server, func() []byt
 func collect(t *testing.T, es *EventStream) []StreamEvent {
 	t.Helper()
 	var out []StreamEvent
-	for es.Next() {
-		out = append(out, es.Event())
+	for ev := range es.Events() {
+		out = append(out, ev)
 	}
 	if err := es.Err(); err != nil {
 		t.Fatalf("stream error: %v", err)
@@ -341,8 +341,8 @@ func TestChatCompletionsErrorMessage(t *testing.T) {
 		t.Fatalf("unexpected sync error: %v", err)
 	}
 	var sawErr error
-	for es.Next() {
-		if ev := es.Event(); ev.Kind == EventError {
+	for ev := range es.Events() {
+		if ev.Kind == EventError {
 			sawErr = ev.Err
 		}
 	}
@@ -393,8 +393,7 @@ func TestChatCompletionsIdleTimeout(t *testing.T) {
 	}
 	var sawText bool
 	var sawErr error
-	for es.Next() {
-		ev := es.Event()
+	for ev := range es.Events() {
 		if ev.Kind == EventTextDelta {
 			sawText = true
 		}
@@ -449,11 +448,12 @@ func TestEventStreamFinishIsIdempotent(t *testing.T) {
 	if es.Publish(StreamEvent{Kind: EventTextDelta, Text: "b"}) {
 		t.Fatal("publish after Finish must return false")
 	}
-	if !es.Next() || es.Event().Text != "a" {
-		t.Fatal("expected exactly one event")
+	var got []StreamEvent
+	for ev := range es.Events() {
+		got = append(got, ev)
 	}
-	if es.Next() {
-		t.Fatal("stream should be exhausted")
+	if len(got) != 1 || got[0].Text != "a" {
+		t.Fatalf("expected exactly one event, got %+v", got)
 	}
 	if es.Err() == nil || es.Err().Error() != "boom" {
 		t.Fatalf("Err() = %v", es.Err())

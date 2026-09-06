@@ -26,9 +26,6 @@ func notFound(err error) error {
 	return err
 }
 
-// newUUID generates a random UUIDv4.
-func newUUID() string { return uuid.NewString() }
-
 // GenParams are per-chat generation options.
 type GenParams struct {
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
@@ -130,8 +127,6 @@ type Store struct {
 func NewStore(db *sql.DB) *Store {
 	return &Store{db: db, q: query.New(db)}
 }
-
-func nowMillis() int64 { return time.Now().UnixMilli() }
 
 func chatFromRow(c query.Chat) (*Chat, error) {
 	var params GenParams
@@ -247,8 +242,8 @@ func (s *Store) CreateChat(ctx context.Context, model string, params GenParams, 
 	// Neither can fail to marshal: a string field and a map[string]bool.
 	pj, _ := json.Marshal(params)
 	tj, _ := json.Marshal(tools)
-	id := newUUID()
-	now := nowMillis()
+	id := uuid.NewString()
+	now := time.Now().UnixMilli()
 	err := s.q.CreateChat(ctx, query.CreateChatParams{
 		ID:         id,
 		Title:      NewChatTitle,
@@ -299,7 +294,7 @@ func (s *Store) ListChats(ctx context.Context, limit int64, beforeUpdatedAt int6
 func (s *Store) UpdateChatTitle(ctx context.Context, id, title string) error {
 	return s.q.UpdateChatTitle(ctx, query.UpdateChatTitleParams{
 		Title:     title,
-		UpdatedAt: nowMillis(),
+		UpdatedAt: time.Now().UnixMilli(),
 		ID:        id,
 	})
 }
@@ -316,7 +311,7 @@ func (s *Store) ListChatsNeedingTitle(ctx context.Context, limit int64) ([]strin
 func (s *Store) SetGeneratedTitle(ctx context.Context, id, title string) (bool, error) {
 	n, err := s.q.SetGeneratedTitle(ctx, query.SetGeneratedTitleParams{
 		Title:     title,
-		UpdatedAt: nowMillis(),
+		UpdatedAt: time.Now().UnixMilli(),
 		ID:        id,
 	})
 	return n > 0, err
@@ -336,14 +331,14 @@ func (s *Store) UpdateChatSettings(ctx context.Context, id, model string, params
 		Model:      model,
 		ParamsJson: string(pj),
 		ToolsJson:  string(tj),
-		UpdatedAt:  nowMillis(),
+		UpdatedAt:  time.Now().UnixMilli(),
 		ID:         id,
 	})
 }
 
 // TouchChat bumps updated_at (recency ordering).
 func (s *Store) TouchChat(ctx context.Context, id string) error {
-	return s.q.TouchChat(ctx, query.TouchChatParams{UpdatedAt: nowMillis(), ID: id})
+	return s.q.TouchChat(ctx, query.TouchChatParams{UpdatedAt: time.Now().UnixMilli(), ID: id})
 }
 
 // DeleteChat removes the chat (cascades messages, tool_calls, attachments).
@@ -383,8 +378,8 @@ type NewMessageParams struct {
 
 // CreateMessage inserts a message and returns it (with seq assigned).
 func (s *Store) CreateMessage(ctx context.Context, p NewMessageParams) (*Message, error) {
-	id := newUUID()
-	now := nowMillis()
+	id := uuid.NewString()
+	now := time.Now().UnixMilli()
 	err := s.q.CreateMessage(ctx, query.CreateMessageParams{
 		ID:         id,
 		ChatID:     p.ChatID,
@@ -453,7 +448,7 @@ func (s *Store) UpdateMessageContent(ctx context.Context, id, content, reasoning
 	return s.q.UpdateMessageContent(ctx, query.UpdateMessageContentParams{
 		Content:   content,
 		Reasoning: reasoning,
-		UpdatedAt: nowMillis(),
+		UpdatedAt: time.Now().UnixMilli(),
 		ID:        id,
 	})
 }
@@ -465,7 +460,7 @@ func (s *Store) FinalizeMessage(ctx context.Context, id, status, errText, conten
 		Error:     errText,
 		Content:   content,
 		Reasoning: reasoning,
-		UpdatedAt: nowMillis(),
+		UpdatedAt: time.Now().UnixMilli(),
 		ID:        id,
 	})
 }
@@ -477,7 +472,7 @@ func (s *Store) UpdateMessageUsage(ctx context.Context, id string, promptTokens,
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		DurationMs:       durationMs,
-		UpdatedAt:        nowMillis(),
+		UpdatedAt:        time.Now().UnixMilli(),
 		ID:               id,
 	})
 }
@@ -517,7 +512,7 @@ func (s *Store) SearchChats(ctx context.Context, queryStr string, limit int64) (
 func (s *Store) UpdateUserMessageContent(ctx context.Context, id, content string) error {
 	return s.q.UpdateUserMessageContent(ctx, query.UpdateUserMessageContentParams{
 		Content:   content,
-		UpdatedAt: nowMillis(),
+		UpdatedAt: time.Now().UnixMilli(),
 		ID:        id,
 	})
 }
@@ -566,7 +561,7 @@ func (s *Store) ListGeneratingMessages(ctx context.Context) ([]*Message, error) 
 // CreateToolCall persists a provider tool call on an assistant message.
 func (s *Store) CreateToolCall(ctx context.Context, messageID, providerCallID, name, arguments string, position int64) (*ToolCall, error) {
 	tc := ToolCall{
-		ID:             newUUID(),
+		ID:             uuid.NewString(),
 		MessageID:      messageID,
 		ProviderCallID: providerCallID,
 		Name:           name,
@@ -624,14 +619,14 @@ func (s *Store) CreateLinkedAttachment(ctx context.Context, chatID, messageID, f
 
 func (s *Store) createAttachment(ctx context.Context, chatID, messageID, filename, kind, mime string, size int64, data []byte) (*AttachmentMeta, error) {
 	meta := AttachmentMeta{
-		ID:        newUUID(),
+		ID:        uuid.NewString(),
 		ChatID:    chatID,
 		MessageID: messageID,
 		Filename:  filename,
 		Kind:      kind,
 		Mime:      mime,
 		Size:      size,
-		CreatedAt: nowMillis(),
+		CreatedAt: time.Now().UnixMilli(),
 	}
 	err := s.q.CreateAttachment(ctx, query.CreateAttachmentParams{
 		ID:        meta.ID,

@@ -72,7 +72,7 @@
   // can't see them — the server substitutes a vision-model description in
   // that case (no images travel to the chat model).
   let currentInputModality = $derived(
-    app.modelInfo.find((m) => m.id === currentModel)?.input_modality ?? [],
+    app.modelInfo.find((m) => m.model_id === currentModel)?.input_modality ?? [],
   );
   let hasStagedImages = $derived(pending.some((a) => a.kind === 'image'));
   let imageHint = $derived.by(() => {

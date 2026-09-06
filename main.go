@@ -26,7 +26,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -126,9 +125,9 @@ func run() error {
 	// Aggregated tool catalog: integrated (built-in, hardcoded) tools first,
 	// then MCP tools; integrated tools win name collisions. The merged catalog
 	// reads both sources live, so MCP servers added through config appear
-	// without a restart. The outer layer applies the global per-tool defaults
-	// from the config (settings UI) over the sources' own defaults.
-	catalog := tools.WithDefaults(tools.Merge(tools.Builtin(st, cfgStore), hub), cfgStore)
+	// without a restart, and layers the global per-tool defaults from the
+	// config (settings UI) over the sources' own defaults.
+	catalog := tools.Merge(cfgStore, tools.Builtin(st, cfgStore), hub)
 
 	// Engine (server-scoped context: generations survive client disconnects).
 	serverCtx, serverCancel := context.WithCancel(context.Background())
@@ -232,14 +231,9 @@ func warnIfExposed(c *config.Config, addr string) {
 // the loopback interface. An empty host (":8080") means all interfaces in
 // Go's net.Listen, so it is NOT loopback-only.
 func isLoopbackAddr(addr string) bool {
-	host := addr
-	if i := strings.LastIndex(addr, ":"); i >= 0 {
-		host = addr[:i]
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
 	}
-	host = strings.Trim(host, "[]")
-	switch host {
-	case "", "localhost", "127.0.0.1", "::1":
-		return host != ""
-	}
-	return false
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }

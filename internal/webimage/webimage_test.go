@@ -2,6 +2,7 @@ package webimage
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -9,10 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/andybalholm/brotli"
-	tls_client "github.com/bogdanfinn/tls-client"
-	"github.com/bogdanfinn/tls-client/profiles"
 )
 
 // allowLoopback relaxes the SSRF blocklist for loopback so tests can reach
@@ -165,36 +162,29 @@ func TestFetchContextCanceled(t *testing.T) {
 	}
 }
 
-func TestFetchDecompressesBrotliOverH2(t *testing.T) {
-	// Serves a brotli-compressed body with Content-Encoding: br. On HTTP/2
-	// the transport leaves caller-requested encodings compressed (and keeps
-	// the header), so Fetch must decompress manually; on HTTP/1.1 the
-	// transport already unpacked it and stripped the header. Either way the
-	// caller must receive the raw bytes.
+func TestFetchDecompressesGzip(t *testing.T) {
+	allowLoopback(t) // getOnce dials through the SSRF hook
+	// We declare Accept-Encoding: gzip ourselves, so no transport unpacks the
+	// body for us — getOnce must. The caller receives the raw bytes.
 	payload := []byte("COMPRESSED-IMAGE-BYTES")
 	var buf bytes.Buffer
-	bw := brotli.NewWriter(&buf)
-	bw.Write(payload)
-	bw.Close()
+	zw := gzip.NewWriter(&buf)
+	zw.Write(payload)
+	zw.Close()
 	compressed := buf.Bytes()
 
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Encoding", "br")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Accept-Encoding"); got != "gzip" {
+			t.Errorf("accept-encoding = %q, want gzip", got)
+		}
+		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Type", "image/png")
 		w.Write(compressed)
 	}))
 	defer ts.Close()
 
-	c, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(),
-		tls_client.WithClientProfile(profiles.Chrome_150),
-		tls_client.WithInsecureSkipVerify(),
-		tls_client.WithTimeoutSeconds(10),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	u, _ := url.Parse(ts.URL + "/x.png")
-	data, _, ctype, status, err := getOnce(context.Background(), c, u, 1024)
+	data, _, ctype, status, err := getOnce(context.Background(), clientFor(u), u, 1024)
 	if err != nil {
 		t.Fatalf("getOnce: %v (status %d)", err, status)
 	}

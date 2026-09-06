@@ -9,12 +9,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/shared"
+
+	"chattoneko/internal/llm"
 )
 
 // errEmptyTitle means the model returned nothing usable after sanitization;
-// treated as a transient failure (retry with backoff).
+// treated as a transient failure (retried after a delay).
 var errEmptyTitle = errors.New("titlegen: model returned an empty title")
 
 const (
@@ -38,25 +38,11 @@ const (
 		`no trailing punctuation, no "Title:" prefix.`
 )
 
-// client is the dedicated OpenAI-compatible client for title generation.
-// Separate from the chat provider by design: it issues plain non-streaming
-// completions with the configured task model and shares no state with the
-// chat streaming machinery.
+// client issues the title prompts through the shared non-streaming client
+// (internal/llm) with the configured task model. Separate from the chat
+// provider by design: it shares no state with the chat streaming machinery.
 type client struct {
-	api    *openai.Client
-	model  string
-	effort string // reasoning effort sent with every call; "" = provider default
-}
-
-// newClient builds the task client against the same provider endpoint/key as
-// chat (there is exactly one provider), but with the task model and its
-// stored default reasoning effort.
-func newClient(baseURL, apiKey, model, effort string) *client {
-	c := openai.NewClient(
-		option.WithAPIKey(apiKey),
-		option.WithBaseURL(baseURL),
-	)
-	return &client{api: &c, model: model, effort: effort}
+	llm *llm.Client
 }
 
 // GenerateFromText titles a conversation whose first message is typed text.
@@ -73,18 +59,10 @@ func (c *client) GenerateFromFile(ctx context.Context, filename, content string)
 
 // complete issues one non-streaming completion and sanitizes the result.
 func (c *client) complete(ctx context.Context, userPrompt string) (string, error) {
-	params := openai.ChatCompletionNewParams{
-		Model: c.model,
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(systemPrompt),
-			openai.UserMessage(userPrompt),
-		},
-		MaxTokens: openai.Int(maxOutputTokens),
-	}
-	if c.effort != "" {
-		params.ReasoningEffort = shared.ReasoningEffort(c.effort)
-	}
-	resp, err := c.api.Chat.Completions.New(ctx, params)
+	resp, err := c.llm.Complete(ctx, []openai.ChatCompletionMessageParamUnion{
+		openai.SystemMessage(systemPrompt),
+		openai.UserMessage(userPrompt),
+	}, maxOutputTokens)
 	if err != nil {
 		return "", err
 	}

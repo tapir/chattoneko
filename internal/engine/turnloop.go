@@ -219,8 +219,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 		var streamErr error
 		var finishReason string
 	drain:
-		for stream.Next() {
-			ev := stream.Event()
+		for ev := range stream.Events() {
 			switch ev.Kind {
 			case provider.EventTextDelta:
 				ag.mu.Lock()

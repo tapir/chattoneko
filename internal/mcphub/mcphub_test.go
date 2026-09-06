@@ -144,11 +144,16 @@ func TestHubReload(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	hub.Reload(context.Background())
-	if n := len(hub.Tools()); n != 4 {
-		t.Fatalf("after add: tools = %d, want 4", n)
+	// Server b runs the same binary, so both of its tools collide with the
+	// first server's and are dropped (first server in config order wins).
+	if n := len(hub.Tools()); n != 2 {
+		t.Fatalf("after add: tools = %d, want 2 (b's duplicates dropped)", n)
 	}
-	if res, _, err := hub.Call(context.Background(), "echo_2", `{"text":"hi"}`, CallMeta{}); err != nil || res != "echo: hi" {
-		t.Fatalf("echo_2 after reload: res=%q err=%v", res, err)
+	if res, _, err := hub.Call(context.Background(), "echo", `{"text":"hi"}`, CallMeta{}); err != nil || res != "echo: hi" {
+		t.Fatalf("echo after reload: res=%q err=%v", res, err)
+	}
+	if _, _, err := hub.Call(context.Background(), "echo_2", `{"text":"hi"}`, CallMeta{}); err == nil {
+		t.Fatal("a collided tool must not be reachable under a suffixed name")
 	}
 
 	// Nothing changed between reloads: Reload reports no change.
@@ -186,7 +191,7 @@ func TestHubReload(t *testing.T) {
 	}
 }
 
-func TestHubCollisionSuffix(t *testing.T) {
+func TestHubCollisionFirstWins(t *testing.T) {
 	cfg := config.Config{
 		MCPServers: []config.MCPServerConfig{
 			{Name: "a", Transport: "stdio", Command: testServerBinary, DefaultEnabled: true},
@@ -197,48 +202,24 @@ func TestHubCollisionSuffix(t *testing.T) {
 	hub.Connect(context.Background())
 	defer hub.Close()
 
-	names := map[string]bool{}
-	for _, e := range hub.Tools() {
-		names[e.Display] = true
+	// Both servers expose the same tools: the FIRST server in config order
+	// keeps the name, the later duplicate is dropped (never renamed), so the
+	// catalog holds unique display names.
+	tools := hub.Tools()
+	if len(tools) != 2 {
+		t.Fatalf("tools = %d, want 2: %v", len(tools), tools)
 	}
-	// first server keeps bare names; second gets _2 suffixes
-	for _, want := range []string{"echo", "always_fails", "echo_2", "always_fails_2"} {
-		if !names[want] {
-			t.Fatalf("missing suffixed tool %q in %v", want, names)
+	for _, e := range tools {
+		if e.Server != "a" {
+			t.Fatalf("tool %q owned by server %q, want the first server \"a\"", e.Display, e.Server)
 		}
 	}
-	res, _, err := hub.Call(context.Background(), "echo_2", `{"text":"suffixed"}`, CallMeta{})
-	if err != nil || res != "echo: suffixed" {
-		t.Fatalf("suffixed call: res=%q err=%v", res, err)
+	res, _, err := hub.Call(context.Background(), "echo", `{"text":"first"}`, CallMeta{})
+	if err != nil || res != "echo: first" {
+		t.Fatalf("call: res=%q err=%v", res, err)
 	}
-}
-
-// TestCollisionRename reserves renamed names too: a rename must never
-// collide with an existing entry or a later one (the old count-based
-// scheme produced duplicate display names in this scenario).
-func TestCollisionRename(t *testing.T) {
-	hub := &Hub{entries: []Entry{
-		{Display: "echo", Server: "a"},
-		{Display: "echo", Server: "b"},
-		{Display: "echo_2", Server: "b"},
-		{Display: "echo", Server: "c"},
-	}}
-	hub.applyCollisionSuffixesLocked()
-
-	seen := map[string]bool{}
-	var got []string
-	for _, e := range hub.entries {
-		got = append(got, e.Display)
-		if seen[e.Display] {
-			t.Fatalf("duplicate display name %q in %v", e.Display, got)
-		}
-		seen[e.Display] = true
-	}
-	want := []string{"echo", "echo_2", "echo_2_2", "echo_3"}
-	for i, w := range want {
-		if got[i] != w {
-			t.Fatalf("entries = %v, want %v", got, want)
-		}
+	if _, _, err := hub.Call(context.Background(), "echo_2", `{"text":"x"}`, CallMeta{}); err == nil {
+		t.Fatal("suffixed name must not exist")
 	}
 }
 

@@ -144,7 +144,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			"default_chat_model":   cfg.Models.DefaultChatModel,
 			"default_vision_model": cfg.Models.DefaultVisionModel,
 		},
-		"model_info":    modelInfoJSON(s.engine.ModelInfo(r.Context())),
+		"model_info":    s.engine.ModelInfo(r.Context()),
 		"tools":         s.tools.Tools(),
 		"system_prompt": s.engine.SystemPrompt(),
 		"limits": map[string]any{
@@ -157,24 +157,6 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			"max_raw_upload_bytes": attach.MaxRawUploadBytes,
 		},
 	})
-}
-
-// modelInfoJSON maps stored model metadata to the /api/config model_info
-// shape the existing clients expect (id + context_window), plus the
-// modality fields.
-func modelInfoJSON(metas []config.ModelMeta) []map[string]any {
-	out := make([]map[string]any, 0, len(metas))
-	for _, m := range metas {
-		out = append(out, map[string]any{
-			"id":                m.ModelID,
-			"context_window":    m.ContextLength,
-			"reasoning_efforts": m.ReasoningEfforts,
-			"reasoning_default": m.ReasoningDefault,
-			"input_modality":    m.InputModality,
-			"output_modality":   m.OutputModality,
-		})
-	}
-	return out
 }
 
 // ---- setup ----
@@ -220,7 +202,7 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 			"default_chat_model":   c.Models.DefaultChatModel,
 			"default_task_model":   c.Models.DefaultTaskModel,
 			"default_vision_model": c.Models.DefaultVisionModel,
-			"metas":                modelMetaJSON(metas),
+			"metas":                metas,
 		},
 		"mcp_servers": servers,
 		// Global per-tool default toggles. Go marshals maps with sorted keys,
@@ -235,24 +217,6 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 		// Auth is deliberately omitted: it is env-var driven (CHATTO_USERNAME /
 		// CHATTO_PASSWORD), fixed at startup, and not editable through the API.
 	}
-}
-
-// modelMetaJSON returns the full per-model metadata (round-trips into
-// config.ModelMeta) so the settings UI can render one editable card per
-// whitelisted model.
-func modelMetaJSON(metas []config.ModelMeta) []map[string]any {
-	out := make([]map[string]any, 0, len(metas))
-	for _, m := range metas {
-		out = append(out, map[string]any{
-			"model_id":          m.ModelID,
-			"input_modality":    m.InputModality,
-			"output_modality":   m.OutputModality,
-			"context_length":    m.ContextLength,
-			"reasoning_efforts": m.ReasoningEfforts,
-			"reasoning_default": m.ReasoningDefault,
-		})
-	}
-	return out
 }
 
 func (s *Server) handleGetSetup(w http.ResponseWriter, r *http.Request) {
@@ -369,7 +333,7 @@ func (s *Server) handleSetupModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"models": modelInfoJSON(metas),
+		"models": metas,
 		"source": sources,
 	}
 	switch {
@@ -626,7 +590,7 @@ func (s *Server) handlePatchChat(w http.ResponseWriter, r *http.Request) {
 			internalError(w, "update chat title", err)
 			return
 		}
-		s.engine.BroadcastChatUpdated(id, *body.Title)
+		s.engine.BroadcastChat(id, engine.WireEvent{Type: "chat_updated", Title: *body.Title})
 	}
 	if body.Model != nil || body.Params != nil || body.Tools != nil {
 		model := chat.Model
@@ -654,7 +618,7 @@ func (s *Server) handlePatchChat(w http.ResponseWriter, r *http.Request) {
 	if body.Model != nil || body.Params != nil || body.Tools != nil {
 		// Broadcast carries the fresh chat so other clients apply settings
 		// without a refetch.
-		s.engine.BroadcastSettingsUpdated(id, updated)
+		s.engine.BroadcastChat(id, engine.WireEvent{Type: "settings_updated", Chat: updated})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"chat": updated})
 }
@@ -757,7 +721,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full.Attachments = atts
-	s.engine.BroadcastUserMessage(id, full)
+	s.engine.BroadcastChat(id, engine.WireEvent{Type: "user_message", Message: full})
 
 	// startClaimedGeneration consumes the claim (releases it on failure).
 	am, ok := s.startClaimedGeneration(w, r, id)
@@ -877,7 +841,7 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 	// Attachments of the deleted messages (user uploads and tool-generated
 	// files) have no FK cascade — reap them instead of leaking blobs.
 	s.reapDanglingAttachments(ctx, id)
-	s.engine.BroadcastMessagesReset(id)
+	s.engine.BroadcastChat(id, engine.WireEvent{Type: "messages_reset"})
 	// startClaimedGeneration consumes the claim (releases it on failure).
 	am, ok := s.startClaimedGeneration(w, r, id)
 	if !ok {
@@ -921,7 +885,7 @@ func (s *Server) handleRegenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reap attachments left dangling by the truncation (no FK cascade).
 	s.reapDanglingAttachments(ctx, id)
-	s.engine.BroadcastMessagesReset(id)
+	s.engine.BroadcastChat(id, engine.WireEvent{Type: "messages_reset"})
 	// startClaimedGeneration consumes the claim (releases it on failure).
 	am, ok := s.startClaimedGeneration(w, r, id)
 	if !ok {

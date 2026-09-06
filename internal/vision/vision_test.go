@@ -2,7 +2,6 @@ package vision
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -179,119 +178,6 @@ func TestServiceClientRebuiltOnModelChange(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
-
-// ---- vision client (reasoning effort from the models table) ----
-
-// visionConfig builds a config store with provider + models configured and,
-// when meta is non-nil, a stored metadata row for the vision model. The raw
-// DB is returned alongside for tests that need to break it.
-func visionConfig(t *testing.T, visionModel string, meta *config.ModelMeta) (*config.Store, *sql.DB) {
-	t.Helper()
-	sqlDB, err := db.Open(t.TempDir() + "/test.db")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := db.Migrate(sqlDB); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	ctx := context.Background()
-	cfgs, err := config.NewStore(ctx, sqlDB)
-	if err != nil {
-		t.Fatalf("config store: %v", err)
-	}
-	patch := config.Patch{
-		Provider: &config.ProviderPatch{BaseURL: ptr("https://p.example/api"), APIKey: ptr("sk-test")},
-		Models: &config.ModelsPatch{
-			Whitelist:          &[]string{visionModel},
-			DefaultVisionModel: ptr(visionModel),
-		},
-	}
-	if meta != nil {
-		patch.Models.Metas = &[]config.ModelMeta{*meta}
-	}
-	if _, err := cfgs.Update(ctx, patch); err != nil {
-		t.Fatalf("update config: %v", err)
-	}
-	return cfgs, sqlDB
-}
-
-func TestVisionClientUsesDatabaseDefaultEffort(t *testing.T) {
-	meta := config.DefaultModelMeta("vision-m")
-	meta.ReasoningEfforts = []string{"low", "high"}
-	meta.ReasoningDefault = "high"
-	cfgs, _ := visionConfig(t, "vision-m", &meta)
-
-	svc := New(cfgs)
-	cli := svc.client(context.Background())
-	if cli == nil {
-		t.Fatal("vision client nil despite provider/vision model configured")
-	}
-	if cli.effort != "high" {
-		t.Fatalf("effort = %q, want the stored default %q", cli.effort, "high")
-	}
-}
-
-func TestVisionClientDefaultEffortWithoutStoredRow(t *testing.T) {
-	// No metadata row: ModelMetas applies the spec defaults (default medium).
-	cfgs, _ := visionConfig(t, "vision-m", nil)
-
-	svc := New(cfgs)
-	cli := svc.client(context.Background())
-	if cli == nil {
-		t.Fatal("vision client nil")
-	}
-	if cli.effort != config.DefaultModelMeta("vision-m").ReasoningDefault {
-		t.Fatalf("effort = %q, want spec default", cli.effort)
-	}
-}
-
-func TestVisionClientRebuildsOnEffortChange(t *testing.T) {
-	meta := config.DefaultModelMeta("vision-m")
-	meta.ReasoningDefault = "low"
-	cfgs, _ := visionConfig(t, "vision-m", &meta)
-
-	svc := New(cfgs)
-	ctx := context.Background()
-	first := svc.client(ctx)
-	if first == nil || first.effort != "low" {
-		t.Fatalf("first client = %+v", first)
-	}
-	// Same settings: the cached client is reused.
-	if got := svc.client(ctx); got != first {
-		t.Fatal("client rebuilt without config change")
-	}
-	// Admin changes the stored default effort: the client must be rebuilt.
-	meta.ReasoningDefault = "high"
-	if err := cfgs.UpsertModelMetas(ctx, []config.ModelMeta{meta}); err != nil {
-		t.Fatalf("upsert metas: %v", err)
-	}
-	second := svc.client(ctx)
-	if second == first {
-		t.Fatal("client not rebuilt after effort change")
-	}
-	if second.effort != "high" {
-		t.Fatalf("effort = %q, want high", second.effort)
-	}
-}
-
-func TestVisionClientFallsBackOnMetaLoadFailure(t *testing.T) {
-	meta := config.DefaultModelMeta("vision-m")
-	cfgs, sqlDB := visionConfig(t, "vision-m", &meta)
-
-	svc := New(cfgs)
-	// Break the models table; metadata reads fail but descriptions must not stall.
-	if _, err := sqlDB.Exec(`DROP TABLE models`); err != nil {
-		t.Fatalf("drop models table: %v", err)
-	}
-	cli := svc.client(context.Background())
-	if cli == nil {
-		t.Fatal("vision client nil on metadata failure; want provider-default fallback")
-	}
-	if cli.effort != "" {
-		t.Fatalf("effort = %q, want empty (provider default)", cli.effort)
-	}
-}
 
 func TestServiceSendsReasoningEffort(t *testing.T) {
 	var sawEffort string

@@ -168,7 +168,7 @@
 <svelte:window onhashchange={() => applyRoute()} onfocus={() => app.onFocus()} onclick={openSidebarFromTrigger} />
 
 {#if !app.authChecked}
-  <div class="flex min-h-screen items-center justify-center p-safe-pad">
+  <div class="boot-fade flex min-h-screen items-center justify-center p-safe-pad">
     <Spinner class="size-8" />
   </div>
 {:else if app.needsServerSetup || (app.authEnabled && !app.authed)}

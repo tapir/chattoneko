@@ -525,6 +525,19 @@
   animation: shimmer 1.8s linear infinite;
 }
 
+/* Boot spinner: stay invisible for the first 0.5s so a cold start against a
+   nearby server never flashes it — the themed page background shows instead.
+   Slow/unreachable servers still get feedback after the delay. */
+@keyframes boot-fade {
+  to {
+    opacity: 1;
+  }
+}
+.boot-fade {
+  opacity: 0;
+  animation: boot-fade 0.15s ease 0.5s forwards;
+}
+
 /* Streaming scramble placeholder */
 .stream-scramble {
   display: inline-block;

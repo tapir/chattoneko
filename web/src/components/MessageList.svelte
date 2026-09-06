@@ -92,7 +92,17 @@
   let canScroll = $state(false);
   let lastTop = 0;
   let lastHeight = 0;
+  // clientHeight as of the last scroll event: a difference means the box was
+  // resized, which must never be read as a scroll (see onScroll).
+  let lastBox = 0;
   let touchStartY = null;
+
+  // Seeded from the container, else the first scroll event reads as a resize
+  // and swallows the user's first upward drag.
+  $effect(() => {
+    if (!container) return;
+    lastBox = container.clientHeight;
+  });
 
   function isNearBottom() {
     if (!container) return true;
@@ -116,6 +126,22 @@
     updateCanScroll();
     const top = container.scrollTop;
     const height = container.scrollHeight;
+    const box = container.clientHeight;
+    const resized = box !== lastBox;
+    lastBox = box;
+    if (resized) {
+      // The box changed height — soft keyboard show/hide (the native WebView
+      // resizes; mobile browsers only shrink the visual viewport), rotation,
+      // window drag. The browser clamps scrollTop into the new range and that
+      // clamp is indistinguishable from a deliberate upward scroll, so a
+      // resize never unpins; a pinned list re-pins to the new bottom instead.
+      if (pinned) scrollToBottom();
+      else {
+        lastTop = top;
+        lastHeight = height;
+      }
+      return;
+    }
     if (height < lastHeight) {
       // Content shrank (chat switch, history reset): the browser clamps
       // scrollTop, which looks like an upward scroll but isn't user intent.

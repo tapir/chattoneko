@@ -507,17 +507,38 @@
   animation: shimmer 1.8s linear infinite;
 }
 
-/* Boot spinner: stay invisible for the first 0.5s so a cold start against a
-   nearby server never flashes it — the themed page background shows instead.
-   Slow/unreachable servers still get feedback after the delay. */
-@keyframes boot-fade {
+/* Loaders that a nearby server usually beats: stay invisible for the first
+   0.5s so a fast boot or a fast chat-list load never flashes them. Slow or
+   unreachable servers still get feedback after the delay. */
+@keyframes loading-delay {
   to {
     opacity: 1;
   }
 }
-.boot-fade {
+.loading-delay {
   opacity: 0;
-  animation: boot-fade 0.15s ease 0.5s forwards;
+  animation: loading-delay 0.15s ease 0.5s forwards;
+}
+
+/* Chat load bar: no real progress signal, so it fills to 80% in 0.4s and
+   stalls there until the chat lands and unmounts it. Absolutely positioned
+   over the chat pane's top edge — inside the chat column only, never across
+   the sidebar, and never in flow, so nothing below it shifts. */
+@keyframes chat-progress {
+  from {
+    width: 0;
+  }
+  to {
+    width: 80%;
+  }
+}
+.chat-progress {
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.chat-progress-fill {
+  animation: chat-progress 0.4s ease-out forwards;
 }
 
 /* Streaming scramble placeholder */
@@ -586,6 +607,10 @@
   .pop-in,
   .bounce-hint {
     animation: none;
+  }
+  .chat-progress-fill {
+    animation: none;
+    width: 80%;
   }
 }
 

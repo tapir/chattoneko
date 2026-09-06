@@ -202,7 +202,7 @@ import logoUrl from '$lib/logo.svg';
       </div>
     </div>
     {#if loadingList}
-      <div class="flex flex-col gap-1.5 px-1 pt-1">
+      <div class="loading-delay flex flex-col gap-1.5 px-1 pt-1">
         {#each Array(searching ? 2 : 3) as _, i (i)}
           <Skeleton class="h-8 bg-sidebar-accent/60" />
         {/each}

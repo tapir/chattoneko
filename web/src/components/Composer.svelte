@@ -9,6 +9,7 @@
   import ModelPickerSheet from './ModelPickerSheet.svelte';
   import AttachmentSheet from './AttachmentSheet.svelte';
   import { isNative } from '../lib/server.js';
+  import { viewer } from '../lib/viewer.svelte.js';
   import { capturePhoto, pickPhotos, pickFiles } from '../lib/native-attachments.js';
 
   // Draft text lives in the store (keyed by chat id) so it survives the
@@ -16,6 +17,11 @@
   // chat switches. Same for pending attachments, which are staged client-side
   // (File objects) and only uploaded when the message is actually sent.
   let pending = $derived(app.pendingList());
+  // Staged pictures are the lightbox's gallery set, so opening one chip lets
+  // you swipe through the others before sending (as with a sent message).
+  // Text files stay out: they have no server copy yet, and the viewer reads
+  // those by id.
+  let stagedImages = $derived(pending.filter((a) => a.kind === 'image'));
   let sending = $state(false);
   let fileInput = $state(null);
   let textArea = $state(null);
@@ -226,14 +232,28 @@
           {#each pending as att (att.id)}
             <span class="inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-xs">
               {#if att.kind === 'image' && att.previewUrl}
-                <img src={att.previewUrl} alt={att.filename} class="size-5 rounded object-cover" />
+                <!-- Everything but ✕ opens the lightbox: a staged image only
+                     has a local object URL, which is what AttachmentViewer
+                     prefers, so this works before the file is uploaded.
+                     Nested buttons are invalid, hence the sibling pair. -->
+                <button
+                  type="button"
+                  class="inline-flex min-w-0 items-center gap-1.5 rounded-full"
+                  title={`View ${att.filename}`}
+                  aria-label={`View ${att.filename}`}
+                  onclick={() => viewer.open(att, stagedImages)}
+                >
+                  <img src={att.previewUrl} alt={att.filename} class="size-5 rounded object-cover" />
+                  <span class="max-w-40 truncate">{att.filename}</span>
+                </button>
               {:else}
                 <Paperclip class="size-3" strokeWidth={1.75} aria-hidden="true" />
+                <span class="max-w-40 truncate">{att.filename}</span>
               {/if}
-              <span class="max-w-40 truncate">{att.filename}</span>
               <button
-                class="flex size-4 items-center justify-center rounded-full transition-colors hover:bg-foreground/10"
+                class="flex size-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-foreground/10"
                 title="Remove attachment"
+                aria-label={`Remove ${att.filename}`}
                 onclick={() => removePending(att.id)}
               >
                 <X class="size-3" strokeWidth={1.75} aria-hidden="true" />

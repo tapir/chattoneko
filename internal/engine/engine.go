@@ -394,6 +394,7 @@ func (e *Engine) StartClaimedGeneration(ctx context.Context, chatID string) (*st
 		messageID: am.ID,
 		ctx:       genCtx,
 		cancel:    cancel,
+		finished:  make(chan struct{}),
 		attCache:  map[string]*store.Attachment{},
 		attSent:   map[string]bool{},
 	}
@@ -407,6 +408,7 @@ func (e *Engine) StartClaimedGeneration(ctx context.Context, chatID string) (*st
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
+		defer close(ag.finished)
 		e.runGeneration(ag)
 	}()
 	return am, nil
@@ -430,6 +432,41 @@ func (e *Engine) StopGeneration(chatID string) bool {
 	ag.mu.Unlock()
 	ag.cancel()
 	return true
+}
+
+// CancelAndClaim takes the chat's generation slot from a running generation so
+// the caller can rewrite history and re-generate: the generation is stopped
+// (it finalizes normally, so a caller that fails afterwards leaves no row
+// stuck in `generating`) and the call blocks until its turn loop has exited —
+// a write landing after the rewrite would leave a dangling tool message that
+// poisons every later provider request. Dropping the hub reference suppresses
+// its `status`/`done` (the caller replaces that message and broadcasts the
+// truncation); the hub itself survives, so subscribers simply see the next
+// generation. ErrGenerationActive when another handler sits between its claim
+// and its start: nothing to cancel yet, and claiming anyway would install two
+// turn loops for one chat.
+// ponytail: the wait is bounded only by the provider/tool cancel timeouts —
+// add a deadline here if a tool that ignores ctx ever shows up.
+func (e *Engine) CancelAndClaim(chatID string) error {
+	h := e.hubFor(chatID)
+	h.mu.Lock()
+	if h.claimed {
+		h.mu.Unlock()
+		return ErrGenerationActive
+	}
+	ag := h.gen
+	h.gen = nil
+	h.claimed = true
+	h.mu.Unlock()
+	if ag == nil {
+		return nil
+	}
+	ag.mu.Lock()
+	ag.stopped = true
+	ag.mu.Unlock()
+	ag.cancel()
+	<-ag.finished
+	return nil
 }
 
 // CancelForChatDeletion aborts the generation without further persistence.

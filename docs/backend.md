@@ -69,8 +69,8 @@ Schema (embedded migrations `migrations/001_init.sql`, `migrations/002_reasoning
 The engine owns every in-flight generation. Key design points:
 
 - **Server-scoped context.** A generation runs on a child of the server context, not the HTTP request context: client disconnects never abort a generation. It ends only via user stop, chat deletion, or server shutdown.
-- **One generation per chat.** Each chat has a `chatHub` holding at most one active generation. Handlers claim the generation slot BEFORE persisting anything user-visible (`ClaimGeneration` → persist → `StartClaimedGeneration`), so a concurrent request loses the claim up front with HTTP 409 instead of leaving an unanswered user message behind.
-- **Claim/release lifecycle.** `StartGeneration` creates the assistant message (status `generating`, stamped with the model in effect at creation — the chat model can change mid-conversation) and spawns `runGeneration`. `StopGeneration` marks the generation stopped and cancels it (partial output kept). `CancelForChatDeletion` aborts without further persistence. `Shutdown` cancels everything and waits (5s cap) for final persistence so the DB close can't kill a write.
+- **One generation per chat.** Each chat has a `chatHub` holding at most one active generation. Handlers claim the generation slot BEFORE persisting anything user-visible (`ClaimGeneration` → persist → `StartClaimedGeneration`), so a concurrent request loses the claim up front with HTTP 409 instead of leaving an unanswered user message behind. Message edit is the exception: it rewrites history and re-generates, so `CancelAndClaim` stops the running generation and takes the slot in one step instead of rejecting the edit.
+- **Claim/release lifecycle.** `StartGeneration` creates the assistant message (status `generating`, stamped with the model in effect at creation — the chat model can change mid-conversation) and spawns `runGeneration`. `StopGeneration` marks the generation stopped and cancels it (partial output kept). `CancelAndClaim` does the same stop, waits for the turn loop to exit (so the caller's truncation can't race its writes and strand a dangling tool message), suppresses the stopped generation's `status`/`done` events and claims the slot for the replacement. `CancelForChatDeletion` aborts without further persistence. `Shutdown` cancels everything and waits (5s cap) for final persistence so the DB close can't kill a write.
 
 ### Turn loop (runGeneration)
 
@@ -174,7 +174,7 @@ Route table (`ServeMux` with method patterns):
 | `PATCH /api/chats/{id}` | rename and/or per-chat settings; broadcasts `chat_updated` / `settings_updated` |
 | `DELETE /api/chats/{id}` | cancels an active generation, deletes the chat (cascade) |
 | `POST /api/chats/{id}/messages` | send: claim → persist user message (+ link attachments) → broadcast → start generation (409 if a generation is active) |
-| `PATCH /api/chats/{id}/messages/{mid}` | edit a user message (optional attachment keep-list), truncate everything after it, re-generate; broadcasts `messages_reset` |
+| `PATCH /api/chats/{id}/messages/{mid}` | edit a user message (optional attachment keep-list), truncate everything after it, re-generate; stops an active generation for the chat first rather than answering 409; broadcasts `messages_reset` |
 | `POST /api/chats/{id}/regenerate` | delete the last assistant message + everything after it (reap dangling attachments), re-generate; broadcasts `messages_reset` |
 | `DELETE /api/chats/{id}/generation` | stop the active generation (partial output kept) |
 | `POST /api/chats/{id}/attachments` | multipart upload, field `files` (≤8 files) |

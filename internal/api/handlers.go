@@ -703,7 +703,12 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 	// edit/regenerate (the message may already be deleted — the content
 	// update would silently affect zero rows — or its seq shifted,
 	// truncating the wrong range).
-	if err := s.engine.ClaimGeneration(id); err != nil {
+	//
+	// An edit rewrites history, so unlike send/regenerate it does NOT 409 on a
+	// running generation: that one is stopped and the reply re-generated from
+	// the edited message. CancelAndClaim waits for the stopped turn loop to
+	// exit, so the truncation below can't race its writes.
+	if err := s.engine.CancelAndClaim(id); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}

@@ -759,11 +759,14 @@ class AppState {
       await this.refreshChat();
       this.stream?.kick();
     } catch (e) {
-      this.generating = false;
       this.toast("error", `Failed to regenerate: ${e.message}`);
     }
   }
 
+  // Editing while a reply is streaming is allowed: the server stops that
+  // generation and re-generates from the edited message. A failure must NOT
+  // clear `generating` — the server still owns that state, and clearing it
+  // here flipped Stop → Send while a reply was in fact still running.
   async editMessage(messageId, content, attachmentIds) {
     const id = this.activeChatId;
     if (!id) return;
@@ -773,7 +776,6 @@ class AppState {
       await this.refreshChat();
       this.stream?.kick();
     } catch (e) {
-      this.generating = false;
       this.toast("error", `Failed to edit message: ${e.message}`);
     }
   }

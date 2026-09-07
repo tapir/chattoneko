@@ -439,6 +439,61 @@ func TestEditMessageClassification(t *testing.T) {
 	}
 }
 
+// Editing a message whose reply is still generating must not 409: the running
+// generation is stopped and replaced by one started from the edited message.
+func TestEditMessageDuringGeneration(t *testing.T) {
+	ts := newTestServer(t, blockingProvider{}, false)
+	chatID := ts.createChat(t)
+	rec := ts.do(t, "POST", "/api/chats/"+chatID+"/messages", map[string]any{"content": "hi"}, nil)
+	if rec.Code != 200 {
+		t.Fatalf("send: %d %s", rec.Code, rec.Body)
+	}
+	var sendOut struct {
+		UserMessage        *store.Message `json:"user_message"`
+		AssistantMessageID string         `json:"assistant_message_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &sendOut); err != nil {
+		t.Fatal(err)
+	}
+	waitForMsg(t, ts.store, sendOut.AssistantMessageID, store.StatusGenerating)
+	if !ts.engine.HasActiveGeneration(chatID) {
+		t.Fatal("precondition: generation not active")
+	}
+
+	rec = ts.do(t, "PATCH", "/api/chats/"+chatID+"/messages/"+sendOut.UserMessage.ID, map[string]any{"content": "edited"}, nil)
+	if rec.Code != 200 {
+		t.Fatalf("edit during generation: %d %s", rec.Code, rec.Body)
+	}
+	var editOut struct {
+		AssistantMessageID string `json:"assistant_message_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &editOut); err != nil {
+		t.Fatal(err)
+	}
+	if editOut.AssistantMessageID == sendOut.AssistantMessageID {
+		t.Fatal("edit reused the stopped assistant message")
+	}
+	// The stopped reply is truncated away — not left behind as a `generating`
+	// row nobody streams — and its replacement is running.
+	if _, err := ts.store.GetMessage(context.Background(), sendOut.AssistantMessageID); err == nil {
+		t.Fatal("stopped assistant message survived the edit")
+	}
+	waitForMsg(t, ts.store, editOut.AssistantMessageID, store.StatusGenerating)
+	m, err := ts.store.GetMessage(context.Background(), sendOut.UserMessage.ID)
+	if err != nil || m.Content != "edited" {
+		t.Fatalf("edited content = %q %v", m.Content, err)
+	}
+	// Exactly the edited message and its new reply: the canceled generation
+	// wrote nothing that outlived the truncation.
+	msgs, err := ts.store.ListMessages(context.Background(), chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("messages after edit = %d, want 2", len(msgs))
+	}
+}
+
 func TestEditMessageAttachments(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 	chatID := ts.createChat(t)

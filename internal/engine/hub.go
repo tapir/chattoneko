@@ -109,6 +109,10 @@ type activeGen struct {
 	stopped   bool // user requested stop
 	deleted   bool // chat was deleted; skip persistence on finalize
 	done      bool // finalized; kept briefly for late-subscriber replay (grace period)
+	// finished is closed when the turn-loop goroutine exits. CancelAndClaim
+	// waits on it so a history rewrite can never race the canceled
+	// generation's last DB writes.
+	finished chan struct{}
 	// attCache memoizes attachment blobs fetched while building provider
 	// messages (they don't change mid-generation). Only the runGeneration
 	// goroutine touches it — no lock needed.

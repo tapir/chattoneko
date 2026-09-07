@@ -136,6 +136,16 @@ export const api = {
       base_url: provider.baseUrl ?? "",
       api_key: provider.apiKey ?? "",
     }),
+  // Lists ONE MCP server's tools from the card's current (possibly unsaved)
+  // values. The server dials a throwaway session — nothing is saved or
+  // connected, so a brand-new server's tools can be toggled before its first
+  // save.
+  setupMcpTools: (server) =>
+    request("POST", "/setup/mcp/tools", {
+      name: server.name ?? "",
+      url: server.url ?? "",
+      headers: server.headers ?? {},
+    }),
 
   listChats: async ({ limit = 30, before, beforeId } = {}) => {
     const q = new URLSearchParams({ limit: String(limit) });

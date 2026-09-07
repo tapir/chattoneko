@@ -6,7 +6,7 @@
   import PanelSheet from './PanelSheet.svelte';
   import * as Popover from '$lib/components/ui/popover';
   import { Badge } from '$lib/components/ui/badge';
-  import { Switch } from '$lib/components/ui/switch';
+  import ToolToggleRow from './ToolToggleRow.svelte';
   import { registerOverlay } from '../lib/overlays.svelte.js';
 
   let chat = $derived(app.chat);
@@ -102,18 +102,7 @@
     >
       <div class="flex flex-col gap-0.5">
         {#each config?.tools ?? [] as tool (tool.name)}
-          <div class="flex items-center gap-3 rounded-md p-2 transition-colors hover:bg-accent/50">
-            <div class="flex shrink-0 items-center">
-              <Switch
-                checked={app.toolEnabled(tool)}
-                onCheckedChange={(checked) => app.toggleTool(tool.name, checked)}
-              />
-            </div>
-            <div class="min-w-0">
-              <div class="truncate text-sm leading-5 font-medium">{tool.name}</div>
-              <div class="line-clamp-2 text-xs text-muted-foreground">{tool.description || tool.server}</div>
-            </div>
-          </div>
+          <ToolToggleRow {tool} checked={app.toolEnabled(tool)} onToggle={(checked) => app.toggleTool(tool.name, checked)} />
         {:else}
           <p class="py-6 text-center text-sm text-muted-foreground">
             No tools available. Add MCP servers in the Settings overlay to give the assistant tools.

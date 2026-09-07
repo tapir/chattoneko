@@ -3,11 +3,11 @@
   import { api } from '../lib/api.js';
   import { Download, Eye, EyeOff, MessageCircle, Trash2, X, Zap } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
+  import ToolToggleRow from './ToolToggleRow.svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
   import * as Select from '$lib/components/ui/select';
-  import { Switch } from '$lib/components/ui/switch';
   import * as ToggleGroup from '$lib/components/ui/toggle-group';
   import { registerOverlay } from '../lib/overlays.svelte.js';
 
@@ -39,12 +39,17 @@
   let maxToolIter = $state('');
   let mcpTimeout = $state('');
   let mcpServers = $state([]);
-  // MCP server names as of the last loaded config: the rows above are these
-  // plus the user's unsaved edits, and the difference drives the tool list.
-  let loadedServers = $state([]);
+  // Per-card MCP tool lists, keyed by the row's local key: what that card's
+  // "Fetch" button last dialed. A card without an entry falls back to
+  // the live catalog's tools for its server name (see toolsFor). Deliberately
+  // NOT part of the dirty snapshot — it describes the remote server, not the
+  // config; only the toggles (tool_defaults) are config.
+  let serverTools = $state({});
+  let fetchingServer = $state(''); // row key currently dialing
   // Global per-tool default toggles: sparse map (tool name → bool) of the
-  // explicit overrides. Rows render from the live catalog (app.config.tools);
-  // a tool absent from the map keeps its own default_enabled.
+  // explicit overrides, integrated and MCP tools alike. Rows render from the
+  // live catalog (app.config.tools) or a card's fetched list; a tool absent
+  // from the map keeps its own default_enabled.
   let toolDefaults = $state({});
 
   // Models: one card per whitelisted model. The default chat/task models are
@@ -75,6 +80,8 @@
   const MODALITIES = ['text', 'image', 'audio', 'video'];
   const DEFAULT_EFFORTS = ['low', 'medium', 'high'];
   const DEFAULT_CONTEXT = 131072;
+  // Entry.Server of an integrated tool (the backend's tools.serverLabel).
+  const BUILTIN_SERVER = 'builtin';
 
   function snapshot() {
     return JSON.stringify({
@@ -118,7 +125,9 @@
       };
     });
     mcpServers = (c.mcp_servers ?? []).map(normalizeServer);
-    loadedServers = (c.mcp_servers ?? []).map((s) => s.name ?? '');
+    // Fetched lists belong to the rows that dialed them; a (re)load rebuilds
+    // every row, so drop the stale keys with them.
+    serverTools = {};
     toolDefaults = { ...(c.tool_defaults ?? {}) };
     baseline = snapshot();
     baselineMcp = JSON.stringify(mcpServers);
@@ -303,19 +312,22 @@
         .map(([key, value]) => ({ id: `hdr-${++rowSeq}`, key, value: value ?? '' })),
     };
   }
+  // The row's headers the way the config wants them: trimmed names, blanks
+  // dropped. Shared by the save patch and the "fetch tools" probe.
+  function headersFor(s) {
+    const headers = {};
+    for (const h of s.headers ?? []) if (h.key.trim()) headers[h.key.trim()] = h.value;
+    return headers;
+  }
   function buildMcpServers() {
     return mcpServers
-      .map((s) => {
-        const headers = {};
-        for (const h of s.headers ?? []) if (h.key.trim()) headers[h.key.trim()] = h.value;
-        return {
-          name: s.name.trim(),
-          transport: s.transport,
-          url: s.url.trim(),
-          headers,
-          default_enabled: true,
-        };
-      })
+      .map((s) => ({
+        name: s.name.trim(),
+        transport: s.transport,
+        url: s.url.trim(),
+        headers: headersFor(s),
+        default_enabled: true,
+      }))
       .filter((s) => s.name);
   }
   function addServer() {
@@ -325,20 +337,47 @@
     mcpServers = mcpServers.filter((_, idx) => idx !== i);
   }
 
-  // ---- global tool defaults ----
-  // Rows for the section: the live catalog minus the tools of any MCP server
-  // whose row was removed or renamed in the form, so the list follows the
-  // edits immediately instead of waiting for the save + catalog refetch.
-  // (A newly added server's tools can only appear after saving — nothing
-  // knows its tool names until the server is dialed.)
-  let settingsTools = $derived.by(() => {
-    const live = new Set(mcpServers.map((s) => s.name.trim()));
-    const gone = new Set(loadedServers.filter((n) => n && !live.has(n)));
-    return (app.config?.tools ?? []).filter((t) => !gone.has(t.server));
-  });
+  // ---- per-card MCP tools ----
+  // The card's tool list: what its "Fetch" button last dialed, else the
+  // live catalog's entries reported under the card's current name (so a saved,
+  // connected server shows its toggles without a fetch). Renaming a card thus
+  // empties the fallback until a fetch re-dials it or the save reconnects it
+  // under the new name. Both shapes carry name + description, and the catalog
+  // one keeps its default_enabled, so rows render identically.
+  function toolsFor(s) {
+    const name = s.name.trim();
+    return serverTools[s.key] ?? (app.config?.tools ?? []).filter((t) => t.server === name);
+  }
+
+  // Dials the card's CURRENT (possibly unsaved) values and lists its tools.
+  // Nothing is persisted server-side: the toggles write the same global
+  // tool_defaults map the integrated list uses, and Save stores it.
+  async function fetchServerTools(s) {
+    const url = s.url.trim();
+    if (!url || fetchingServer) return;
+    fetchingServer = s.key;
+    const label = s.name.trim() || url;
+    try {
+      const res = await api.setupMcpTools({ name: s.name.trim(), url, headers: headersFor(s) });
+      const tools = res?.tools ?? [];
+      serverTools = { ...serverTools, [s.key]: tools };
+      app.toast('success', tools.length ? `Fetched ${tools.length} tools from ${label}` : `${label} reported no tools`);
+    } catch (e) {
+      app.toast('error', `Fetch failed: ${e?.message || e}`);
+    } finally {
+      fetchingServer = '';
+    }
+  }
+
+  // ---- tool defaults ----
+  // The section lists the INTEGRATED tools only; every MCP tool is toggled
+  // inside its own server card instead.
+  let integratedTools = $derived((app.config?.tools ?? []).filter((t) => t.server === BUILTIN_SERVER));
 
   function toolDefaultOn(tool) {
-    return tool.name in toolDefaults ? !!toolDefaults[tool.name] : !!tool.default_enabled;
+    // A fetched MCP row carries no default_enabled: its server default is on
+    // (buildMcpServers always stores default_enabled: true).
+    return tool.name in toolDefaults ? !!toolDefaults[tool.name] : (tool.default_enabled ?? true);
   }
   function setToolDefault(name, checked) {
     toolDefaults = { ...toolDefaults, [name]: checked };
@@ -658,27 +697,42 @@
             </div>
             {#each mcpServers as s, i (s.key)}
               <div class="space-y-2.5 rounded-lg border p-3">
-                <div class="grid gap-2.5 sm:grid-cols-2">
-                  <div class="space-y-1.5">
+                <!-- One row: Name + Transport, then Fetch + delete at the right,
+                     bottom-aligned with the inputs. -->
+                <div class="flex flex-wrap items-end gap-2">
+                  <div class="min-w-0 flex-1 space-y-1.5">
                     <Label class={labelCls}>Name</Label>
                     <Input type="text" class="h-8 text-sm" placeholder="my-server" bind:value={s.name} />
                   </div>
                   <div class="space-y-1.5">
                     <Label class={labelCls}>Transport</Label>
-                    <div class="flex gap-2">
-                      <Select.Root type="single" value={s.transport} onValueChange={(v) => (s.transport = v)}>
-                        <Select.Trigger class="h-8 w-24 shrink-0 text-sm">
-                          <span>{s.transport}</span>
-                        </Select.Trigger>
-                        <Select.Content>
-                          <Select.Item value="http" label="http" class="text-sm" />
-                        </Select.Content>
-                      </Select.Root>
-                      <button type="button" class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove server" onclick={() => removeServer(i)}>
-                        <Trash2 class="size-4" strokeWidth={1.75} aria-hidden="true" />
-                      </button>
-                    </div>
+                    <Select.Root type="single" value={s.transport} onValueChange={(v) => (s.transport = v)}>
+                      <Select.Trigger class="h-8 w-24 shrink-0 text-sm">
+                        <span>{s.transport}</span>
+                      </Select.Trigger>
+                      <Select.Content>
+                        <Select.Item value="http" label="http" class="text-sm" />
+                      </Select.Content>
+                    </Select.Root>
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-8 gap-1 px-2 text-xs"
+                    onclick={() => fetchServerTools(s)}
+                    disabled={!s.url.trim() || fetchingServer !== ''}
+                  >
+                    {#if fetchingServer === s.key}<Spinner class="size-3" />{:else}<Download class="size-3" strokeWidth={1.75} aria-hidden="true" />{/if}
+                    Fetch
+                  </Button>
+                  <button
+                    type="button"
+                    class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    aria-label="Remove {s.name || 'server'}"
+                    onclick={() => removeServer(i)}
+                  >
+                    <Trash2 class="size-4" strokeWidth={1.75} aria-hidden="true" />
+                  </button>
                 </div>
                 <div class="space-y-1.5">
                   <Label class={labelCls}>Address</Label>
@@ -697,29 +751,36 @@
                   {/each}
                   <Button variant="outline" size="sm" class="h-9" onclick={() => (s.headers = [...(s.headers ?? []), { id: `hdr-${++rowSeq}`, key: '', value: '' }])}>Add</Button>
                 </div>
+                <!-- This server's tool defaults: the same global tool_defaults
+                     map the integrated list below writes, only scoped to the
+                     card so the tools sit next to the server providing them. -->
+                {#if toolsFor(s).length}
+                  <div class="space-y-1.5 border-t pt-2.5">
+                    <Label class={labelCls}>Tools</Label>
+                    <div class="flex flex-col gap-0.5">
+                      {#each toolsFor(s) as tool (tool.name)}
+                        <ToolToggleRow {tool} checked={toolDefaultOn(tool)} onToggle={(checked) => setToolDefault(tool.name, checked)} />
+                      {/each}
+                    </div>
+                  </div>
+                {:else if s.url.trim()}
+                  <p class={hint}>No tools listed — press Fetch to dial this server.</p>
+                {/if}
               </div>
             {:else}
               <p class={hint}>No MCP servers configured.</p>
             {/each}
           </section>
 
-          <!-- Global tool defaults -->
+          <!-- Integrated tool defaults (MCP tools live in their server cards) -->
           <section class="space-y-3">
             <h3 class="text-base font-semibold">Tool defaults</h3>
-            <p class={hint}>What each new chat starts with. The per-chat Tools menu overrides these for that chat only. Tools of a server you just added appear after saving.</p>
+            <p class={hint}>What each new chat starts with. The per-chat Tools menu overrides these for that chat only. MCP tools are toggled in their own server card above.</p>
             <div class="flex flex-col gap-0.5">
-              {#each settingsTools as tool (tool.name)}
-                <div class="flex items-center gap-3 rounded-md p-2 transition-colors hover:bg-accent/50">
-                  <div class="flex shrink-0 items-center">
-                    <Switch checked={toolDefaultOn(tool)} aria-label="{tool.name} enabled by default" onCheckedChange={(checked) => setToolDefault(tool.name, checked)} />
-                  </div>
-                  <div class="min-w-0">
-                    <div class="truncate text-sm leading-5 font-medium">{tool.name}</div>
-                    <div class="line-clamp-2 text-xs text-muted-foreground">{tool.description || tool.server}</div>
-                  </div>
-                </div>
+              {#each integratedTools as tool (tool.name)}
+                <ToolToggleRow {tool} checked={toolDefaultOn(tool)} onToggle={(checked) => setToolDefault(tool.name, checked)} />
               {:else}
-                <p class={hint}>No tools in the catalog yet.</p>
+                <p class={hint}>No integrated tools in the catalog yet.</p>
               {/each}
             </div>
           </section>

@@ -214,23 +214,44 @@ func (h *Hub) rebuildEntriesLocked(order []string) {
 	}
 }
 
-// connectOne dials one server and lists its tools; on failure it logs a
-// warning and returns nil session (the server is skipped).
-func (h *Hub) connectOne(ctx context.Context, sc config.MCPServerConfig) (*mcp.ClientSession, []Entry) {
+// dial connects a fresh client session to one server config. The caller owns
+// the returned session.
+func dial(ctx context.Context, sc config.MCPServerConfig) (*mcp.ClientSession, error) {
 	transport := &mcp.StreamableClientTransport{Endpoint: sc.URL}
 	if len(sc.Headers) > 0 {
 		transport.HTTPClient = &http.Client{Transport: headerTransport{base: http.DefaultTransport, headers: sc.Headers}}
 	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "chattoneko", Version: "1.0.0"}, nil)
+	return client.Connect(ctx, transport, nil)
+}
+
+// Probe dials ONE server config outside any hub, lists its tools and closes
+// the session again. This is the settings UI's per-card "fetch tools" path:
+// it must work for a server that is brand new or has unsaved url/header
+// edits, so it never touches the hub's live connections or the catalog.
+func Probe(ctx context.Context, sc config.MCPServerConfig) ([]Entry, error) {
 	cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	client := mcp.NewClient(&mcp.Implementation{Name: "chattoneko", Version: "1.0.0"}, nil)
-	session, err := client.Connect(cctx, transport, nil)
+	session, err := dial(cctx, sc)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = session.Close() }()
+	return listTools(cctx, session, sc)
+}
+
+// connectOne dials one server and lists its tools; on failure it logs a
+// warning and returns nil session (the server is skipped).
+func (h *Hub) connectOne(ctx context.Context, sc config.MCPServerConfig) (*mcp.ClientSession, []Entry) {
+	cctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	session, err := dial(cctx, sc)
 	if err != nil {
 		slog.Warn("mcp server connect failed; its tools will be unavailable",
 			"name", sc.Name, "error", err)
 		return nil, nil
 	}
-	entries, err := h.listTools(cctx, session, sc)
+	entries, err := listTools(cctx, session, sc)
 	if err != nil {
 		slog.Warn("mcp server tool listing failed", "name", sc.Name, "error", err)
 		_ = session.Close()
@@ -246,7 +267,7 @@ func (h *Hub) connectOne(ctx context.Context, sc config.MCPServerConfig) (*mcp.C
 // keeps the outcome sane).
 const maxListToolsPages = 100
 
-func (h *Hub) listTools(ctx context.Context, session *mcp.ClientSession, sc config.MCPServerConfig) ([]Entry, error) {
+func listTools(ctx context.Context, session *mcp.ClientSession, sc config.MCPServerConfig) ([]Entry, error) {
 	var out []Entry
 	cursor := ""
 	for page := 0; ; page++ {

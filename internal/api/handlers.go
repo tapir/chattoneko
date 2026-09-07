@@ -18,6 +18,7 @@ import (
 	"chattoneko/internal/auth"
 	"chattoneko/internal/config"
 	"chattoneko/internal/engine"
+	"chattoneko/internal/mcphub"
 	"chattoneko/internal/provider"
 	"chattoneko/internal/store"
 )
@@ -342,6 +343,50 @@ func (s *Server) handleSetupModels(w http.ResponseWriter, r *http.Request) {
 		resp["provider"] = "ok"
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSetupMCPTools lists ONE MCP server's tools without saving or
+// connecting it: the settings UI's per-card "Fetch" button posts that
+// card's current (possibly unsaved) name/url/headers and gets the tool list
+// back, so a brand-new server's tools can be toggled before the first save.
+// The dial is a throwaway session — the hub's live connections and the tool
+// catalog are untouched, and nothing is persisted. Dialing a posted URL is no
+// new capability: saving the same card makes the hub dial it anyway, and the
+// endpoint sits behind auth.
+func (s *Server) handleSetupMCPTools(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name    string            `json:"name"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+	sc := config.MCPServerConfig{
+		Name:      strings.TrimSpace(body.Name),
+		Transport: "http", // the only supported transport
+		URL:       strings.TrimSpace(body.URL),
+		Headers:   body.Headers,
+		// What a save stores for every server, so a fetched tool without an
+		// explicit override reads as enabled — same as after the save.
+		DefaultEnabled: true,
+	}
+	if sc.URL == "" {
+		writeError(w, http.StatusBadRequest, "url is required")
+		return
+	}
+	entries, err := mcphub.Probe(r.Context(), sc)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "could not list tools: "+err.Error())
+		return
+	}
+	// Name + description is all the card renders; the schemas stay server-side.
+	tools := make([]map[string]string, 0, len(entries))
+	for _, e := range entries {
+		tools = append(tools, map[string]string{"name": e.Display, "description": e.Description})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
 }
 
 // metaFromFetched builds one stored ModelMeta from provider-reported data,

@@ -263,3 +263,26 @@ func TestResultText(t *testing.T) {
 		}
 	}
 }
+
+// Probe is the settings UI's per-card "fetch tools" path: it dials ONE server
+// config outside any hub, so it must report that config's tools (labelled with
+// the posted name) and must not need a hub at all.
+func TestProbe(t *testing.T) {
+	entries, err := Probe(t.Context(), serverCfg("probe", testMCPServer(t), true))
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("want 2 tools, got %d: %+v", len(entries), entries)
+	}
+	for _, e := range entries {
+		if e.Server != "probe" || !e.DefaultEnabled || len(e.Schema) == 0 {
+			t.Fatalf("entry not built from the probed config: %+v", e)
+		}
+	}
+	// A dead endpoint must be an error (the handler turns it into a toast),
+	// never a silent empty list.
+	if _, err := Probe(t.Context(), serverCfg("dead", "http://127.0.0.1:1/mcp", true)); err == nil {
+		t.Fatal("probe of an unreachable server should fail")
+	}
+}

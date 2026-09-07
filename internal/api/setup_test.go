@@ -411,6 +411,27 @@ func TestSetupModelsProviderOverrides(t *testing.T) {
 	}
 }
 
+// ---- POST /api/setup/mcp/tools ----
+
+// The per-card "fetch tools" probe validates the posted url and reports an
+// unreachable server as an upstream failure rather than an empty list. The
+// success path is covered by mcphub.TestProbe (it needs a live MCP server).
+func TestSetupMCPToolsValidation(t *testing.T) {
+	ts := newTestServer(t, quickProvider{}, false)
+
+	rec := ts.do(t, "POST", "/api/setup/mcp/tools", map[string]any{"name": "srv"}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing url: status = %d: %s", rec.Code, rec.Body)
+	}
+
+	rec = ts.do(t, "POST", "/api/setup/mcp/tools", map[string]any{
+		"name": "srv", "url": "http://127.0.0.1:1/mcp",
+	}, nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("unreachable server: status = %d: %s", rec.Code, rec.Body)
+	}
+}
+
 // ---- GET/PUT /api/setup model metadata ----
 
 func TestSetupExposesModelMetasAndHidesListen(t *testing.T) {

@@ -57,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	gated("GET /api/setup", s.handleGetSetup)
 	gated("PUT /api/setup", s.handlePutSetup)
 	gated("POST /api/setup/models", s.handleSetupModels)
+	gated("POST /api/setup/mcp/tools", s.handleSetupMCPTools)
 	gated("GET /api/chats", s.handleListChats)
 	gated("GET /api/stream", s.handleStream)
 	gated("POST /api/chats", s.handleCreateChat)

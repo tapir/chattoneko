@@ -470,7 +470,7 @@
   display: block;
   max-width: 100%;
   margin: 0;
-  padding: 0.1em 0;
+  padding: 0.45em 0;
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -480,8 +480,15 @@
 .md-body .incremark-math-block > .katex {
   display: block;
 }
-.md-body math {
+/* Sizing is split by display mode: an inline symbol has to sit on the text
+   baseline at text size, while a formula on its own line is read as a thing
+   apart and wants to be slightly larger with breathing room around it. Both
+   are padding, not margin — see the note above on why margins stack here. */
+.md-body .incremark-math-inline math {
   font-size: 1.05em;
+}
+.md-body .incremark-math-block math {
+  font-size: 1.15em;
 }
 
 /* --- Thinking shimmer (streaming reasoning label) --- */

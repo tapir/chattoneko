@@ -23,6 +23,10 @@ type WireEvent struct {
 	Type      string `json:"type"`
 	ChatID    string `json:"chat_id,omitempty"`
 	MessageID string `json:"message_id,omitempty"`
+	// Turn is the tool-loop iteration (0-based) an event belongs to:
+	// reasoning_delta accumulates into that turn's thinking block, tool_call_*
+	// render under it, and turn_complete marks that turn's thinking done.
+	Turn      int    `json:"turn,omitempty"`
 	Content   string `json:"content,omitempty"`
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
@@ -98,7 +102,9 @@ type activeGen struct {
 	cancel    context.CancelFunc // stop/deletion/shutdown only
 	buffer    []WireEvent        // generation events only (replayable)
 	text      string
-	reasoning string
+	// reasoning holds ONE entry per tool-loop turn, index = turn (an entry is
+	// "" when that turn produced no thinking). Guarded by mu; readers clone it.
+	reasoning []string
 	dirty     bool
 	stopped   bool // user requested stop
 	deleted   bool // chat was deleted; skip persistence on finalize

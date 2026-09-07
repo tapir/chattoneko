@@ -46,7 +46,7 @@ function placeholderAssistant(chatId, messageId) {
     role: "assistant",
     status: "generating",
     content: "",
-    reasoning: "",
+    reasoning: [],
     error: "",
     tool_call_id: "",
     name: "",
@@ -119,7 +119,7 @@ class AppState {
   // see handleGlobalEvent/reconcileGeneratingFlags.
   chatGeneratingIds = new SvelteSet();
   // live generation: rebuilt purely from stream events (B4 contract)
-  live = $state(null); // {messageId, display, reasoningDisplay, toolCalls[], status, error}
+  live = $state(null); // {messageId, display, reasoningParts[], reasoningDisplay[], doneTurns, toolCalls[], status, error}
 
   // draft model + reasoning effort for a not-yet-created chat
   newChatModel = $state("");
@@ -159,9 +159,9 @@ class AppState {
   // chat's deltas (see lib/stream.svelte.js for why it is a single socket).
   stream = null;
   tw = null; // content typewriter
-  twr = null; // reasoning typewriter
+  twr = null; // reasoning typewriter (one per turn, see reasoning_delta)
+  twrTurn = -1; // which turn `twr` is animating
   liveContent = "";
-  liveReasoning = "";
 
   constructor() {
     setUnauthorizedHandler(() => {
@@ -919,11 +919,16 @@ class AppState {
   startLive(messageId) {
     this.destroyLive();
     this.liveContent = "";
-    this.liveReasoning = "";
     this.live = {
       messageId,
       display: "",
-      reasoningDisplay: "",
+      // Reasoning is kept PER TURN (index = tool-loop turn): the raw text the
+      // server sent, plus the typewriter's animated copy for rendering.
+      reasoningParts: [],
+      reasoningDisplay: [],
+      // Turns the server reported complete (turn_complete): everything below
+      // this index finished thinking and shows a checkmark.
+      doneTurns: 0,
       toolCalls: [],
       attachments: [],
       status: "generating",
@@ -933,10 +938,8 @@ class AppState {
       this.liveContent = d;
       if (this.live) this.live.display = d;
     });
-    this.twr = new Typewriter((d) => {
-      this.liveReasoning = d;
-      if (this.live) this.live.reasoningDisplay = d;
-    });
+    this.twr = null;
+    this.twrTurn = -1;
   }
 
   destroyLive() {
@@ -944,9 +947,9 @@ class AppState {
     this.twr?.destroy();
     this.tw = null;
     this.twr = null;
+    this.twrTurn = -1;
     this.live = null;
     this.liveContent = "";
-    this.liveReasoning = "";
   }
 
   upsertToolCall(callId, patch) {
@@ -959,6 +962,7 @@ class AppState {
         call_id: callId,
         name: "",
         args: "",
+        turn: 0,
         result: "",
         is_error: false,
         pending: true,
@@ -1000,12 +1004,47 @@ class AppState {
         if (this.live && ev.message_id === this.live.messageId)
           this.tw?.push(ev.content ?? "");
         break;
-      case "reasoning_delta":
-        if (this.live && ev.message_id === this.live.messageId)
-          this.twr?.push(ev.content ?? "");
+      case "reasoning_delta": {
+        if (!this.live || ev.message_id !== this.live.messageId) break;
+        const turn = ev.turn ?? 0;
+        const parts = this.live.reasoningParts;
+        // A turn that produced no thinking leaves a hole; pad so the array
+        // index stays the turn number.
+        while (parts.length <= turn) parts.push("");
+        while (this.live.reasoningDisplay.length <= turn)
+          this.live.reasoningDisplay.push("");
+        parts[turn] += ev.content ?? "";
+        // One typewriter per turn: when the next turn starts thinking, the
+        // previous turn's block is complete and must stop growing.
+        if (turn !== this.twrTurn) {
+          this.twr?.flush();
+          this.twr?.destroy();
+          this.twrTurn = turn;
+          this.twr = new Typewriter((d) => {
+            if (this.live) this.live.reasoningDisplay[turn] = d;
+          });
+        }
+        this.twr.push(ev.content ?? "");
+        break;
+      }
+      case "turn_complete":
+        // The provider stream for this turn ended, so its thinking block is
+        // done (checkmark) whether or not it produced tool calls.
+        if (
+          this.live &&
+          (!ev.message_id || ev.message_id === this.live.messageId)
+        )
+          this.live.doneTurns = Math.max(
+            this.live.doneTurns,
+            (ev.turn ?? 0) + 1,
+          );
         break;
       case "tool_call_started":
-        this.upsertToolCall(ev.call_id, { name: ev.name ?? "", pending: true });
+        this.upsertToolCall(ev.call_id, {
+          name: ev.name ?? "",
+          turn: ev.turn ?? 0,
+          pending: true,
+        });
         break;
       case "tool_call_delta": {
         // Incremental arguments fragment: append live so the call's arguments
@@ -1014,13 +1053,22 @@ class AppState {
         if (!this.live) break;
         const t = this.live.toolCalls.find((t) => t.call_id === ev.call_id);
         if (t) t.args += ev.arguments ?? "";
-        else this.upsertToolCall(ev.call_id, { args: ev.arguments ?? "", pending: true });
+        else
+          this.upsertToolCall(ev.call_id, {
+            args: ev.arguments ?? "",
+            turn: ev.turn ?? 0,
+            pending: true,
+          });
         break;
       }
       case "tool_call_done": {
         // The start event can be missed (name streamed late); the done
         // event always carries the name, so set it here too.
-        const patch = { args: ev.arguments ?? "", pending: true };
+        const patch = {
+          args: ev.arguments ?? "",
+          turn: ev.turn ?? 0,
+          pending: true,
+        };
         if (ev.name) patch.name = ev.name;
         this.upsertToolCall(ev.call_id, patch);
         break;
@@ -1074,13 +1122,20 @@ class AppState {
             provider_call_id: t.call_id,
             name: t.name,
             arguments: t.args,
+            turn: t.turn ?? 0,
+            // Carry the live results over: the tool messages behind them only
+            // arrive with refreshChat, and without them every finished call
+            // would flash as interrupted until it lands.
+            result: t.result ?? "",
+            is_error: !!t.is_error,
+            pending: !!t.pending,
           }));
           if (idx >= 0) {
             this.messages[idx] = {
               ...this.messages[idx],
               status: finalStatus,
               content: this.liveContent,
-              reasoning: this.liveReasoning,
+              reasoning: [...(this.live?.reasoningParts ?? [])],
               error: this.live?.error ?? "",
               tool_calls: finalCalls,
               // Keep tool-created files visible until refreshChat lands.

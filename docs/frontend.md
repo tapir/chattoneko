@@ -42,14 +42,14 @@ lib/
   theme.svelte.js           dark/light theme (localStorage + live system preference + status bar)
   viewport.js               mirrors the viewport height into --app-h so the soft-keyboard squeeze animates
   viewer.svelte.js          singleton state for the attachment lightbox (open/close/step)
-  format.js, clipboard.js, resize.js, utils.js (cn)
+  format.js, clipboard.js, resize.js, utils.js (cn), turns.js (per-turn thinking timeline)
   logo.svg                  sidebar + login-screen mark (also the favicon via index.html)
   neko*.png                 cat art, one picked at random for the empty-chat screen
 components/
   ChatView.svelte           header + message list + composer column
   ChatHeader.svelte         title, token/context stats, 3-dot menu, Tools panel
   MessageList.svelte        display-item construction, auto-scroll
-  MessageItem.svelte        one message: markdown, thinking, tool calls, files, actions
+  MessageItem.svelte        one message: turn timeline (thinking → tool calls), markdown, files, actions
   Composer.svelte           prompt, model + reasoning-effort pickers, attachment staging
   Sidebar.svelte / SidebarItem.svelte
   SettingsSheet.svelte      server settings overlay (forced open until setup is complete)
@@ -106,7 +106,9 @@ Login: one path for web and native — `POST /api/auth/login` returns a signed J
 
 ### Live generation state
 
-While a generation runs, `app.live` accumulates stream events for the active assistant message: `display` / `reasoningDisplay` text, `toolCalls` (start → argument deltas → final args → result), `attachments` (tool-created files), `status`, `error`. `MessageItem` renders live messages PURELY from stream events; terminal messages render from the REST-persisted fields — a reconnect mid-generation simply replays the buffered events and re-materializes the same view. On `done`, live state is merged into the message and cleared.
+While a generation runs, `app.live` accumulates stream events for the active assistant message: `display` text, `reasoningParts` / `reasoningDisplay` (raw + typewriter-animated thinking, ONE entry per tool-loop turn), `doneTurns` (how many turns the server reported complete via `turn_complete`), `toolCalls` (start → argument deltas → final args → result, each tagged with its `turn`), `attachments` (tool-created files), `status`, `error`. `MessageItem` renders live messages PURELY from stream events; terminal messages render from the REST-persisted fields — a reconnect mid-generation simply replays the buffered events and re-materializes the same view. On `done`, live state is merged into the message and cleared.
+
+**Turn timeline (`MessageItem` + `lib/turns.js`)**: one response is a sequence of provider turns — each thinks, maybe calls tools, and the last writes the answer — so the reply renders as `thinking₀ → calls₀ → thinking₁ → calls₁ → … → answer`, each thinking block next to the calls it produced instead of one merged block above them all. A block shows its spinner only while its own turn is still streaming and its checkmark only once that turn is complete: live from `turn_complete`, reloaded from `finishedTurns(status, turnCount, toolCalls)` — every turn but the last necessarily finished, and the last one did too when its calls were persisted (they are written after the stream ends) or the generation completed. One typewriter per turn keeps a finished block from growing when the next turn starts thinking.
 
 ### The SSE connection (lib/stream.svelte.js)
 
@@ -117,7 +119,7 @@ While a generation runs, `app.live` accumulates stream events for the active ass
 - **Sidebar state:** `handleGlobalEvent` maintains `chatGeneratingIds` (a `SvelteSet`, so add/delete are reactive) — the set of background chats with a running generation, rendered as breathing sidebar titles and reconciled against the chat-list flags on load/focus. The active chat is excluded (its own half owns it). `title` events apply a final auto-generated title to the sidebar entry and the open chat's header. Switching chats reconnects (the subscribed chat is a query parameter); the `generating_snapshot` on reconnect re-syncs the sidebar, so the brief gap costs nothing.
 - **Stall watchdog** (`openStream`): EventSource only fires `onerror` on a CLOSED socket. A half-open one (phone switched networks, NAT mapping expired) looks open forever while the reply and its `done` land in a dead pipe — the thinking pill and the breathing title would spin until a reload. The server pings every 20s as a real `{type: "ping"}` event; 60s with nothing at all closes the EventSource and reconnects (via `kick()`, so `?after=<lastSeq>` replays what was missed, or gets `idle` → `refreshChat` once the grace period is over). Pings never reach the event handlers.
 
-Event vocabulary handled by the store: `idle`, `generation_started`, `delta`, `reasoning_delta`, `tool_call_started`, `tool_call_delta`, `tool_call_done`, `tool_result`, `attachment_created`, `status`, `done`, `user_message` (sent from another client), `chat_updated`, `settings_updated` (per-chat settings changed elsewhere — applied without refetch), `messages_reset` (history truncated elsewhere — refetch the chat), `config_changed` (MCP catalog rebuilt — refetch `/api/config`).
+Event vocabulary handled by the store: `idle`, `generation_started`, `delta`, `reasoning_delta` (carries `turn`), `tool_call_started`, `tool_call_delta`, `tool_call_done` (carry `turn`), `turn_complete` (that turn's thinking is done), `tool_result`, `attachment_created`, `status`, `done`, `user_message` (sent from another client), `chat_updated`, `settings_updated` (per-chat settings changed elsewhere — applied without refetch), `messages_reset` (history truncated elsewhere — refetch the chat), `config_changed` (MCP catalog rebuilt — refetch `/api/config`).
 
 ## Markdown
 

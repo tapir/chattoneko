@@ -99,12 +99,19 @@ export function normalizeMessage(m) {
     tool_calls: [],
     attachments: [],
     content: "",
-    reasoning: "",
+    reasoning: [],
     error: "",
     tool_call_id: "",
     name: "",
     status: "complete",
     ...m,
+    // Reasoning is one entry per tool-loop turn. A plain string is a pre-002
+    // row (or an old server): show it as the single turn it was.
+    reasoning: Array.isArray(m?.reasoning)
+      ? m.reasoning
+      : m?.reasoning
+        ? [m.reasoning]
+        : [],
   };
 }
 

@@ -187,6 +187,21 @@ console.log('OK streaming parity');
   console.log('OK AppStream routing + dedupe');
 }
 
+// --- turn timeline: a thinking block is only done when its turn ended ---
+{
+  const { finishedTurns } = await import('./src/lib/turns.js');
+  const calls = (...turns) => turns.map((turn) => ({ turn }));
+  assert(finishedTurns('complete', 3, calls(0, 1, 2)) === 3, 'a completed generation finished every turn');
+  // Stopped mid-stream on turn 2, which never persisted calls: 0-1 are done.
+  assert(finishedTurns('stopped', 3, calls(0, 0, 1)) === 2, 'the cut-off turn must stay unfinished');
+  // Stopped while turn 2's tools ran: its calls were persisted, so it finished.
+  assert(finishedTurns('stopped', 3, calls(0, 1, 2)) === 3, 'a turn whose calls were persisted did finish');
+  assert(finishedTurns('failed', 1, []) === 0, 'a failed single turn never finished');
+  // Reloaded mid-generation: the turn in flight still spins.
+  assert(finishedTurns('generating', 2, calls(0)) === 1, 'the running turn stays unfinished');
+  console.log('OK turn timeline');
+}
+
 // --- viewport: which resizes animate (soft keyboard) and which must not ---
 // Last because it shims window/document. viewport.js reads the viewport size
 // at import time, so the shim has to be in place before the dynamic import.

@@ -150,8 +150,8 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) er
 
 const createToolCall = `-- name: CreateToolCall :exec
 
-INSERT INTO tool_calls (id, message_id, provider_call_id, name, arguments, position)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO tool_calls (id, message_id, provider_call_id, name, arguments, position, turn)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateToolCallParams struct {
@@ -161,9 +161,13 @@ type CreateToolCallParams struct {
 	Name           string
 	Arguments      string
 	Position       int64
+	Turn           int64
 }
 
 // ---- tool_calls ----
+// position is a generation-wide counter (chronological), turn is the tool-loop
+// iteration that produced the call; the UI groups calls under their turn's
+// thinking block.
 func (q *Queries) CreateToolCall(ctx context.Context, arg CreateToolCallParams) error {
 	_, err := q.db.ExecContext(ctx, createToolCall,
 		arg.ID,
@@ -172,6 +176,7 @@ func (q *Queries) CreateToolCall(ctx context.Context, arg CreateToolCallParams) 
 		arg.Name,
 		arg.Arguments,
 		arg.Position,
+		arg.Turn,
 	)
 	return err
 }
@@ -640,7 +645,7 @@ func (q *Queries) ListChatsNeedingTitle(ctx context.Context, limit int64) ([]str
 }
 
 const listDanglingToolCalls = `-- name: ListDanglingToolCalls :many
-SELECT tc.id, tc.message_id, tc.provider_call_id, tc.name, tc.arguments, tc.position
+SELECT tc.id, tc.message_id, tc.provider_call_id, tc.name, tc.arguments, tc.position, tc.turn
 FROM tool_calls tc
 JOIN messages m ON m.id = tc.message_id
 WHERE tc.message_id = ?
@@ -668,6 +673,7 @@ func (q *Queries) ListDanglingToolCalls(ctx context.Context, messageID string) (
 			&i.Name,
 			&i.Arguments,
 			&i.Position,
+			&i.Turn,
 		); err != nil {
 			return nil, err
 		}
@@ -809,7 +815,7 @@ func (q *Queries) ListMessagesByChat(ctx context.Context, chatID string) ([]Mess
 }
 
 const listToolCallsByMessage = `-- name: ListToolCallsByMessage :many
-SELECT id, message_id, provider_call_id, name, arguments, position FROM tool_calls WHERE message_id = ? ORDER BY position ASC
+SELECT id, message_id, provider_call_id, name, arguments, position, turn FROM tool_calls WHERE message_id = ? ORDER BY position ASC
 `
 
 func (q *Queries) ListToolCallsByMessage(ctx context.Context, messageID string) ([]ToolCall, error) {
@@ -828,6 +834,7 @@ func (q *Queries) ListToolCallsByMessage(ctx context.Context, messageID string) 
 			&i.Name,
 			&i.Arguments,
 			&i.Position,
+			&i.Turn,
 		); err != nil {
 			return nil, err
 		}
@@ -843,10 +850,10 @@ func (q *Queries) ListToolCallsByMessage(ctx context.Context, messageID string) 
 }
 
 const listToolCallsForChat = `-- name: ListToolCallsForChat :many
-SELECT tc.id, tc.message_id, tc.provider_call_id, tc.name, tc.arguments, tc.position FROM tool_calls tc
+SELECT tc.id, tc.message_id, tc.provider_call_id, tc.name, tc.arguments, tc.position, tc.turn FROM tool_calls tc
 JOIN messages m ON m.id = tc.message_id
 WHERE m.chat_id = ?
-ORDER BY tc.position ASC
+ORDER BY tc.message_id, tc.position ASC
 `
 
 func (q *Queries) ListToolCallsForChat(ctx context.Context, chatID string) ([]ToolCall, error) {
@@ -865,6 +872,7 @@ func (q *Queries) ListToolCallsForChat(ctx context.Context, chatID string) ([]To
 			&i.Name,
 			&i.Arguments,
 			&i.Position,
+			&i.Turn,
 		); err != nil {
 			return nil, err
 		}

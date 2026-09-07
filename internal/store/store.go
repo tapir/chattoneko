@@ -49,7 +49,12 @@ type ToolCall struct {
 	ProviderCallID string `json:"provider_call_id"`
 	Name           string `json:"name"`
 	Arguments      string `json:"arguments"`
-	Position       int64  `json:"position"`
+	// Position orders the calls of one message chronologically across the
+	// whole generation (it does not restart per turn).
+	Position int64 `json:"position"`
+	// Turn is the tool-loop iteration (0-based) that produced the call, so the
+	// UI can render it under that turn's thinking block.
+	Turn int64 `json:"turn"`
 }
 
 // AttachmentMeta is attachment metadata (no blob data).
@@ -79,16 +84,19 @@ type Attachment struct {
 
 // Message is a chat message with its tool calls and attachments loaded.
 type Message struct {
-	Seq        int64  `json:"seq"`
-	ID         string `json:"id"`
-	ChatID     string `json:"chat_id"`
-	Role       string `json:"role"`
-	Status     string `json:"status"`
-	Content    string `json:"content"`
-	Reasoning  string `json:"reasoning"`
-	Error      string `json:"error"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
-	Name       string `json:"name,omitempty"`
+	Seq     int64  `json:"seq"`
+	ID      string `json:"id"`
+	ChatID  string `json:"chat_id"`
+	Role    string `json:"role"`
+	Status  string `json:"status"`
+	Content string `json:"content"`
+	// Reasoning is the model's thinking as ONE entry per tool-loop turn, in
+	// order (an entry is "" when that turn produced no thinking). Stored as a
+	// JSON array in messages.reasoning.
+	Reasoning  []string `json:"reasoning"`
+	Error      string   `json:"error"`
+	ToolCallID string   `json:"tool_call_id,omitempty"`
+	Name       string   `json:"name,omitempty"`
 	// Model is the model id that produced this message (assistant messages;
 	// '' for messages created before per-message model tracking).
 	Model     string `json:"model,omitempty"`
@@ -180,7 +188,7 @@ func messageFromRow(m query.Message) *Message {
 		Role:             m.Role,
 		Status:           m.Status,
 		Content:          m.Content,
-		Reasoning:        m.Reasoning,
+		Reasoning:        reasoningParts(m.Reasoning),
 		Error:            m.Error,
 		ToolCallID:       m.ToolCallID,
 		Name:             m.Name,
@@ -201,7 +209,36 @@ func toolCallFromRow(tc query.ToolCall) ToolCall {
 		Name:           tc.Name,
 		Arguments:      tc.Arguments,
 		Position:       tc.Position,
+		Turn:           tc.Turn,
 	}
+}
+
+// reasoningParts decodes the JSON array stored in messages.reasoning. Empty
+// means "never thought"; a value that is not a JSON array is pre-002 prose (or
+// a hand-edited row) and becomes a single part. Reasoning is display-only, so
+// a bad value must never fail a chat load.
+func reasoningParts(raw string) []string {
+	if raw == "" {
+		return []string{}
+	}
+	var parts []string
+	if json.Unmarshal([]byte(raw), &parts) != nil {
+		return []string{raw}
+	}
+	return parts
+}
+
+// reasoningJSON encodes per-turn reasoning for messages.reasoning, keeping the
+// column empty for messages that never thought.
+func reasoningJSON(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(parts)
+	if err != nil {
+		return "" // unreachable: a []string always marshals
+	}
+	return string(b)
 }
 
 func attachmentMetaRow(a query.ListAttachmentMetasForChatRow) AttachmentMeta {
@@ -369,7 +406,6 @@ type NewMessageParams struct {
 	Role       string
 	Status     string
 	Content    string
-	Reasoning  string
 	Error      string
 	ToolCallID string
 	Name       string
@@ -386,7 +422,6 @@ func (s *Store) CreateMessage(ctx context.Context, p NewMessageParams) (*Message
 		Role:       p.Role,
 		Status:     p.Status,
 		Content:    p.Content,
-		Reasoning:  p.Reasoning,
 		Error:      p.Error,
 		ToolCallID: p.ToolCallID,
 		Name:       p.Name,
@@ -444,22 +479,22 @@ func (s *Store) ListMessages(ctx context.Context, chatID string) ([]*Message, er
 }
 
 // UpdateMessageContent flushes streamed content/reasoning.
-func (s *Store) UpdateMessageContent(ctx context.Context, id, content, reasoning string) error {
+func (s *Store) UpdateMessageContent(ctx context.Context, id, content string, reasoning []string) error {
 	return s.q.UpdateMessageContent(ctx, query.UpdateMessageContentParams{
 		Content:   content,
-		Reasoning: reasoning,
+		Reasoning: reasoningJSON(reasoning),
 		UpdatedAt: time.Now().UnixMilli(),
 		ID:        id,
 	})
 }
 
 // FinalizeMessage sets terminal status + final content/reasoning/error.
-func (s *Store) FinalizeMessage(ctx context.Context, id, status, errText, content, reasoning string) error {
+func (s *Store) FinalizeMessage(ctx context.Context, id, status, errText, content string, reasoning []string) error {
 	return s.q.UpdateMessageStatus(ctx, query.UpdateMessageStatusParams{
 		Status:    status,
 		Error:     errText,
 		Content:   content,
-		Reasoning: reasoning,
+		Reasoning: reasoningJSON(reasoning),
 		UpdatedAt: time.Now().UnixMilli(),
 		ID:        id,
 	})
@@ -559,7 +594,7 @@ func (s *Store) ListGeneratingMessages(ctx context.Context) ([]*Message, error) 
 // ---- tool calls ----
 
 // CreateToolCall persists a provider tool call on an assistant message.
-func (s *Store) CreateToolCall(ctx context.Context, messageID, providerCallID, name, arguments string, position int64) (*ToolCall, error) {
+func (s *Store) CreateToolCall(ctx context.Context, messageID, providerCallID, name, arguments string, position, turn int64) (*ToolCall, error) {
 	tc := ToolCall{
 		ID:             uuid.NewString(),
 		MessageID:      messageID,
@@ -567,6 +602,7 @@ func (s *Store) CreateToolCall(ctx context.Context, messageID, providerCallID, n
 		Name:           name,
 		Arguments:      arguments,
 		Position:       position,
+		Turn:           turn,
 	}
 	err := s.q.CreateToolCall(ctx, query.CreateToolCallParams{
 		ID:             tc.ID,
@@ -575,6 +611,7 @@ func (s *Store) CreateToolCall(ctx context.Context, messageID, providerCallID, n
 		Name:           tc.Name,
 		Arguments:      tc.Arguments,
 		Position:       tc.Position,
+		Turn:           tc.Turn,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create tool call: %w", err)

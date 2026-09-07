@@ -10,6 +10,7 @@
   } from '../lib/markdown.js';
   import { formatDuration, formatTokensOrDash } from '../lib/format.js';
   import { copyText } from '../lib/clipboard.js';
+  import { finishedTurns } from '../lib/turns.js';
   import { api } from '../lib/api.js';
   import { viewer } from '../lib/viewer.svelte.js';
   import { Eye, FileText, Info, Paperclip, Pencil, RotateCcw, X } from '@lucide/svelte';
@@ -45,7 +46,9 @@
   // Live messages render purely from stream events (B4); terminal messages
   // render from REST-persisted fields.
   let content = $derived(live ? live.display : msg.content);
-  let reasoning = $derived(live ? live.reasoningDisplay : msg.reasoning);
+  // Reasoning is one entry per tool-loop turn (index = turn); `turns` below
+  // interleaves them with the tool calls of the same turn.
+  let reasoning = $derived((live ? live.reasoningDisplay : msg.reasoning) ?? []);
   let toolCalls = $derived(live ? live.toolCalls : item.toolCalls);
   let status = $derived(live ? live.status : msg.status);
   let errorText = $derived(live ? live.error : msg.error);
@@ -167,10 +170,10 @@
   });
 
   // Notify parent (MessageList) whenever the rendered content changes,
-  // so it can follow the stream to the bottom. content/reasoning/toolCalls
-  // are genuinely accessed here -> dependency tracking is explicit.
+  // so it can follow the stream to the bottom. `turns` is rebuilt on every
+  // thinking/argument delta, so reading it tracks all of them.
   $effect(() => {
-    track?.(content, reasoning, toolCalls);
+    track?.(content, turns);
   });
 
   // ---- tap to reveal actions (touch) ----
@@ -256,8 +259,37 @@
     }
   }
 
+  // ---- turn timeline ----
+  // One response is a sequence of provider turns: each thinks, maybe calls
+  // tools, and the last writes the answer. Rendering them in that order keeps
+  // a thinking block next to the calls it produced instead of merging every
+  // turn's thinking into one block above them all.
+  let turnCount = $derived.by(() => {
+    let n = reasoning.length;
+    for (const c of toolCalls ?? []) n = Math.max(n, (c.turn ?? 0) + 1);
+    // A live reply with nothing yet still shows the empty "Thinking" pill.
+    return live && n === 0 ? 1 : n;
+  });
+
+  // How many leading turns finished thinking: live from the server's
+  // turn_complete events, reloaded from the persisted shape (lib/turns.js).
+  let doneTurns = $derived(
+    live ? live.doneTurns : finishedTurns(status, turnCount, toolCalls)
+  );
+
+  let turns = $derived.by(() =>
+    Array.from({ length: turnCount }, (_, i) => ({
+      turn: i,
+      text: reasoning[i] ?? "",
+      calls: (toolCalls ?? []).filter((c) => (c.turn ?? 0) === i),
+      done: i < doneTurns,
+    })),
+  );
+
+  // Nothing at all yet — no thinking, no calls, no answer: show the empty pill
+  // so the reply is visibly on its way.
   let waiting = $derived(
-    isLive && !content && !reasoning && (toolCalls?.length ?? 0) === 0
+    isLive && !content && !turns.some((t) => t.text || t.calls.length)
   );
 
   // Any terminal problem that ended or cut off the response renders through
@@ -381,16 +413,18 @@
 {:else}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="group mt-6" onclick={onBubbleClick}>
-    {#if reasoning || waiting}
-      <ThinkingBlock
-        text={reasoning}
-        streaming={isLive && status === 'generating' && !content}
-        error={generationError && !content}
-      />
-    {/if}
+    {#each turns as t (t.turn)}
+      {#if t.text || (waiting && t.turn === 0)}
+        <ThinkingBlock
+          text={t.text}
+          streaming={!t.done && status === 'generating'}
+          error={!t.done && generationError && !content}
+        />
+      {/if}
 
-    {#each toolCalls ?? [] as call (call.call_id)}
-      <ToolCallItem {call} {status} />
+      {#each t.calls as call (call.call_id)}
+        <ToolCallItem {call} {status} />
+      {/each}
     {/each}
 
     {#if content}

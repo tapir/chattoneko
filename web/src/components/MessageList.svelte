@@ -40,9 +40,14 @@
             call_id: tc.provider_call_id,
             name: tc.name,
             args: tc.arguments,
-            result: res?.content ?? '',
-            is_error: res ? (res.content || '').startsWith('Error:') : false,
-            pending: !res
+            // The tool-loop turn that produced the call: MessageItem renders it
+            // under that turn's thinking block.
+            turn: tc.turn ?? 0,
+            // A just-finished generation carries its live results on the call
+            // itself; the tool messages backing them land with refreshChat.
+            result: res?.content ?? tc.result ?? '',
+            is_error: res ? (res.content || '').startsWith('Error:') : !!tc.is_error,
+            pending: res ? false : (tc.pending ?? true)
           };
         });
         out.push({ msg: m, toolCalls: calls, key: m.id });

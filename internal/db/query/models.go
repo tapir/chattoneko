@@ -70,4 +70,5 @@ type ToolCall struct {
 	Name           string
 	Arguments      string
 	Position       int64
+	Turn           int64
 }

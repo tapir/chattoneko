@@ -135,9 +135,12 @@ SELECT * FROM messages WHERE status = 'generating';
 
 -- ---- tool_calls ----
 
+-- position is a generation-wide counter (chronological), turn is the tool-loop
+-- iteration that produced the call; the UI groups calls under their turn's
+-- thinking block.
 -- name: CreateToolCall :exec
-INSERT INTO tool_calls (id, message_id, provider_call_id, name, arguments, position)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO tool_calls (id, message_id, provider_call_id, name, arguments, position, turn)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListToolCallsByMessage :many
 SELECT * FROM tool_calls WHERE message_id = ? ORDER BY position ASC;
@@ -146,7 +149,7 @@ SELECT * FROM tool_calls WHERE message_id = ? ORDER BY position ASC;
 SELECT tc.* FROM tool_calls tc
 JOIN messages m ON m.id = tc.message_id
 WHERE m.chat_id = ?
-ORDER BY tc.position ASC;
+ORDER BY tc.message_id, tc.position ASC;
 
 -- name: DistinctToolNamesInChat :many
 SELECT DISTINCT tc.name

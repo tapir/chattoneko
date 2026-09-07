@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -231,6 +232,92 @@ func TestToolLoopExecutesAndReplaysHistory(t *testing.T) {
 	}
 }
 
+// Each provider round trip of the tool loop is its own thinking block: the
+// reasoning parts stay separated per turn (instead of merging into one blob),
+// the calls carry the turn that produced them, and turn_complete tells the
+// client when a turn's thinking ended so its spinner can stop.
+func TestReasoningIsSplitPerTurn(t *testing.T) {
+	prov := &scriptedProvider{
+		scripts: [][]provider.StreamEvent{
+			{ // turn 0: think, then call a tool
+				{Kind: provider.EventReasoningDelta, Text: "first "},
+				{Kind: provider.EventReasoningDelta, Text: "thought"},
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "echo", Args: `{}`},
+				{Kind: provider.EventDone, Finish: "tool_calls"},
+			},
+			{ // turn 1: think again (no calls) and answer
+				{Kind: provider.EventReasoningDelta, Text: "second thought"},
+				{Kind: provider.EventTextDelta, Text: "answer"},
+				{Kind: provider.EventDone, Finish: "stop"},
+			},
+		},
+	}
+	mcpFake := &fakeMCP{
+		tools:   []mcphub.Entry{{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, prov, mcpFake)
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ch, unsub := eng.Subscribe(chatID, 0)
+	defer unsub()
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "multi-turn complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	// ListMessages (not GetMessage) is what attaches the tool calls.
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	m := msgs[len(msgs)-2] // user, assistant, tool result
+	if m.ID != am.ID {
+		t.Fatalf("assistant message not found: %+v", msgs)
+	}
+	if want := []string{"first thought", "second thought"}; !slices.Equal(m.Reasoning, want) {
+		t.Fatalf("reasoning parts = %#v, want %#v", m.Reasoning, want)
+	}
+	if len(m.ToolCalls) != 1 || m.ToolCalls[0].Turn != 0 || m.ToolCalls[0].Position != 0 {
+		t.Fatalf("tool call turn/position wrong: %+v", m.ToolCalls)
+	}
+
+	// Wire: reasoning deltas name their turn and every turn reports complete.
+	var deltaTurns, completedTurns []int
+	sawDone := false
+	timeout := time.After(2 * time.Second)
+	for !sawDone {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before done")
+			}
+			switch ev.Type {
+			case "reasoning_delta":
+				deltaTurns = append(deltaTurns, ev.Turn)
+			case "turn_complete":
+				completedTurns = append(completedTurns, ev.Turn)
+			case "done":
+				sawDone = true
+			}
+		case <-timeout:
+			t.Fatal("no done event")
+		}
+	}
+	if want := []int{0, 0, 1}; !slices.Equal(deltaTurns, want) {
+		t.Fatalf("reasoning_delta turns = %v, want %v", deltaTurns, want)
+	}
+	if want := []int{0, 1}; !slices.Equal(completedTurns, want) {
+		t.Fatalf("turn_complete turns = %v, want %v", completedTurns, want)
+	}
+}
+
 // blockingTool is a catalog whose only tool signals when it starts and does
 // not complete until released — letting a test stop the generation exactly
 // while the tool is "running".
@@ -444,7 +531,7 @@ func TestInvariantFinalizeSynthesizesToolResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateToolCall(context.Background(), am.ID, "call_dangling", "echo", `{"a":1}`, 0); err != nil {
+	if _, err := st.CreateToolCall(context.Background(), am.ID, "call_dangling", "echo", `{"a":1}`, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 

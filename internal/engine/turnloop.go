@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"chattoneko/internal/mcphub"
@@ -57,7 +58,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 			case <-ticker.C:
 				ag.mu.Lock()
 				if ag.dirty && !ag.deleted && !ag.done {
-					text, reasoning := ag.text, ag.reasoning
+					text, reasoning := ag.text, slices.Clone(ag.reasoning)
 					ag.dirty = false
 					ag.mu.Unlock()
 					if err := e.store.UpdateMessageContent(ctx, ag.messageID, text, reasoning); err != nil {
@@ -91,7 +92,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 
 		ag.mu.Lock()
 		deleted := ag.deleted
-		text, reasoning := ag.text, ag.reasoning
+		text, reasoning := ag.text, slices.Clone(ag.reasoning)
 		ag.done = true
 		ag.mu.Unlock()
 
@@ -182,7 +183,14 @@ func (e *Engine) runGeneration(ag *activeGen) {
 		return
 	}
 
-	iterations := 0
+	// turn is the 0-based index of the provider round trip being streamed: it
+	// keys this generation's reasoning parts, is stamped on the turn's wire
+	// events, and is what the client groups tool calls under.
+	turn := 0
+	// Generation-wide tool-call counter: position must stay chronological
+	// across turns (it used to restart at 0 every turn, which scrambled the
+	// order of a multi-turn message on reload).
+	callPos := int64(0)
 	for {
 		// Cancellation check between iterations.
 		select {
@@ -231,27 +239,30 @@ func (e *Engine) runGeneration(ag *activeGen) {
 				h.mu.Unlock()
 			case provider.EventReasoningDelta:
 				ag.mu.Lock()
-				ag.reasoning += ev.Text
+				for len(ag.reasoning) <= turn {
+					ag.reasoning = append(ag.reasoning, "")
+				}
+				ag.reasoning[turn] += ev.Text
 				ag.dirty = true
 				ag.mu.Unlock()
 				h.mu.Lock()
-				h.publishGen(WireEvent{Type: "reasoning_delta", Content: ev.Text})
+				h.publishGen(WireEvent{Type: "reasoning_delta", Turn: turn, Content: ev.Text})
 				h.mu.Unlock()
 			case provider.EventToolCallStart:
 				h.mu.Lock()
-				h.publishGen(WireEvent{Type: "tool_call_started", CallID: ev.CallID, Name: ev.Name})
+				h.publishGen(WireEvent{Type: "tool_call_started", Turn: turn, CallID: ev.CallID, Name: ev.Name})
 				h.mu.Unlock()
 			case provider.EventToolCallDelta:
 				// Incremental arguments fragment; the client appends it to the
 				// call's args. tool_call_done re-delivers the full arguments,
 				// so a reconnect mid-stream self-heals.
 				h.mu.Lock()
-				h.publishGen(WireEvent{Type: "tool_call_delta", CallID: ev.CallID, Arguments: ev.Args})
+				h.publishGen(WireEvent{Type: "tool_call_delta", Turn: turn, CallID: ev.CallID, Arguments: ev.Args})
 				h.mu.Unlock()
 			case provider.EventToolCallDone:
 				calls = append(calls, provider.ToolCall{ID: ev.CallID, Name: ev.Name, Arguments: ev.Args})
 				h.mu.Lock()
-				h.publishGen(WireEvent{Type: "tool_call_done", CallID: ev.CallID, Name: ev.Name, Arguments: ev.Args})
+				h.publishGen(WireEvent{Type: "tool_call_done", Turn: turn, CallID: ev.CallID, Name: ev.Name, Arguments: ev.Args})
 				h.mu.Unlock()
 			case provider.EventError:
 				streamErr = ev.Err
@@ -291,34 +302,43 @@ func (e *Engine) runGeneration(ag *activeGen) {
 			return
 		}
 
+		// This turn's stream ended cleanly, so its thinking is complete: the
+		// client stops that block's spinner. Published only on the clean path —
+		// a canceled or failed stream left the turn unfinished.
+		h.mu.Lock()
+		h.publishGen(WireEvent{Type: "turn_complete", Turn: turn})
+		h.mu.Unlock()
+
 		// Tool loop gate: the presence of collected calls drives the next
 		// iteration, independent of the finish-reason spelling.
 		if len(calls) > 0 {
-			iterations++
 			// Persist the assistant's accumulated content + calls before
 			// executing tools (crash safety) and before the next iteration.
 			ag.mu.Lock()
-			text, reasoning := ag.text, ag.reasoning
+			text, reasoning := ag.text, slices.Clone(ag.reasoning)
 			ag.dirty = false
 			ag.mu.Unlock()
 			if err := e.store.UpdateMessageContent(ctx, ag.messageID, text, reasoning); err != nil {
 				stepFailed("persist: " + err.Error())
 				return
 			}
-			for i, c := range calls {
-				if _, err := e.store.CreateToolCall(ctx, ag.messageID, c.ID, c.Name, c.Arguments, int64(i)); err != nil {
+			for _, c := range calls {
+				if _, err := e.store.CreateToolCall(ctx, ag.messageID, c.ID, c.Name, c.Arguments, callPos, int64(turn)); err != nil {
 					stepFailed("persist tool call: " + err.Error())
 					return
 				}
+				callPos++
 			}
 			e.executeTools(ctx, h, chat, ag, calls)
 
-			if iterations >= e.cfg.Get().Limits.MaxToolIterations {
-				// Cap reached: every call above already has a real result;
-				// finalize complete (invariant holds — nothing dangling).
+			// The cap counts tool rounds; this one is turn+1. Every call above
+			// already has a real result, so finalize complete (invariant holds —
+			// nothing dangling).
+			if turn+1 >= e.cfg.Get().Limits.MaxToolIterations {
 				finish(store.StatusComplete, "")
 				return
 			}
+			turn++
 			continue
 		}
 

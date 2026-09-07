@@ -12,7 +12,7 @@ It is extremely small. Everything is one static Go binary with the web UI embedd
 
 - Chat with any model through an OpenAI-compatible (chat completions) API. Keep a list of favorites and switch per chat.
 - Replies stream in as they are written, and can be stopped at any time.
-- Models that reason out loud show their thinking in a collapsible block.
+- Models that reason out loud show their thinking in collapsible blocks, one per step of a tool-using reply, each next to the tool calls it produced.
 - Send images and text files as attachments.
 - Vision for text-only models: a separate vision model describes the image for them.
 - Tools the model can call, plus any MCP server you add.

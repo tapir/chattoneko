@@ -168,11 +168,11 @@ func TestMessagesToolCallsAttachmentsRoundTrip(t *testing.T) {
 		t.Fatalf("seq assignment wrong: user=%d assistant=%d", um.Seq, am.Seq)
 	}
 
-	tc, err := s.CreateToolCall(ctx, am.ID, "call_1", "echo", `{"a":1}`, 0)
+	tc, err := s.CreateToolCall(ctx, am.ID, "call_1", "echo", `{"a":1}`, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tc.ID == "" || tc.ProviderCallID != "call_1" {
+	if tc.ID == "" || tc.ProviderCallID != "call_1" || tc.Turn != 0 {
 		t.Fatalf("tool call meta wrong: %+v", tc)
 	}
 
@@ -216,16 +216,20 @@ func TestMessagesToolCallsAttachmentsRoundTrip(t *testing.T) {
 		t.Fatalf("still dangling after result: %v %v", dangling, err)
 	}
 
-	// Finalize + usage.
-	if err := s.FinalizeMessage(ctx, am.ID, StatusComplete, "", "answer", "thought"); err != nil {
+	// Finalize + usage. Reasoning is per-turn: both parts must survive the
+	// JSON round trip in order.
+	if err := s.FinalizeMessage(ctx, am.ID, StatusComplete, "", "answer", []string{"thought one", "", "thought three"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpdateMessageUsage(ctx, am.ID, 10, 20, 30); err != nil {
 		t.Fatal(err)
 	}
 	m, _ := s.GetMessage(ctx, am.ID)
-	if m.Status != StatusComplete || m.Reasoning != "thought" || m.PromptTokens != 10 || m.DurationMs != 30 {
+	if m.Status != StatusComplete || m.PromptTokens != 10 || m.DurationMs != 30 {
 		t.Fatalf("finalize/usage wrong: %+v", m)
+	}
+	if len(m.Reasoning) != 3 || m.Reasoning[0] != "thought one" || m.Reasoning[1] != "" || m.Reasoning[2] != "thought three" {
+		t.Fatalf("reasoning parts wrong: %#v", m.Reasoning)
 	}
 	prompt, completion, err := s.ChatTokenTotals(ctx, chat.ID)
 	if err != nil || prompt != 10 || completion != 20 {
@@ -283,7 +287,7 @@ func TestListGeneratingMessages(t *testing.T) {
 	if err != nil || len(gen) != 1 || gen[0].ID != m.ID {
 		t.Fatalf("generating = %+v %v", gen, err)
 	}
-	if err := s.FinalizeMessage(ctx, m.ID, StatusFailed, "x", "", ""); err != nil {
+	if err := s.FinalizeMessage(ctx, m.ID, StatusFailed, "x", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	gen, _ = s.ListGeneratingMessages(ctx)
@@ -533,5 +537,26 @@ func TestDeleteDanglingAttachments(t *testing.T) {
 	}
 	if _, err := s.GetAttachment(ctx, otherAtt.ID); err != nil {
 		t.Fatalf("other chat's attachment wrongly deleted: %v", err)
+	}
+}
+
+// messages.reasoning stores a JSON array of per-turn parts; a value that is
+// not JSON is pre-002 prose and must still render (as a single part) instead
+// of failing the chat load.
+func TestReasoningPartsDecoding(t *testing.T) {
+	if got := reasoningParts(""); len(got) != 0 {
+		t.Fatalf("empty reasoning = %#v, want no parts", got)
+	}
+	if got := reasoningParts(`["one","","three"]`); len(got) != 3 || got[0] != "one" || got[1] != "" || got[2] != "three" {
+		t.Fatalf("parts = %#v", got)
+	}
+	if got := reasoningParts("legacy prose thought"); len(got) != 1 || got[0] != "legacy prose thought" {
+		t.Fatalf("legacy prose = %#v", got)
+	}
+	if j := reasoningJSON(nil); j != "" {
+		t.Fatalf("no parts should store as empty, got %q", j)
+	}
+	if j := reasoningJSON([]string{"a", "b"}); j != `["a","b"]` {
+		t.Fatalf("encoding = %q", j)
 	}
 }

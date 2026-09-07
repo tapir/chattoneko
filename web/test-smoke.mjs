@@ -189,7 +189,7 @@ console.log('OK streaming parity');
 
 // --- turn timeline: a thinking block is only done when its turn ended ---
 {
-  const { finishedTurns } = await import('./src/lib/turns.js');
+  const { finishedTurns, boxCount } = await import('./src/lib/turns.js');
   const calls = (...turns) => turns.map((turn) => ({ turn }));
   assert(finishedTurns('complete', 3, calls(0, 1, 2)) === 3, 'a completed generation finished every turn');
   // Stopped mid-stream on turn 2, which never persisted calls: 0-1 are done.
@@ -199,6 +199,12 @@ console.log('OK streaming parity');
   assert(finishedTurns('failed', 1, []) === 0, 'a failed single turn never finished');
   // Reloaded mid-generation: the turn in flight still spins.
   assert(finishedTurns('generating', 2, calls(0)) === 1, 'the running turn stays unfinished');
+  // The "Processing…" fold threshold counts rendered boxes, not turns.
+  const box = (text, n) => ({ text, calls: Array.from({ length: n }) });
+  assert(boxCount([]) === 0, 'an empty timeline has no boxes');
+  assert(boxCount([box('hmm', 0), box('', 0)]) === 1, 'an empty turn is not a box');
+  assert(boxCount([box('', 2)]) === 2, 'every tool call is its own box');
+  assert(boxCount([box('a', 1), box('', 1)]) === 3, 'boxes add up across turns');
   console.log('OK turn timeline');
 }
 

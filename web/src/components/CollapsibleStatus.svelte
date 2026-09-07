@@ -1,8 +1,9 @@
 <script>
   // Shared collapsible status row: icon + title + status indicator + chevron,
-  // with a default-open/closed <details> body. Used by ThinkingBlock and
-  // ToolCallItem so both get identical chrome (shimmer title + spinner while
-  // running, check/x when done, error tint on failure).
+  // with a default-open/closed <details> body. Used by ThinkingBlock,
+  // ToolCallItem and MessageItem's "Processing…" fold so all get identical
+  // chrome (shimmer title + spinner while running, check/x when done, error
+  // tint on failure).
   //
   // Props:
   //   icon      — leading glyph (lucide component: Brain, Wrench, ...)
@@ -11,6 +12,11 @@
   //   error     — terminal failure (red tint + x icon)
   //   errorBadge — show a destructive "error" Badge next to the status icon
   //   class     — extra container classes (spacing, etc.)
+  //
+  // The chevron rotates via `open:[&>summary_.chevron]` on the <details> itself
+  // rather than a `group-open:` variant: these boxes nest inside the
+  // "Processing…" fold, and any ancestor-based selector would spin every inner
+  // chevron whenever an OUTER box is open. `> summary` scopes it to its own row.
   import Spinner from './Spinner.svelte';
   import { Badge } from '$lib/components/ui/badge';
   import { X, Check, ChevronDown } from '@lucide/svelte';
@@ -28,7 +34,7 @@
 
 <details
   class={[
-    'group rounded-lg border text-sm',
+    'rounded-lg border text-sm open:[&>summary_.chevron]:rotate-180',
     error ? 'border-destructive/40 bg-destructive/5' : 'bg-muted/50',
     cls,
   ]}
@@ -46,7 +52,7 @@
     {#if error && errorBadge}
       <Badge variant="destructive" class="shrink-0">error</Badge>
     {/if}
-    <ChevronDown class="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" strokeWidth={1.75} aria-hidden="true" />
+    <ChevronDown class="chevron ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform" strokeWidth={1.75} aria-hidden="true" />
   </summary>
   <div class="px-3 pb-2.5">
     {@render children()}

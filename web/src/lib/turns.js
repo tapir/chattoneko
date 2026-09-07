@@ -17,3 +17,15 @@ export function finishedTurns(status, turnCount, toolCalls) {
   for (const c of toolCalls ?? []) lastCall = Math.max(lastCall, c.turn ?? 0);
   return Math.max(turnCount - 1, lastCall + 1);
 }
+
+// How many collapsible boxes the timeline renders (one per thinking block, one
+// per tool call) — MessageItem folds them all into a single collapsed
+// "Processing…" box as soon as this is more than 1, so two bare boxes are never
+// on screen at once. A live reply with nothing yet counts 0 here but still
+// shows the empty pill; one box is under the threshold either way, so the pill
+// needs no special case.
+export function boxCount(turns) {
+  let n = 0;
+  for (const t of turns) n += (t.text ? 1 : 0) + t.calls.length;
+  return n;
+}

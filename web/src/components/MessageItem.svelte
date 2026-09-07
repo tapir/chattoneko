@@ -10,10 +10,11 @@
   } from '../lib/markdown.js';
   import { formatDuration, formatTokensOrDash } from '../lib/format.js';
   import { copyText } from '../lib/clipboard.js';
-  import { finishedTurns } from '../lib/turns.js';
+  import { finishedTurns, boxCount } from '../lib/turns.js';
   import { api } from '../lib/api.js';
   import { viewer } from '../lib/viewer.svelte.js';
-  import { Eye, FileText, Info, Paperclip, Pencil, RotateCcw, X } from '@lucide/svelte';
+  import { Eye, FileText, Info, Paperclip, Pencil, RotateCcw, Workflow, X } from '@lucide/svelte';
+  import CollapsibleStatus from './CollapsibleStatus.svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
   import Scramble from './Scramble.svelte';
   import ImageGallery from './ImageGallery.svelte';
@@ -292,6 +293,12 @@
     isLive && !content && !turns.some((t) => t.text || t.calls.length)
   );
 
+  // A long tool loop stacks a lot of boxes above the answer, so the timeline
+  // folds into one collapsed "Processing…" row the moment a SECOND box exists
+  // (lib/turns.js). Both states are one box tall, so the switch is a label swap
+  // in a single render pass — two bare boxes are never on screen together.
+  let boxes = $derived(boxCount(turns));
+
   // Any terminal problem that ended or cut off the response renders through
   // the single GenerationError component (same style for every cause).
   let generationError = $derived(status === 'failed' || status === 'stopped');
@@ -325,6 +332,23 @@
       </Popover.Content>
     </Popover.Root>
   {/if}
+{/snippet}
+
+<!-- The turn timeline, rendered bare or inside the "Processing…" fold below. -->
+{#snippet timeline()}
+  {#each turns as t (t.turn)}
+    {#if t.text || (waiting && t.turn === 0)}
+      <ThinkingBlock
+        text={t.text}
+        streaming={!t.done && status === 'generating'}
+        error={!t.done && generationError && !content}
+      />
+    {/if}
+
+    {#each t.calls as call (call.call_id)}
+      <ToolCallItem {call} {status} />
+    {/each}
+  {/each}
 {/snippet}
 
 {#if msg.role === 'user'}
@@ -413,19 +437,13 @@
 {:else}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="group mt-6" onclick={onBubbleClick}>
-    {#each turns as t (t.turn)}
-      {#if t.text || (waiting && t.turn === 0)}
-        <ThinkingBlock
-          text={t.text}
-          streaming={!t.done && status === 'generating'}
-          error={!t.done && generationError && !content}
-        />
-      {/if}
-
-      {#each t.calls as call (call.call_id)}
-        <ToolCallItem {call} {status} />
-      {/each}
-    {/each}
+    {#if boxes > 1}
+      <CollapsibleStatus icon={Workflow} title="Processing…" running={status === 'generating'} class="mb-2">
+        {@render timeline()}
+      </CollapsibleStatus>
+    {:else}
+      {@render timeline()}
+    {/if}
 
     {#if content}
       <!-- Children are patched in imperatively by the incremental renderer;

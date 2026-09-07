@@ -74,8 +74,6 @@ All optional. They are read once at startup.
 | `CHATTO_PASSWORD` | Login password, used as-is. Nothing about the login is written to the database; changing it means restarting. |
 | `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time_location` tool result so agents know where you are. |
 
-If auth is off and the listen address is not loopback-only, the server logs a warning that it is wide open on the network.
-
 ### Command line flags
 
 | Flag | Default | Meaning |

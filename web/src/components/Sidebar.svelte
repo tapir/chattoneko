@@ -224,7 +224,7 @@ import logoUrl from '$lib/logo.svg';
        stays visible with margin no matter how long the chat list is. -->
   {#if !searching && app.chatsHasMore}
     <div class="shrink-0 px-2 pb-2.5 pt-1">
-      <Button variant="ghost" size="sm" class="h-9 w-full text-muted-foreground" onclick={() => app.loadMoreChats()} disabled={app.chatsLoading}>
+      <Button variant="ghost" size="sm" class="h-9 w-full text-muted-foreground hover:bg-sidebar-accent active:bg-sidebar-accent" onclick={() => app.loadMoreChats()} disabled={app.chatsLoading}>
         {#if app.chatsLoading}
           <Spinner class="size-3.5" />
         {/if}

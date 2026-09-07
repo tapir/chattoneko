@@ -8,14 +8,19 @@
   // overlay in the browser TOP LAYER: it escapes every stacking context,
   // traps focus, and closes on Escape for free — no z-index needed.
   //
-  // Deliberate departure from the semantic-token rule: a media viewer is
-  // black in BOTH themes so pictures pop and code reads like a code
-  // viewer. Hence raw white/black here instead of bg-card/text-foreground.
+  // Colouring splits by pane. The IMAGE viewer is black in both themes — the
+  // deliberate departure from the semantic-token rule that makes pictures pop
+  // — so its chrome is raw white-on-black. The TEXT pane wears the app's own
+  // tokens and follows the theme: `.dark` sits on <html> and the top layer
+  // changes painting, not DOM ancestry, so tokens and `dark:` variants
+  // resolve inside the dialog exactly as they do everywhere else.
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
+  import { app } from '../lib/state.svelte.js';
   import { formatBytes } from '../lib/format.js';
+  import { isNative } from '../lib/server.js';
   import { registerOverlay } from '../lib/overlays.svelte.js';
-  import { Check, ChevronLeft, ChevronRight, Copy, Download, X, ZoomIn, ZoomOut } from '@lucide/svelte';
+  import { Check, ChevronLeft, ChevronRight, Copy, Download, Share2, X, ZoomIn, ZoomOut } from '@lucide/svelte';
   import { copyText } from '../lib/clipboard.js';
 
   let {
@@ -50,9 +55,20 @@
       .join(' · '),
   );
 
-  // Chrome: light-on-dark controls shared by both panes.
-  const BTN =
-    'flex size-9 shrink-0 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/15 hover:text-white focus-visible:bg-white/15 focus-visible:text-white';
+  // Chrome: light-on-dark over the black image viewer, theme tokens over the
+  // text pane (which flips with the app theme by itself).
+  const BTN_BASE =
+    'flex size-9 shrink-0 items-center justify-center rounded-full transition-colors';
+  let BTN = $derived(
+    `${BTN_BASE} ${
+      isImage
+        ? 'text-white/70 hover:bg-white/15 hover:text-white focus-visible:bg-white/15 focus-visible:text-white'
+        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground'
+    }`,
+  );
+  // App-only: the Android WebView has no navigator.share, and a browser has
+  // its own save/share affordances.
+  const native = isNative();
   // Gallery chevrons: hover-capable pointers only — touch gets the swipe
   // gesture, and floating arrows would eat a narrow screen.
   const NAV_BTN =
@@ -114,6 +130,60 @@
     copyTimer = setTimeout(() => (copied = false), 1200);
   }
   onDestroy(() => clearTimeout(copyTimer));
+
+  // ---- share (native only) ----
+  // Capacitor's Share plugin wants a local file:// URL, so the bytes are
+  // staged in the app cache dir first — already exposed to other apps by the
+  // FileProvider in mobile/android/.../res/xml/file_paths.xml. `url` is the
+  // viewer's own source, so a staged, not-yet-uploaded image shares from its
+  // local object URL too.
+  let sharing = $state(false);
+  async function share() {
+    if (sharing) return;
+    sharing = true;
+    try {
+      // no-store: the <img> in this very dialog caches the same URL without
+      // CORS headers, and a poisoned cache entry makes the fetch fail ("Failed
+      // to fetch") on pictures that are visibly on screen. Servers now send
+      // Vary: Origin, which fixes it for good — this keeps sharing working
+      // against older ones too.
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { Filesystem, Directory } = await import('@capacitor/filesystem');
+      const { Share } = await import('@capacitor/share');
+      // The extension is what gives the share sheet its MIME type; stripping
+      // separators keeps a hostile filename inside the cache dir.
+      const name = (attachment?.filename || 'attachment').replace(/[^\w.-]+/g, '_');
+      await Filesystem.writeFile({
+        path: name,
+        data: await blobBase64(await res.blob()),
+        directory: Directory.Cache,
+        recursive: true, // the plugin's cache folder may not exist yet
+      });
+      const { uri } = await Filesystem.getUri({ path: name, directory: Directory.Cache });
+      await Share.share({ files: [uri] });
+    } catch (e) {
+      // Dismissing the system sheet comes back as a rejection, not a failure.
+      if (!/cancel/i.test(e?.message ?? ''))
+        app.toast('error', `Couldn't share: ${e?.message ?? 'unknown error'}`);
+    } finally {
+      sharing = false;
+    }
+  }
+
+  // Filesystem's binary write path takes base64 (no `encoding`); FileReader is
+  // the only portable encoder and the data-URL prefix isn't part of it.
+  // ponytail: the whole file crosses the bridge as base64 — fine at the sizes
+  // the server hands back (images are re-encoded to <=2048px); swap in
+  // Filesystem.downloadFile, which streams natively, if that ever hurts.
+  function blobBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onloadend = () => resolve(String(r.result).split(',')[1] ?? '');
+      r.onerror = () => reject(new Error('could not read the file'));
+      r.readAsDataURL(blob);
+    });
+  }
 
   async function loadText(id) {
     const seq = ++textSeq;
@@ -415,7 +485,9 @@
 
 <dialog
   bind:this={dlg}
-  class="fixed inset-0 m-0 h-full max-h-none w-full max-w-none overflow-hidden border-0 bg-black/90 p-0 text-white [&::backdrop]:bg-black/70"
+  class="fixed inset-0 m-0 h-full max-h-none w-full max-w-none overflow-hidden border-0 p-0 {isImage
+    ? 'bg-black/90 text-white [&::backdrop]:bg-black/70'
+    : 'bg-background text-foreground [&::backdrop]:bg-background/70'}"
   aria-labelledby="attachment-viewer-title"
   onclose={closed}
   onkeydown={onKeydown}
@@ -437,11 +509,11 @@
       </button>
 
       <div class="min-w-0 flex-1">
-        <div id="attachment-viewer-title" class="truncate text-sm font-medium text-white/90" title={attachment?.filename}>
+        <div id="attachment-viewer-title" class="truncate text-sm font-medium {isImage ? 'text-white/90' : 'text-foreground'}" title={attachment?.filename}>
           {attachment?.filename || 'Attachment'}
         </div>
         {#if subtitle}
-          <div class="truncate text-[11px] tabular-nums text-white/45">{subtitle}</div>
+          <div class="truncate text-[11px] tabular-nums {isImage ? 'text-white/45' : 'text-muted-foreground'}">{subtitle}</div>
         {/if}
       </div>
 
@@ -490,6 +562,19 @@
           onclick={copyContents}
         >
           {#if copied}<Check class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />{:else}<Copy class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />{/if}
+        </button>
+      {/if}
+
+      {#if native}
+        <button
+          type="button"
+          class="{BTN} disabled:pointer-events-none disabled:opacity-40"
+          title="Share"
+          aria-label="Share file"
+          disabled={sharing}
+          onclick={share}
+        >
+          <Share2 class="size-5" strokeWidth={1.75} aria-hidden="true" />
         </button>
       {/if}
 
@@ -596,15 +681,15 @@
             <span
               role="status"
               aria-label="Loading file"
-              class="inline-block size-6 animate-spin rounded-full border-2 border-white/25 border-t-white"
+              class="inline-block size-6 animate-spin rounded-full border-2 border-foreground/25 border-t-foreground"
             ></span>
           </div>
         {:else if textError}
           <div class="mx-auto max-w-md py-16 text-center">
-            <p class="text-sm text-white/70">{textError}</p>
+            <p class="text-sm text-muted-foreground">{textError}</p>
             <button
               type="button"
-              class="mt-4 rounded-full bg-white/10 px-4 py-1.5 text-sm text-white transition-colors hover:bg-white/20"
+              class="mt-4 rounded-full bg-accent px-4 py-1.5 text-sm text-accent-foreground transition-colors hover:bg-accent/70"
               onclick={() => loadText(attachment.id)}
             >
               Try again
@@ -614,7 +699,7 @@
           <!-- The server serves every text attachment as text/plain, so this
                is inert text — never HTML. Soft-wrapped so long lines never
                need a horizontal scroll. -->
-          <pre class="mx-auto w-full max-w-4xl font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words text-white/85">{text}</pre>
+          <pre class="mx-auto w-full max-w-4xl font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words text-foreground/85">{text}</pre>
         {/if}
       </div>
     {/if}

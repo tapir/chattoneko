@@ -321,14 +321,15 @@ class AppState {
     return Array.isArray(opts) ? opts : [];
   }
 
-  // Effort to preselect in the composer: "medium" when supported, else the
-  // provider's default for the model, else the middle of the list.
+  // Effort to preselect in the composer: the model's configured default
+  // (Settings → "Default reasoning effort"), else "medium" when supported,
+  // else the middle of the list.
   defaultEffortFor(modelId) {
     const opts = this.effortOptionsFor(modelId);
     if (opts.length === 0) return "";
-    if (opts.includes("medium")) return "medium";
     const d = this.modelInfo.find((m) => m.model_id === modelId)?.reasoning_default;
     if (d && opts.includes(d)) return d;
+    if (opts.includes("medium")) return "medium";
     return opts[Math.floor(opts.length / 2)] ?? opts[0];
   }
 

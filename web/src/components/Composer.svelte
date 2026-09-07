@@ -52,8 +52,8 @@
     ),
   );
   // Effective selection: explicit choice when valid for the model, else the
-  // default ("medium" when supported). Invalid selections (e.g. after a
-  // model switch) fall back to the default rather than showing a stale value.
+  // model's configured default. Invalid selections (e.g. after a model
+  // switch) fall back to the default rather than showing a stale value.
   let currentEffort = $derived.by(() => {
     const chosen = app.chat ? app.chat.params?.reasoning_effort : app.newChatEffort;
     const opts = app.effortOptionsFor(currentModel);
@@ -85,24 +85,19 @@
       : "This model can't see images, and no vision model is configured.";
   });
 
+  // Switching model snaps to that model's configured default effort — the
+  // previous model's level is not a choice worth carrying over.
   function handleModelChange(value) {
-    if (!value) return;
+    if (!value || value === currentModel) return;
+    const def = app.defaultEffortFor(value);
     if (app.chat) {
-      const patch = { model: value };
-      // Reconcile a persisted effort the new model doesn't support.
-      const cur = app.chat.params?.reasoning_effort;
-      if (cur && !app.effortOptionsFor(value).includes(cur)) {
-        patch.params = { ...(app.chat.params ?? {}) };
-        const def = app.defaultEffortFor(value);
-        if (def) patch.params.reasoning_effort = def;
-        else delete patch.params.reasoning_effort;
-      }
-      app.patchChat(patch);
+      const params = { ...(app.chat.params ?? {}) };
+      if (def) params.reasoning_effort = def;
+      else delete params.reasoning_effort;
+      app.patchChat({ model: value, params });
     } else {
       app.newChatModel = value;
-      if (app.newChatEffort && !app.effortOptionsFor(value).includes(app.newChatEffort)) {
-        app.newChatEffort = '';
-      }
+      app.newChatEffort = def;
     }
   }
 

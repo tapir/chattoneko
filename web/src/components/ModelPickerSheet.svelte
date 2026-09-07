@@ -18,28 +18,24 @@
 
   let open = $state(false);
 
-  // Writable bridge between the app state and the ToggleGroup. Tapping the
-  // active segment in a type="single" group fires a change with an empty
-  // value (deselect) — not a valid effort state, and at least one segment
-  // must always stay pressed. The group mutates its bound value, so mirror
-  // it into local state and restore the app's effort whenever it reports
-  // empty (the re-push re-syncs the group).
-  // Initialized empty; the sync effect below fills it in on mount, so the
-  // prop is only ever read reactively (no stale initial capture).
+  // Writable bridge between the app state and the ToggleGroup. The group
+  // mutates its bound value before calling onValueChange, so mirroring it
+  // locally lets us push the app's effort back (see below).
+  // Initialized empty; the sync effect fills it in on mount, so the prop is
+  // only ever read reactively (no stale initial capture).
   let effortValue = $state('');
   $effect(() => {
     effortValue = currentEffort;
   });
-  $effect(() => {
-    if (effortValue === '') effortValue = currentEffort;
-  });
 
   // Picking an effort applies immediately and closes the drawer; picking a
   // model keeps it open so the user can also adjust effort in one visit.
+  // Tapping the already-active segment fires a change with an empty value
+  // (deselect) — not a valid effort state, so keep the current one. Either
+  // way the tap means "done", so the drawer closes.
   function handleEffortChange(value) {
-    effortValue = value;
-    if (!value) return;
-    onEffortChange?.(value);
+    effortValue = value || currentEffort;
+    if (value) onEffortChange?.(value);
     open = false;
   }
 

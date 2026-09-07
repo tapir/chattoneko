@@ -20,14 +20,19 @@ var appOrigins = map[string]bool{
 // Credentials stay off: the mobile app authenticates with Bearer tokens.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		// EVERY response varies by Origin, allowed or not. An <img>/<a> load
+		// carries no Origin and is cached without Access-Control-Allow-Origin;
+		// a cache entry that doesn't declare the dependency can then be served
+		// to a later cross-origin fetch() of the same URL, which fails CORS
+		// ("Failed to fetch") even though this middleware allows the origin.
+		h.Add("Vary", "Origin")
 		origin := r.Header.Get("Origin")
 		if !appOrigins[origin] {
 			next.ServeHTTP(w, r)
 			return
 		}
-		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", origin)
-		h.Add("Vary", "Origin")
 		if r.Method == http.MethodOptions {
 			// PUT must stay in this list: settings are saved via PUT
 			// /api/setup, the app's only PUT route — dropping it makes the

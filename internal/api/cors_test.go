@@ -69,6 +69,27 @@ func TestCORSAllowedOriginOnRequest(t *testing.T) {
 	}
 }
 
+// Regression: an origin-less request (an <img> or <a> load, which the WebView
+// caches) must still declare Vary: Origin. Without it the cached ACAO-less
+// response can be replayed to a later cross-origin fetch() of the same URL —
+// the mobile share button failed with "Failed to fetch" on already-displayed
+// images, whose bytes were sitting in the HTTP cache from the <img> load.
+func TestCORSVaryOriginWithoutOriginHeader(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest("GET", "/api/attachments/1", nil)
+	rec := httptest.NewRecorder()
+	corsMiddleware(next).ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Vary"); got != "Origin" {
+		t.Fatalf("Vary = %q, want Origin on an origin-less request", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("ACAO = %q, want none without an Origin", got)
+	}
+}
+
 func TestCORSDisallowedOriginUntouched(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)

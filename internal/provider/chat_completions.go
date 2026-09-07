@@ -80,14 +80,20 @@ func buildChatMessages(msgs []Message) ([]openai.ChatCompletionMessageParamUnion
 				out = append(out, openai.UserMessage(m.Content))
 				continue
 			}
+			// Image parts first, the text last. Some OpenAI-compatible vision
+			// routes (OpenRouter deepseek/deepseek-v4-flash-vision-exp, observed
+			// 2026-09) silently drop a text part that PRECEDES the image: the
+			// model then answers as if the question was never asked. Text after
+			// the images keeps both modalities on that route and is accepted
+			// everywhere else.
 			parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(m.Images)+1)
-			if m.Content != "" {
-				parts = append(parts, openai.TextContentPart(m.Content))
-			}
 			for _, img := range m.Images {
 				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
 					URL: dataURL(img.Data),
 				}))
+			}
+			if m.Content != "" {
+				parts = append(parts, openai.TextContentPart(m.Content))
 			}
 			out = append(out, openai.UserMessage(parts))
 		case "assistant":

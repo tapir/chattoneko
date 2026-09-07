@@ -188,6 +188,23 @@ data: [DONE]
 	if !strings.Contains(string(msgs), "data:image/png;base64,") {
 		t.Fatalf("no png data url in messages: %s", msgs)
 	}
+	// The text part must come AFTER the image parts: vision routes exist
+	// (OpenRouter deepseek/deepseek-v4-flash-vision-exp) that silently drop a
+	// text part preceding the image, so the model answers as if the user's
+	// question was never asked.
+	var user struct {
+		Content []struct {
+			Type string `json:"type"`
+		} `json:"content"`
+	}
+	for _, m := range req.Messages {
+		raw, _ := json.Marshal(m)
+		if err := json.Unmarshal(raw, &user); err == nil && len(user.Content) == 2 {
+			if user.Content[0].Type != "image_url" || user.Content[1].Type != "text" {
+				t.Fatalf("part order = %s,%s; want image_url,text", user.Content[0].Type, user.Content[1].Type)
+			}
+		}
+	}
 }
 
 func TestChatCompletionsToolCalls(t *testing.T) {

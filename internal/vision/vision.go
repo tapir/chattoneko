@@ -61,10 +61,13 @@ func (s *Service) DescribeImage(ctx context.Context, png []byte, filename string
 	resp, err := cli.Complete(ctx, []openai.ChatCompletionMessageParamUnion{
 		openai.SystemMessage(systemPrompt),
 		openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
+			// Image first, instruction last: vision routes that drop a text
+			// part preceding the image (see provider/chat_completions.go)
+			// would otherwise lose the instruction entirely.
+			openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
 			// Filenames are external input (uploads, URL-derived); keep
 			// control characters out of the prompt.
 			openai.TextContentPart("Describe this image (original filename: " + stripControl(filename, false) + ")."),
-			openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
 		}),
 	}, maxOutputTokens)
 	if err != nil {

@@ -4,7 +4,7 @@
     createRenderer,
     escapeHtml,
     isMarkdownReady,
-    normalizeHeadings,
+    normalizeSource,
     onMarkdownReady,
     splitHeadingHold,
   } from '../lib/markdown.js';
@@ -136,18 +136,14 @@
     let touched = false;
     if (!isLive) {
       if (rendered === c) return;
-      if (seen === c) {
-        // The stream just ended with everything already fed: flush the holdback
-        // and freeze the tail instead of re-parsing the whole message.
-        if (carry) renderer.append(normalizeHeadings(carry));
-        carry = '';
-        renderer.finalize();
-      } else {
-        // Terminal/historical message: render the whole document in one pass.
-        renderer.setMarkdown(normalizeHeadings(c));
-        seen = c;
-        carry = '';
-      }
+      // Terminal/historical message — and every finished stream — renders the
+      // whole document in one pass. The complete source is the only place a
+      // `$…$` currency pair can be recognised (see normalizeSource), so a
+      // stream that ends comes through here too rather than just freezing the
+      // tail it was fed.
+      renderer.setMarkdown(normalizeSource(c));
+      seen = c;
+      carry = '';
       rendered = c;
       touched = true;
     } else {

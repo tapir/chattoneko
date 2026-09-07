@@ -77,6 +77,32 @@ export function normalizeHeadings(src) {
   return (src ?? "").replace(MID_LINE_HEADING, "$1\n\n$2 ");
 }
 
+// incremark treats ANY single-line `$…$` as inline math, so a price pair
+// ("the $279 and $549 options") is swallowed by KaTeX and renders as italic
+// math letters. Escape the pairs that cannot be math, using KaTeX's own
+// auto-render guard: no space at either end, and no digit glued after the
+// closing `$` (which also covers `replace(/x/, "$1")` backreferences).
+// Measured against this app's message history it catches every currency pair
+// and no real formula — `$2^k$` and `$1/\text{rank}$` survive.
+//
+// ponytail: no code-fence awareness, same ceiling as normalizeHeadings — a
+// `"$1 … $2"` inside a fence would show the backslashes. Zero hits on real
+// history; per-fence skipping is the upgrade path if it ever shows up.
+const DOLLAR_PAIR = /\$([^$\n]+)\$/g;
+
+export function escapeCurrency(src) {
+  return (src ?? "").replace(DOLLAR_PAIR, (raw, body, off, s) => {
+    const math = !/^\s|\s$/.test(body) && !/\d/.test(s[off + raw.length] ?? "");
+    return math ? raw : "\\$" + body + "\\$";
+  });
+}
+
+// Whole-document source fixups, for the terminal render passes where the full
+// text is available (escapeCurrency needs to see the closing `$`).
+export function normalizeSource(src) {
+  return escapeCurrency(normalizeHeadings(src));
+}
+
 // Streaming feed: normalizeHeadings needs the punctuation BEFORE a "#" to
 // decide, and a delta can land anywhere, so hold back a trailing fragment that
 // could still become one and release it when the next delta settles it. The

@@ -2,7 +2,7 @@
 // Run: node test-smoke.mjs
 
 import { Typewriter } from './src/lib/typewriter.js';
-import { loadMarkdown, normalizeHeadings, splitHeadingHold } from './src/lib/markdown.js';
+import { loadMarkdown, normalizeHeadings, normalizeSource, splitHeadingHold } from './src/lib/markdown.js';
 
 // The heavy pipeline is a dynamic import in the browser so it stays off the
 // critical path; await it here so the checks below hit the real
@@ -85,6 +85,24 @@ assert(multiLine.includes('display="block"'), 'multi-line \\[...\\] block render
 const codeSafe = render('```\nconst s = "\\\\[not math\\\\]";\n```');
 assert(!codeSafe.includes('<math'), 'bracket delimiters inside code fences untouched');
 console.log('OK math');
+
+// --- currency: `$279 and $549` must not be swallowed by KaTeX ---
+for (const src of [
+  'the Moose Lite at $279 is the answer, the Inspire 2 at $549 is not',
+  'Revopoint MINI 2 (~$705 on sale / $829) is the detail pick',
+  'Cheapest: **3DMakerpro Moose Lite — ~$279** and the Mole ($325).',
+]) {
+  const html = render(normalizeSource(src));
+  assert(!html.includes('<math'), `price pair not rendered as math: ${src}`);
+  assert(html.replaceAll('<strong>', '').includes('$'), `dollar signs survive: ${src}`);
+}
+// real formulas must still render
+for (const f of ['$x^2$', '$2^k$', '$1/\\text{rank}$', '$y = c \\cdot x^k$']) {
+  assert(render(normalizeSource(`see ${f} here`)).includes('<math'), `real inline math kept: ${f}`);
+}
+assert(render(normalizeSource('$$\\sum_{i=1}^n i$$')).includes('<math'), 'block math kept');
+assert(render(normalizeSource('inline \\(x+1\\) math')).includes('<math'), 'paren math kept');
+console.log('OK currency vs math');
 
 // --- mid-line ATX headings split onto their own line ---
 const midHead = render(normalizeHeadings("I'll search the web for power laws.# Power Law\n\nBody."));

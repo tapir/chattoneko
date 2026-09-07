@@ -80,7 +80,7 @@
   onMount(() => {
     dlg?.showModal();
     // Android back closes the viewer instead of navigating away under it.
-    unregisterBack = registerOverlay(() => dlg?.close());
+    unregisterBack = registerOverlay(() => close());
   });
   onDestroy(() => unregisterBack?.());
 
@@ -102,8 +102,15 @@
     }
   }
 
+  // Exit is class-driven: .closing plays the fade-out, then the native
+  // close() unmounts. A fixed timeout beats animationend here — animationend
+  // bubbles, so any finite child animation would dismiss early.
+  const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let closing = $state(false);
   function close() {
-    dlg?.close();
+    if (closing || !dlg?.open) return;
+    closing = true; // class attr below drives the exit animation
+    setTimeout(() => dlg.close(), REDUCED ? 0 : 150);
   }
 
   // ---- text pane ----
@@ -487,9 +494,13 @@
   bind:this={dlg}
   class="fixed inset-0 m-0 h-full max-h-none w-full max-w-none overflow-hidden border-0 p-0 {isImage
     ? 'bg-black/90 text-white [&::backdrop]:bg-black/70'
-    : 'bg-background text-foreground [&::backdrop]:bg-background/70'}"
+    : 'bg-background text-foreground [&::backdrop]:bg-background/70'} {closing ? 'closing' : ''}"
   aria-labelledby="attachment-viewer-title"
   onclose={closed}
+  oncancel={(e) => {
+    e.preventDefault();
+    close();
+  }}
   onkeydown={onKeydown}
 >
   <!-- p-safe: keeps the header clear of the notch/status bar and the
@@ -705,3 +716,35 @@
     {/if}
   </div>
 </dialog>
+
+<style>
+  /* Open/close animation for the top-layer dialog + its ::backdrop, with a
+     slight zoom on the content pane. Fullscreen overlay, so fade+zoom rather
+     than a slide: scaling edge-to-edge chrome would flash the page behind. */
+  dialog[open] { animation: av-in 180ms ease-out; }
+  dialog[open]::backdrop { animation: av-in 180ms ease-out; }
+  dialog[open] > div { animation: av-zoom-in 180ms ease-out; }
+  dialog.closing,
+  dialog.closing::backdrop { animation: av-out 150ms ease-in forwards; }
+  dialog.closing > div { animation: av-zoom-out 150ms ease-in forwards; }
+  @keyframes av-in {
+    from { opacity: 0; }
+  }
+  @keyframes av-out {
+    to { opacity: 0; }
+  }
+  @keyframes av-zoom-in {
+    from { transform: scale(0.97); }
+  }
+  @keyframes av-zoom-out {
+    to { transform: scale(0.97); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    dialog[open],
+    dialog[open]::backdrop,
+    dialog[open] > div,
+    dialog.closing,
+    dialog.closing::backdrop,
+    dialog.closing > div { animation: none; }
+  }
+</style>

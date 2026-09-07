@@ -10,6 +10,7 @@
   import * as Select from '$lib/components/ui/select';
   import * as ToggleGroup from '$lib/components/ui/toggle-group';
   import { registerOverlay } from '../lib/overlays.svelte.js';
+  import { onDestroy } from 'svelte';
 
   // Server settings overlay. Sits on top of the main app.
   //
@@ -21,6 +22,28 @@
   // sidebar or header.
   let open = $derived(app.settingsOpen || app.setupComplete === false);
   let canClose = $derived(app.setupComplete !== false);
+
+  // Open/close animation is class-driven CSS (same trick as the lightbox):
+  // Svelte transitions on this block stalled its unmount, so `visible` keeps
+  // the DOM alive through the exit animation and then drops it.
+  const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let visible = $state(false); // synced from `open` by the effect below, incl. on mount
+  let closing = $state(false);
+  let closeTimer = null;
+  $effect(() => {
+    if (open) {
+      clearTimeout(closeTimer);
+      closing = false;
+      visible = true;
+    } else if (visible) {
+      closing = true;
+      closeTimer = setTimeout(() => {
+        closing = false;
+        visible = false;
+      }, REDUCED ? 0 : 150);
+    }
+  });
+  onDestroy(() => clearTimeout(closeTimer));
 
   let loading = $state(false);
   let saving = $state(false);
@@ -460,8 +483,8 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-{#if open}
-  <div class="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-6">
+{#if visible}
+  <div class="ss-anim fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-6 {closing ? 'ss-closing' : ''}">
     <!-- Backdrop: click closes only when not forced. A plain div (not a
          button) so it never competes with the real close control for focus
          or a11y selectors. -->
@@ -469,7 +492,7 @@
 
     <!-- Fullscreen on mobile (like the sidebar and panel sheets); a
          centered dialog on sm+. -->
-    <div class="relative z-10 flex h-app w-full max-w-2xl flex-col bg-card text-card-foreground p-safe sm:h-auto sm:max-h-[92dvh] sm:rounded-xl sm:border sm:shadow-xl">
+    <div class="relative z-10 flex h-app w-full max-w-2xl flex-col bg-card text-card-foreground p-safe sm:h-auto sm:max-h-[92dvh] sm:rounded-xl sm:border sm:shadow-xl ss-panel">
       <!-- Header -->
       <div class="flex items-start justify-between gap-4 border-b px-4 py-4 sm:px-6">
         <div class="min-w-0">
@@ -854,3 +877,31 @@
     </div>
   </div>
 {/if}
+
+<style>
+  /* Open/close animation, class-driven like the lightbox's: the wrapper fades
+     while the panel zooms 0.96<->1. Exit holds via .ss-closing until the
+     `visible` state drops the block. */
+  .ss-anim { animation: ss-fade-in 180ms ease-out; }
+  .ss-anim > .ss-panel { animation: ss-zoom-in 180ms ease-out; }
+  .ss-closing { animation: ss-fade-out 150ms ease-in forwards; }
+  .ss-closing > .ss-panel { animation: ss-zoom-out 150ms ease-in forwards; }
+  @keyframes ss-fade-in {
+    from { opacity: 0; }
+  }
+  @keyframes ss-fade-out {
+    to { opacity: 0; }
+  }
+  @keyframes ss-zoom-in {
+    from { transform: scale(0.96); }
+  }
+  @keyframes ss-zoom-out {
+    to { transform: scale(0.96); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ss-anim,
+    .ss-anim > .ss-panel,
+    .ss-closing,
+    .ss-closing > .ss-panel { animation: none; }
+  }
+</style>

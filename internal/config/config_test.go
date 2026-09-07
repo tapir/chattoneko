@@ -224,19 +224,17 @@ func TestUpdateSanitizesMCPServers(t *testing.T) {
 	s, _ := NewStore(ctx, h)
 	_, err := s.Update(ctx, Patch{MCPServers: &[]MCPServerConfig{
 		{Name: "ok", Transport: "http", URL: "https://mcp.example"},
-		{Name: "", Transport: "http", URL: "https://x"},                                  // dropped: no name
-		{Name: "ok", Transport: "http", URL: "https://dup"},                              // dropped: duplicate
-		{Name: "bad", Transport: "carrier-pigeon"},                                       // dropped: bad transport
-		{Name: "nocmd", Transport: "stdio"},                                              // dropped: stdio w/o command
-		{Name: "wscmd", Transport: "stdio", Command: "   "},                              // dropped: whitespace command
-		{Name: "wsurl", Transport: "http", URL: "   "},                                   // dropped: whitespace url
-		{Name: "std", Transport: "stdio", Command: " npx ", Args: []string{"-y", "srv"}}, // trimmed command
+		{Name: "", Transport: "http", URL: "https://x"},                  // dropped: no name
+		{Name: "ok", Transport: "http", URL: "https://dup"},              // dropped: duplicate
+		{Name: "bad", Transport: "carrier-pigeon"},                       // dropped: bad transport
+		{Name: "std", Transport: "http", URL: " https://mcp.example/x "}, // trimmed url
+		{Name: "wsurl", Transport: "http", URL: "   "},                   // dropped: whitespace url
 	}})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	got := s.Get().MCPServers
-	if len(got) != 2 || got[0].Name != "ok" || got[1].Name != "std" || got[1].Command != "npx" {
+	if len(got) != 2 || got[0].Name != "ok" || got[1].Name != "std" || got[1].URL != "https://mcp.example/x" {
 		t.Fatalf("servers = %+v", got)
 	}
 }

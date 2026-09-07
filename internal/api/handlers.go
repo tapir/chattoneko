@@ -178,8 +178,6 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 		servers = append(servers, map[string]any{
 			"name":            s.Name,
 			"transport":       s.Transport,
-			"command":         s.Command,
-			"args":            s.Args,
 			"url":             s.URL,
 			"headers":         headers,
 			"default_enabled": s.DefaultEnabled,

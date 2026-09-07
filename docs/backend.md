@@ -11,7 +11,7 @@ internal/
   store/                     persistence layer over db/query (domain types)
   provider/                  normalized OpenAI-compatible streaming client (live-swappable endpoint + /models fetch)
   llm/                       shared non-streaming client cache (vision + title task)
-  mcphub/                    MCP server connections (stdio + http), live-reloadable
+  mcphub/                    MCP server connections (streamable HTTP), live-reloadable
   tools/                     integrated tools + merged tool catalog
   engine/                    generation turn loop, per-chat SSE hubs
   titlegen/                  background chat-title task + its own SSE hub
@@ -33,7 +33,7 @@ internal/
 7. Create the engine on a server-scoped context — generations survive HTTP client disconnects and end only via stop, chat deletion, or server shutdown. Recover crashed generations left behind by an interrupted process (see engine section).
 8. Start the title task (its own goroutine + independent SSE hub).
 9. Assemble the API server with the embedded `web/dist` filesystem, bind the `-listen` address (a bind failure is fatal) and serve. The `http.Server` sets `ReadHeaderTimeout` only — no `WriteTimeout`/`ReadTimeout`, which would kill SSE.
-10. Graceful shutdown on SIGINT/SIGTERM: stop the HTTP listener (10s), then `engine.Shutdown()` (cancels active generations and waits for their final persistence), close MCP sessions (kills stdio child processes), close the DB, cancel the server context.
+10. Graceful shutdown on SIGINT/SIGTERM: stop the HTTP listener (10s), then `engine.Shutdown()` (cancels active generations and waits for their final persistence), close MCP sessions, close the DB, cancel the server context.
 
 **Live config wiring.** `cfgStore.Subscribe` registers the reactive components once at startup: `prov.Reconfigure` re-dials the provider when base_url/api_key change, `warnIfExposed` re-checks the open-API combination, and `hub.Reload` connects/closes/reconnects MCP servers to match the new list. The reload runs async (MCP dials can take real time) and, when it changed the tool catalog, the engine publishes a `config_changed` event on the global stream so clients refetch `/api/config` — the setup-save response goes out before the dial finishes. Engine, API, auth and the title task all read the current snapshot per request/sweep, so system prompt, limits, models, and credentials change with no restart. The listen address is NOT live-editable: it is the `-listen` flag, bound once at startup.
 
@@ -47,7 +47,7 @@ Per-model metadata (`ModelMeta`): input/output modality (subset of text|image|vi
 
 The provider/model fields are not required for startup: a fresh server comes up in setup mode and chat attempts fail cleanly ("provider is not configured yet" / "no chat model configured yet") until the setup API fills them in.
 
-The config snapshot carries: `system_prompt`, `provider` (base_url, api_key), `models` (whitelist, default_chat_model, default_task_model, default_vision_model), `mcp_servers` (name, transport stdio/http, command/args or url/headers, default_enabled), `limits`, `tool_defaults` (tool name → default enabled; the global per-tool default the settings UI edits, overriding the catalog's own default for tools it lists), `auth` (enabled, username, password — all sourced from the `CHATTO_USERNAME` / `CHATTO_PASSWORD` env vars, never persisted). The listen address lives outside the snapshot (CLI flag); a designated model that is not whitelisted is cleared by `sanitizeWhitelist`. The vision model is optional: `Complete()` does not require it, and when it is empty images are sent to the chat model as-is.
+The config snapshot carries: `system_prompt`, `provider` (base_url, api_key), `models` (whitelist, default_chat_model, default_task_model, default_vision_model), `mcp_servers` (name, transport http, url/headers, default_enabled), `limits`, `tool_defaults` (tool name → default enabled; the global per-tool default the settings UI edits, overriding the catalog's own default for tools it lists), `auth` (enabled, username, password — all sourced from the `CHATTO_USERNAME` / `CHATTO_PASSWORD` env vars, never persisted). The listen address lives outside the snapshot (CLI flag); a designated model that is not whitelisted is cleared by `sanitizeWhitelist`. The vision model is optional: `Complete()` does not require it, and when it is empty images are sent to the chat model as-is.
 
 ## Storage (internal/db, internal/store)
 
@@ -127,7 +127,7 @@ Integrated tools (hardcoded, one file each; `tools.Builtin` lists them):
 
 Every integrated call is bounded by a hardcoded 30s context timeout and wrapped in a panic recovery, so an in-process handler (including third-party VM code like the Lua sandbox) surfaces as an in-band tool error rather than killing the generation or the process. Handler errors are returned in-band (`isError=true`) exactly like MCP tool errors.
 
-MCP hub (`mcphub`): connects every `mcp_servers` entry at startup (stdio via `exec.Command`, http via streamable transport with optional headers), 30s connect timeout per server; a dead server logs a warning and is skipped. Each connected session lists its tools, which become catalog entries with config-driven `default_enabled`; two servers exposing the same tool name are resolved first-in-config-order-wins (the duplicate is dropped with a warning, never renamed). `Call` dispatches by display name to the owning source, bounded per call by `mcp_call_timeout_seconds`. `CallMeta` (chat id + owning assistant message id) lets integrated tools attach artifacts to the right message; MCP tools ignore it.
+MCP hub (`mcphub`): connects every `mcp_servers` entry at startup (streamable HTTP transport with optional headers), 30s connect timeout per server; a dead server logs a warning and is skipped. Each connected session lists its tools, which become catalog entries with config-driven `default_enabled`; two servers exposing the same tool name are resolved first-in-config-order-wins (the duplicate is dropped with a warning, never renamed). `Call` dispatches by display name to the owning source, bounded per call by `mcp_call_timeout_seconds`. `CallMeta` (chat id + owning assistant message id) lets integrated tools attach artifacts to the right message; MCP tools ignore it.
 
 ## Title generation (internal/titlegen)
 

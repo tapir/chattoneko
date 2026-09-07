@@ -2,9 +2,8 @@ package mcphub
 
 import (
 	"context"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -14,7 +13,42 @@ import (
 	"chattoneko/internal/db"
 )
 
-var testServerBinary string
+// testMCPServer runs an in-process MCP server over streamable HTTP and
+// returns its endpoint. It exposes two tools: "echo" (succeeds) and
+// "always_fails" (returns an MCP tool error).
+func testMCPServer(t *testing.T) string {
+	t.Helper()
+	srv := mcp.NewServer(&mcp.Implementation{Name: "testmcp", Version: "1.0.0"}, nil)
+
+	type echoArgs struct {
+		Text string `json:"text" jsonschema:"the text to echo back"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "echo",
+		Description: "echo the given text back",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, args echoArgs) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "echo: " + args.Text}},
+		}, nil, nil
+	})
+
+	type failArgs struct {
+		Reason string `json:"reason" jsonschema:"why it fails"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "always_fails",
+		Description: "always returns a tool error",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, args failArgs) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "tool error: " + args.Reason}},
+			IsError: true,
+		}, nil, nil
+	})
+
+	hs := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil))
+	t.Cleanup(hs.Close)
+	return hs.URL
+}
 
 // testStore builds a config.Store over an in-memory DB seeded with cfg.
 func testStore(t *testing.T, cfg config.Config) *config.Store {
@@ -34,31 +68,18 @@ func testStore(t *testing.T, cfg config.Config) *config.Store {
 	return st
 }
 
-func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "testmcp")
-	if err != nil {
-		panic(err)
+func testConfig(url string) config.Config {
+	return config.Config{
+		MCPServers: []config.MCPServerConfig{serverCfg("test", url, true)},
 	}
-	testServerBinary = filepath.Join(dir, "testmcp")
-	cmd := exec.Command("go", "build", "-o", testServerBinary, "./testdata/testmcp")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		panic("build testmcp: " + err.Error() + ": " + string(out))
-	}
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
 }
 
-func testConfig() config.Config {
-	return config.Config{
-		MCPServers: []config.MCPServerConfig{
-			{Name: "test", Transport: "stdio", Command: testServerBinary, DefaultEnabled: true},
-		},
-	}
+func serverCfg(name, url string, enabled bool) config.MCPServerConfig {
+	return config.MCPServerConfig{Name: name, Transport: "http", URL: url, DefaultEnabled: enabled}
 }
 
 func TestHubListAndCall(t *testing.T) {
-	hub := New(testStore(t, testConfig()))
+	hub := New(testStore(t, testConfig(testMCPServer(t))))
 	hub.Connect(context.Background())
 	defer hub.Close()
 
@@ -128,7 +149,8 @@ func TestHubListAndCall(t *testing.T) {
 }
 
 func TestHubReload(t *testing.T) {
-	st := testStore(t, testConfig())
+	url := testMCPServer(t)
+	st := testStore(t, testConfig(url))
 	hub := New(st)
 	hub.Connect(context.Background())
 	defer hub.Close()
@@ -138,14 +160,13 @@ func TestHubReload(t *testing.T) {
 
 	// Add a second server through the config store, then Reload picks it up.
 	cur := st.Get()
-	added := append(append([]config.MCPServerConfig{}, cur.MCPServers...),
-		config.MCPServerConfig{Name: "b", Transport: "stdio", Command: testServerBinary, DefaultEnabled: true})
+	added := append(append([]config.MCPServerConfig{}, cur.MCPServers...), serverCfg("b", url, true))
 	if _, err := st.Update(context.Background(), config.Patch{MCPServers: &added}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	hub.Reload(context.Background())
-	// Server b runs the same binary, so both of its tools collide with the
-	// first server's and are dropped (first server in config order wins).
+	// Server b points at the same endpoint, so both of its tools collide with
+	// the first server's and are dropped (first server in config order wins).
 	if n := len(hub.Tools()); n != 2 {
 		t.Fatalf("after add: tools = %d, want 2 (b's duplicates dropped)", n)
 	}
@@ -173,9 +194,7 @@ func TestHubReload(t *testing.T) {
 	}
 
 	// Change a remaining server's config (default_enabled) → reconnect, still 2 tools.
-	changed := []config.MCPServerConfig{
-		{Name: "test", Transport: "stdio", Command: testServerBinary, DefaultEnabled: false},
-	}
+	changed := []config.MCPServerConfig{serverCfg("test", url, false)}
 	if _, err := st.Update(context.Background(), config.Patch{MCPServers: &changed}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -192,11 +211,9 @@ func TestHubReload(t *testing.T) {
 }
 
 func TestHubCollisionFirstWins(t *testing.T) {
+	url := testMCPServer(t)
 	cfg := config.Config{
-		MCPServers: []config.MCPServerConfig{
-			{Name: "a", Transport: "stdio", Command: testServerBinary, DefaultEnabled: true},
-			{Name: "b", Transport: "stdio", Command: testServerBinary, DefaultEnabled: false},
-		},
+		MCPServers: []config.MCPServerConfig{serverCfg("a", url, true), serverCfg("b", url, false)},
 	}
 	hub := New(testStore(t, cfg))
 	hub.Connect(context.Background())

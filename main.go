@@ -199,7 +199,7 @@ func run() error {
 	defer cancelShutdown()
 	_ = httpSrv.Shutdown(shutdownCtx)
 	eng.Shutdown() // cancels active generations and WAITS for their final persistence
-	hub.Close()    // kills MCP stdio child processes
+	hub.Close()    // closes MCP sessions
 	_ = sqlDB.Close()
 	serverCancel()
 	return nil

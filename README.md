@@ -93,7 +93,7 @@ Four integrated tools, each toggleable per chat and globally in settings:
 - `create_text_file` — writes a complete UTF-8 text file that shows up as a download link on the reply. Text only, no binary formats.
 - `show_image` — fetches a direct image URL and displays it inline in the chat, so the model can show you a picture rather than paste a link.
 
-Beyond those you can add MCP servers in settings, either a stdio command or an HTTP endpoint with optional headers. Their tools join the catalog as soon as you save, no restart, and are toggled like the built-in ones.
+Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart, and are toggled like the built-in ones.
 
 ## Vision
 

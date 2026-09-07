@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -123,9 +122,9 @@ func (h *Hub) reconcileLocked(ctx context.Context, desired []config.MCPServerCon
 		}
 	}
 	if len(toClose) > 0 {
-		// Detach under the lock, close OUTSIDE it: session teardown can do
-		// I/O (stdio process kill, HTTP teardown) and must not block every
-		// Tools()/Call() reader while it runs.
+		// Detach under the lock, close OUTSIDE it: session teardown does
+		// HTTP I/O and must not block every Tools()/Call() reader while it
+		// runs.
 		var closing []*serverState
 		h.mu.Lock()
 		for _, name := range toClose {
@@ -218,19 +217,9 @@ func (h *Hub) rebuildEntriesLocked(order []string) {
 // connectOne dials one server and lists its tools; on failure it logs a
 // warning and returns nil session (the server is skipped).
 func (h *Hub) connectOne(ctx context.Context, sc config.MCPServerConfig) (*mcp.ClientSession, []Entry) {
-	var transport mcp.Transport
-	switch sc.Transport {
-	case "stdio":
-		transport = &mcp.CommandTransport{Command: exec.Command(sc.Command, sc.Args...)}
-	case "http":
-		st := &mcp.StreamableClientTransport{Endpoint: sc.URL}
-		if len(sc.Headers) > 0 {
-			st.HTTPClient = &http.Client{Transport: headerTransport{base: http.DefaultTransport, headers: sc.Headers}}
-		}
-		transport = st
-	default:
-		slog.Warn("mcp server with unknown transport", "name", sc.Name, "transport", sc.Transport)
-		return nil, nil
+	transport := &mcp.StreamableClientTransport{Endpoint: sc.URL}
+	if len(sc.Headers) > 0 {
+		transport.HTTPClient = &http.Client{Transport: headerTransport{base: http.DefaultTransport, headers: sc.Headers}}
 	}
 	cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
@@ -380,8 +369,8 @@ func (t headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(req)
 }
 
-// Close closes all sessions (terminates stdio child processes). Sessions
-// are closed OUTSIDE the lock: teardown I/O must not block catalog readers.
+// Close closes all sessions OUTSIDE the lock: teardown I/O must not block
+// catalog readers.
 func (h *Hub) Close() {
 	h.mu.Lock()
 	closing := h.servers

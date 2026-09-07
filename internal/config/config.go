@@ -82,14 +82,13 @@ type ModelsConfig struct {
 	DefaultVisionModel string `json:"default_vision_model"`
 }
 
-// MCPServerConfig declares one MCP server.
+// MCPServerConfig declares one MCP server. Only streamable HTTP is
+// supported: the app never spawns child processes.
 type MCPServerConfig struct {
 	Name           string            `json:"name"`
-	Transport      string            `json:"transport"` // stdio | http
-	Command        string            `json:"command"`   // stdio
-	Args           []string          `json:"args"`      // stdio
-	URL            string            `json:"url"`       // http
-	Headers        map[string]string `json:"headers"`   // http: extra request headers
+	Transport      string            `json:"transport"` // http
+	URL            string            `json:"url"`
+	Headers        map[string]string `json:"headers"` // extra request headers
 	DefaultEnabled bool              `json:"default_enabled"`
 }
 
@@ -148,7 +147,6 @@ func (c *Config) clone() *Config {
 	cp.Models.Whitelist = append([]string(nil), c.Models.Whitelist...)
 	cp.MCPServers = make([]MCPServerConfig, len(c.MCPServers))
 	for i, s := range c.MCPServers {
-		s.Args = append([]string(nil), s.Args...)
 		if s.Headers != nil {
 			s.Headers = make(map[string]string, len(s.Headers))
 			for k, v := range c.MCPServers[i].Headers {
@@ -223,7 +221,6 @@ func (c *Config) sanitizeMCPServers() {
 	clean := make([]MCPServerConfig, 0, len(c.MCPServers))
 	for _, s := range c.MCPServers {
 		s.Name = strings.TrimSpace(s.Name)
-		s.Command = strings.TrimSpace(s.Command)
 		s.URL = strings.TrimSpace(s.URL)
 		switch {
 		case s.Name == "":
@@ -232,23 +229,15 @@ func (c *Config) sanitizeMCPServers() {
 		case seen[s.Name]:
 			slog.Warn("mcp_servers: dropping duplicate entry", "name", s.Name)
 			continue
-		case s.Transport != "stdio" && s.Transport != "http":
+		case s.Transport != "http":
 			slog.Warn("mcp_servers: dropping entry with invalid transport", "name", s.Name, "transport", s.Transport)
 			continue
-		case s.Transport == "stdio" && s.Command == "":
-			slog.Warn("mcp_servers: dropping stdio entry without command", "name", s.Name)
-			continue
-		case s.Transport == "http" && s.URL == "":
-			slog.Warn("mcp_servers: dropping http entry without url", "name", s.Name)
+		case s.URL == "":
+			slog.Warn("mcp_servers: dropping entry without url", "name", s.Name)
 			continue
 		}
-		// Copy the entry's slices/maps so the published snapshot never
-		// aliases the patch they came from.
-		s.Args = append([]string(nil), s.Args...)
-		if s.Transport == "stdio" && len(s.Headers) > 0 {
-			slog.Warn("mcp_servers: ignoring headers on stdio entry", "name", s.Name)
-			s.Headers = nil
-		}
+		// Copy the entry's map so the published snapshot never aliases the
+		// patch it came from.
 		if len(s.Headers) > 0 {
 			// Header names/values go straight into HTTP requests: trim them
 			// and drop empty values and invalid header names (a broken name
@@ -290,7 +279,7 @@ func (c *Config) validate() error {
 // MCPServerEqual reports whether two MCP server configs are identical
 // (used by the MCP hub to decide if a server needs reconnecting). Both sides
 // are normalized by sanitizeMCPServers before comparison, so nil-vs-empty
-// slices/maps are consistent.
+// maps are consistent.
 func MCPServerEqual(a, b MCPServerConfig) bool {
 	return reflect.DeepEqual(a, b)
 }

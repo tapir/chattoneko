@@ -296,8 +296,6 @@
       key: `srv-${++rowSeq}`,
       name: s.name ?? '',
       transport: s.transport ?? 'http',
-      command: s.command ?? '',
-      argsText: (s.args ?? []).join(' '),
       url: s.url ?? '',
       // Sorted by name so the snapshot/baseline comparison is deterministic.
       headers: Object.entries(s.headers ?? {})
@@ -308,22 +306,20 @@
   function buildMcpServers() {
     return mcpServers
       .map((s) => {
-        const out = { name: s.name.trim(), transport: s.transport, default_enabled: true };
-        if (s.transport === 'stdio') {
-          out.command = s.command.trim();
-          out.args = s.argsText.split(/\s+/).filter(Boolean);
-        } else {
-          out.url = s.url.trim();
-          const headers = {};
-          for (const h of s.headers ?? []) if (h.key.trim()) headers[h.key.trim()] = h.value;
-          out.headers = headers;
-        }
-        return out;
+        const headers = {};
+        for (const h of s.headers ?? []) if (h.key.trim()) headers[h.key.trim()] = h.value;
+        return {
+          name: s.name.trim(),
+          transport: s.transport,
+          url: s.url.trim(),
+          headers,
+          default_enabled: true,
+        };
       })
       .filter((s) => s.name);
   }
   function addServer() {
-    mcpServers = [{ key: `srv-${++rowSeq}`, name: '', transport: 'http', command: '', argsText: '', url: '', headers: [] }, ...mcpServers];
+    mcpServers = [{ key: `srv-${++rowSeq}`, name: '', transport: 'http', url: '', headers: [] }, ...mcpServers];
   }
   function removeServer(i) {
     mcpServers = mcpServers.filter((_, idx) => idx !== i);
@@ -676,7 +672,6 @@
                         </Select.Trigger>
                         <Select.Content>
                           <Select.Item value="http" label="http" class="text-sm" />
-                          <Select.Item value="stdio" label="stdio" class="text-sm" />
                         </Select.Content>
                       </Select.Root>
                       <button type="button" class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove server" onclick={() => removeServer(i)}>
@@ -685,36 +680,23 @@
                     </div>
                   </div>
                 </div>
-                {#if s.transport === 'stdio'}
-                  <div class="grid gap-2.5 sm:grid-cols-2">
-                    <div class="space-y-1.5">
-                      <Label class={labelCls}>Command</Label>
-                      <Input type="text" class="h-8 font-mono text-xs" placeholder="e.g. npx" bind:value={s.command} />
+                <div class="space-y-1.5">
+                  <Label class={labelCls}>Address</Label>
+                  <Input type="text" class="h-8 font-mono text-xs" placeholder="https://example.com/mcp" bind:value={s.url} />
+                </div>
+                <div class="space-y-1.5">
+                  <Label class={labelCls}>Headers</Label>
+                  {#each s.headers ?? [] as h, hi (h.id)}
+                    <div class="flex gap-2">
+                      <Input type="text" class="h-8 flex-1 font-mono text-xs" placeholder="Header name" bind:value={h.key} />
+                      <Input type="text" class="h-8 flex-1 font-mono text-xs" placeholder="Header value" bind:value={h.value} />
+                      <button type="button" class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove header" onclick={() => (s.headers = s.headers.filter((_, x) => x !== hi))}>
+                        <X class="size-4" strokeWidth={1.75} aria-hidden="true" />
+                      </button>
                     </div>
-                    <div class="space-y-1.5">
-                      <Label class={labelCls}>Arguments</Label>
-                      <Input type="text" class="h-8 font-mono text-xs" placeholder="space-separated" bind:value={s.argsText} />
-                    </div>
-                  </div>
-                {:else}
-                  <div class="space-y-1.5">
-                    <Label class={labelCls}>Address</Label>
-                    <Input type="text" class="h-8 font-mono text-xs" placeholder="https://example.com/mcp" bind:value={s.url} />
-                  </div>
-                  <div class="space-y-1.5">
-                    <Label class={labelCls}>Headers</Label>
-                    {#each s.headers ?? [] as h, hi (h.id)}
-                      <div class="flex gap-2">
-                        <Input type="text" class="h-8 flex-1 font-mono text-xs" placeholder="Header name" bind:value={h.key} />
-                        <Input type="text" class="h-8 flex-1 font-mono text-xs" placeholder="Header value" bind:value={h.value} />
-                        <button type="button" class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove header" onclick={() => (s.headers = s.headers.filter((_, x) => x !== hi))}>
-                          <X class="size-4" strokeWidth={1.75} aria-hidden="true" />
-                        </button>
-                      </div>
-                    {/each}
-                    <Button variant="outline" size="sm" class="h-9" onclick={() => (s.headers = [...(s.headers ?? []), { id: `hdr-${++rowSeq}`, key: '', value: '' }])}>Add</Button>
-                  </div>
-                {/if}
+                  {/each}
+                  <Button variant="outline" size="sm" class="h-9" onclick={() => (s.headers = [...(s.headers ?? []), { id: `hdr-${++rowSeq}`, key: '', value: '' }])}>Add</Button>
+                </div>
               </div>
             {:else}
               <p class={hint}>No MCP servers configured.</p>

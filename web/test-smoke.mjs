@@ -240,6 +240,11 @@ console.log('OK streaming parity');
 
   resize(400, 500);
   assert(classes.has('kb-anim') && vars['--app-h'] === '500px', 'keyboard-sized drop animates');
+  // One resize fires BOTH listeners (window + visualViewport); the second
+  // event sees a zero delta and must not clear the class, or the transition
+  // is gone before the first style recalc and the shell snaps.
+  onResize();
+  assert(classes.has('kb-anim'), 'second event of the burst keeps kb-anim');
   resize(400, 800);
   assert(classes.has('kb-anim') && vars['--app-h'] === '800px', 'keyboard-sized gain animates');
   resize(400, 740);

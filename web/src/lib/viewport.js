@@ -30,13 +30,19 @@ function layoutHeight() {
 function measure() {
   const w = window.innerWidth;
   const h = layoutHeight();
+  const delta = Math.abs(h - lastH);
   // Only a keyboard-shaped jump (big height delta, same width) animates:
   // rotations and browser chrome showing/hiding must track instantly or the
-  // shell visibly lags behind them.
-  document.documentElement.classList.toggle(
-    'kb-anim',
-    w === lastW && Math.abs(h - lastH) > KEYBOARD_JUMP
-  );
+  // shell visibly lags behind them. A zero delta is the SECOND event of the
+  // same burst (window resize and visualViewport resize both fire) and must
+  // leave the class alone — toggling it off there clears the transition
+  // before the first style recalc and the shell snaps instead of gliding.
+  if (delta > 0) {
+    document.documentElement.classList.toggle(
+      'kb-anim',
+      w === lastW && delta > KEYBOARD_JUMP
+    );
+  }
   document.documentElement.style.setProperty('--app-h', `${h}px`);
   lastW = w;
   lastH = h;

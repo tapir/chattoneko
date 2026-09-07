@@ -248,6 +248,24 @@ console.log('OK streaming parity');
   console.log('OK viewport keyboard heuristic');
 }
 
+// --- attachment text sniff (the client's copy of attach.looksText) ---
+{
+  const { looksText } = await import('./src/lib/text-sniff.js');
+  const file = (bytes) => new File([bytes], 'f');
+  const enc = new TextEncoder();
+  assert(await looksText(file(enc.encode('# notes\nпривет 😀\ttab'))),
+    'utf-8 text accepted regardless of extension');
+  assert(await looksText(file(enc.encode('x'))), 'extensionless text accepted');
+  assert(!(await looksText(file(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00, 0x01])))),
+    'zip (NUL byte) rejected');
+  assert(!(await looksText(file(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))),
+    'png header rejected');
+  assert(!(await looksText(file(new Uint8Array([0xff, 0xfe, 0x68, 0x00, 0x69, 0x00])))),
+    'utf-16 rejected like the server does');
+  assert(await looksText(file(new Uint8Array(0))), 'empty file left to the empty-file check');
+  console.log('OK attachment text sniff');
+}
+
 function assert(cond, msg) {
   if (!cond) {
     console.error('FAIL:', msg);

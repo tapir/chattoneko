@@ -10,8 +10,8 @@ import { Capacitor } from "@capacitor/core";
 // MIME filter for the Files picker: none. Android reports application/
 // octet-stream for every extension it can't map (.go, .rs, .sh, .toml…), so
 // any allow-list either hides those files or includes the catch-all and
-// filters nothing. addAttachments() validates by extension against the same
-// list the server enforces, so the picker stays out of it.
+// filters nothing. addAttachments() validates by content — the same rule the
+// server applies — so the picker stays out of it.
 
 const MIME_EXT = {
   "image/jpeg": "jpg",
@@ -46,7 +46,7 @@ async function fetchBlob(url, what) {
 }
 
 // Camera shots have no filename — synthesize one from the blob's MIME type so
-// the extension passes addAttachments() validation.
+// addAttachments() recognizes the bytes as an image.
 function photoFile(blob, prefix) {
   const ext = MIME_EXT[blob.type] ?? "jpg";
   return new File([blob], `${prefix}-${stamp()}.${ext}`, {
@@ -112,10 +112,10 @@ async function pickVia(pick, what) {
   }
 }
 
-// The picker's display name when it carries an extension, so validation in
-// addAttachments() matches what the server enforces at send time. The plugin
-// falls back to the URI's last path segment ("12") when a provider has no
-// DISPLAY_NAME — synthesize an extension from the MIME in that case.
+// The picker's display name when it carries an extension, so addAttachments()
+// can tell an image from text. The plugin falls back to the URI's last path
+// segment ("12") when a provider has no DISPLAY_NAME — synthesize an
+// extension from the MIME in that case.
 function pickedName(f, blob) {
   const name = f.name ?? "";
   if (/\.[A-Za-z0-9]{2,5}$/.test(name)) return name;

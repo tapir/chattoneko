@@ -1,5 +1,5 @@
 <script>
-  import { app, ACCEPT_FILE_EXTS } from '../lib/state.svelte.js';
+  import { app } from '../lib/state.svelte.js';
   import { onMount } from 'svelte';
   import { EyeOff, Paperclip, SendHorizontal, Square, X } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
@@ -115,10 +115,6 @@
     }
   }
 
-  // accept="" attribute mirrors the attachable-extension lists (single
-  // source of truth in state.svelte.js).
-  const ACCEPT = ACCEPT_FILE_EXTS.map((e) => `.${e}`).join(',');
-
   let canSend = $derived(
     (app.draftFor().trim().length > 0 || pending.length > 0) && !sending,
   );
@@ -176,7 +172,9 @@
   // Clipboard paste: images (and files) land as clipboardData.files, not
   // as insertable text — upload them as pending attachments instead of
   // letting the paste fall through or drop binary gibberish into the draft.
-  // Staging is client-side only (no network), so both handlers are plain.
+  // Staging is client-side only (no network — the text sniff reads local
+  // bytes), so both handlers fire it and forget; addAttachments reports its
+  // own rejects by toast.
   function onPaste(e) {
     const files = Array.from(e.clipboardData?.files ?? []);
     if (files.length === 0) return; // plain text paste: default behavior
@@ -299,7 +297,11 @@
             <Paperclip class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
           {/if}
         </Button>
-        <input bind:this={fileInput} type="file" class="hidden" multiple accept={ACCEPT} onchange={onFiles} />
+        <!-- No accept="": browsers map it through the OS extension→MIME table,
+             which has no entry for .go/.toml and calls .ts a video, so any
+             allow-list hides files the server would accept. addAttachments()
+             filters by content instead. -->
+        <input bind:this={fileInput} type="file" class="hidden" multiple onchange={onFiles} />
 
         <textarea
           bind:this={textArea}

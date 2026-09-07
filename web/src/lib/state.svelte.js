@@ -18,22 +18,20 @@ import {
   isTokenExpired,
 } from "./server.js";
 import { Typewriter } from "./typewriter.js";
+import { looksText } from "./text-sniff.js";
 import { toast as sonnerToast } from "svelte-sonner";
 
 const CHAT_PAGE = 30;
 
 // Client-side staging rules for attachments, mirroring the server's
 // (internal/attach + internal/api limits, exposed via /api/config). Rejects
-// surface at attach time; the server re-validates at send time.
+// surface at attach time; the server re-validates at send time. Images are
+// picked by extension (the server sniffs their magic bytes); everything else
+// is judged by content in lib/text-sniff.js, so there is no text-extension
+// list to keep in sync.
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp"];
-const TEXT_EXTS = [
-  "txt", "md", "markdown", "yaml", "yml", "json", "jsonl", "ndjson",
-  "xml", "csv", "tsv", "toml", "ini", "conf", "log", "go", "py", "js",
-  "ts", "c", "cpp", "h", "rs", "java", "sh", "sql", "html", "css",
-];
-// Single source of truth for the attachable extensions: the composer's file
-// input accept="" attribute is derived from these two lists.
-export const ACCEPT_FILE_EXTS = [...IMAGE_EXTS, ...TEXT_EXTS];
+const extOf = (name) =>
+  name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
 // Fallbacks if /api/config limits haven't loaded yet.
 const FALLBACK_MAX_FILES = 8; // internal/api maxUploadFiles
 const FALLBACK_MAX_RAW_IMAGE_BYTES = 64 * 1024 * 1024; // attach.MaxRawUploadBytes
@@ -823,7 +821,15 @@ class AppState {
   // Stage files for the next send entirely client-side: no chat is created
   // and nothing is uploaded until send(). Validation mirrors the server's
   // rules so rejects surface immediately at attach time.
-  addAttachments(files) {
+  async addAttachments(files) {
+    // Sniffed up front so the staging loop below stays synchronous: reading
+    // and writing pendingAttachments in the same tick is what keeps two
+    // overlapping calls (paste, then drop) from clobbering each other.
+    const readable = await Promise.all(
+      files.map((f) =>
+        IMAGE_EXTS.includes(extOf(f.name || "")) ? true : looksText(f).catch(() => false),
+      ),
+    );
     const key = this.activeChatId ?? "";
     const list = this.pendingAttachments[key] ?? [];
     const limits = this.config?.limits ?? {};
@@ -833,17 +839,14 @@ class AppState {
       limits.max_raw_upload_bytes ?? FALLBACK_MAX_RAW_IMAGE_BYTES;
 
     const staged = [];
-    for (const file of files) {
+    for (const [i, file] of files.entries()) {
       if (list.length + staged.length >= maxFiles) {
         this.toast("error", `Too many attachments (max ${maxFiles})`);
         break;
       }
       const name = file.name || "file";
-      const ext = name.includes(".")
-        ? name.slice(name.lastIndexOf(".") + 1).toLowerCase()
-        : "";
-      const isImage = IMAGE_EXTS.includes(ext);
-      if (!isImage && !TEXT_EXTS.includes(ext)) {
+      const isImage = IMAGE_EXTS.includes(extOf(name));
+      if (!readable[i]) {
         this.toast("error", `${name}: unsupported file type`);
         continue;
       }

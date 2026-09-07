@@ -1,5 +1,5 @@
 <script>
-  // Right-side panel sheet shared by Logs / Tools / System prompt.
+  // Right-side panel sheet (Tools).
   // Owns the user-resizable width (persisted under `storageKey`) and the
   // left-edge drag handle, so callers only supply a body snippet.
   // Mobile (<sm): no resize handle, the sheet is truly fullscreen
@@ -14,18 +14,11 @@
     storageKey,
     title,
     description = '',
-    headerExtra = null, // optional snippet rendered next to the title
     children,
     open = $bindable(false),
-    onOpenChange = null,
   } = $props();
 
   let width = $state(448);
-
-  function handleOpenChange(next) {
-    open = next;
-    onOpenChange?.(next);
-  }
 
   // Native Android back button: while open, this sheet is the topmost
   // overlay, so back closes it (registerOverlay's return value is the
@@ -35,16 +28,13 @@
   });
 </script>
 
-<Sheet.Root {open} onOpenChange={handleOpenChange}>
+<Sheet.Root {open} onOpenChange={(next) => (open = next)}>
   <Sheet.Content side="right" class="w-full gap-0 max-sm:w-full! max-sm:max-w-full! sm:max-w-none" style="width: {width}px; max-width: 94vw;">
     <div class="max-sm:hidden">
       <ResizeHandle bind:width {storageKey} invert label="Resize {title} panel" />
     </div>
     <Sheet.Header>
-      <Sheet.Title class="flex items-center gap-2">
-        {title}
-        {#if headerExtra}{@render headerExtra()}{/if}
-      </Sheet.Title>
+      <Sheet.Title>{title}</Sheet.Title>
       {#if description}
         <Sheet.Description>{description}</Sheet.Description>
       {/if}

@@ -82,9 +82,6 @@ class AppState {
 
   // server config (models whitelist, tools catalog, limits)
   config = $state(null);
-  // Effective system prompt for the ACTIVE chat (config prompt + enabled tool
-  // definitions), served by GET /chats/:id; falls back to the config-level one.
-  systemPrompt = $state("");
 
   // sidebar
   chats = $state([]);
@@ -525,12 +522,11 @@ class AppState {
     this.chatToolOverrides = {};
     this.chatLoading = true;
     try {
-      const { chat, messages, usage, systemPrompt } = await api.getChat(id);
+      const { chat, messages, usage } = await api.getChat(id);
       if (this.activeChatId !== id) return; // navigated away meanwhile
       this.chat = chat;
       this.messages = messages;
       this.chatUsage = usage ?? null; // per-chat token totals for the top bar
-      if (systemPrompt != null) this.systemPrompt = systemPrompt;
       this.chatToolOverrides = { ...(chat.tools ?? {}) };
       const gen = messages.find(
         (m) => m.role === "assistant" && m.status === "generating",
@@ -563,7 +559,6 @@ class AppState {
     this.chat = null;
     this.messages = [];
     this.chatUsage = null;
-    this.systemPrompt = "";
     this.chatToolOverrides = {};
     // Drop the closed chat's delta half but stay connected for the sidebar.
     if (attached && this.authed) this.attachStream();
@@ -573,7 +568,7 @@ class AppState {
     const id = this.activeChatId;
     if (!id) return;
     try {
-      const { chat, messages, usage, systemPrompt } = await api.getChat(id);
+      const { chat, messages, usage } = await api.getChat(id);
       if (this.activeChatId !== id) return;
       this.chat = chat;
       // Assign only on a real change. A focus refresh (the WebView fires
@@ -586,7 +581,6 @@ class AppState {
       if (JSON.stringify(messages) !== JSON.stringify(this.messages))
         this.messages = messages;
       if (usage) this.chatUsage = usage;
-      if (systemPrompt != null) this.systemPrompt = systemPrompt;
       // Keep the sidebar entry in sync with the freshly fetched title.
       const c = this.chats.find((c) => c.id === id);
       if (c && chat.title && c.title !== chat.title) c.title = chat.title;

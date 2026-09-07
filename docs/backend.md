@@ -162,15 +162,14 @@ Route table (`ServeMux` with method patterns):
 | `GET /api/meta` | auth_enabled + setup_complete flags (public) |
 | `POST /api/auth/login` | JWT login, returns `{username, token}` (public) |
 | `GET /api/auth/me` | current username |
-| `GET /api/config` | models whitelist + chat/vision defaults, model_info, tools catalog, effective system prompt, limits (`upload_max_file_bytes`, `max_tool_iterations`, `max_upload_files`, `max_raw_upload_bytes`) |
+| `GET /api/config` | models whitelist + chat/vision defaults, model_info, tools catalog, limits (`upload_max_file_bytes`, `max_tool_iterations`, `max_upload_files`, `max_raw_upload_bytes`) |
 | `GET /api/setup` | full config, secrets included (`provider.api_key` and MCP header values as plain text so the settings UI can display and edit them; auth omitted entirely since it is env-var driven), plus per-model metadata (`models.metas`) for the whitelist + `complete` flag |
 | `PUT /api/setup` | partial config update — only provided fields change (any `auth` field is ignored). `models.metas` upserts per-model metadata (models dropped from the whitelist lose theirs); `tool_defaults` replaces the whole global per-tool default map. Returns the full config. |
 | `POST /api/setup/models` | accepts `{"model_ids":[...]}`; fetches the provider's `/models`, stores per-model metadata (defaults where unreported), returns the stored rows + per-id source |
 | `GET /api/chats` | cursor-paginated chat list (`limit`, `before`, `before_id`) or `?q=` text search |
 | `GET /api/stream?chat=<id>&after=<seq>` | the ONE SSE endpoint: all-chats lifecycle + title events, plus chat `<id>`'s replayable half when `chat` is given |
 | `POST /api/chats` | create empty chat ("New Chat"; optional model/params/tools) |
-| `GET /api/chats/{id}` | chat + messages (seq-ordered) + `active` + effective system prompt + token totals |
-| `GET /api/chats/{id}/log` | plain-text debug dump of the whole conversation |
+| `GET /api/chats/{id}` | chat + messages (seq-ordered) + `active` + token totals |
 | `PATCH /api/chats/{id}` | rename and/or per-chat settings; broadcasts `chat_updated` / `settings_updated` |
 | `DELETE /api/chats/{id}` | cancels an active generation, deletes the chat (cascade) |
 | `POST /api/chats/{id}/messages` | send: claim → persist user message (+ link attachments) → broadcast → start generation (409 if a generation is active) |

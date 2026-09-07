@@ -153,12 +153,8 @@ export const api = {
       normalizeMessage,
     );
     const usage = data?.usage ?? null;
-    // Effective system prompt for this chat (config prompt + tool defs).
-    const systemPrompt = data?.system_prompt ?? null;
-    return { chat, messages, usage, systemPrompt };
+    return { chat, messages, usage };
   },
-  // Full conversation log (plain text), shown in the Logs panel (#6).
-  chatLog: (id) => request("GET", `/chats/${id}/log`, undefined, { text: true }),
   // Search chats by title (#4). Returns [] for empty query.
   searchChats: async (q) => {
     const data = await request("GET", `/chats?q=${encodeURIComponent(q)}`);

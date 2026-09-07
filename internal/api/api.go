@@ -61,7 +61,6 @@ func (s *Server) Handler() http.Handler {
 	gated("GET /api/stream", s.handleStream)
 	gated("POST /api/chats", s.handleCreateChat)
 	gated("GET /api/chats/{id}", s.handleGetChat)
-	gated("GET /api/chats/{id}/log", s.handleChatLog)
 	gated("PATCH /api/chats/{id}", s.handlePatchChat)
 	gated("DELETE /api/chats/{id}", s.handleDeleteChat)
 	gated("POST /api/chats/{id}/messages", s.handleSendMessage)

@@ -1,11 +1,8 @@
 <script>
   import { app } from '../lib/state.svelte.js';
-  import { api } from '../lib/api.js';
   import { formatTokens } from '../lib/format.js';
   import { themeState, toggleTheme } from '../lib/theme.svelte.js';
-  import { EllipsisVertical, FileText, Info, LogOut, Moon, PanelLeft, Plus, Server, Settings, Sun, Wrench } from '@lucide/svelte';
-  import CopyButton from './CopyButton.svelte';
-  import Spinner from './Spinner.svelte';
+  import { EllipsisVertical, LogOut, Moon, PanelLeft, Plus, Server, Settings, Sun, Wrench } from '@lucide/svelte';
   import PanelSheet from './PanelSheet.svelte';
   import * as Popover from '$lib/components/ui/popover';
   import { Badge } from '$lib/components/ui/badge';
@@ -36,25 +33,7 @@
     return pct < 10 ? (Math.round(pct * 10) / 10).toFixed(1) : String(Math.round(pct));
   });
 
-  // ---- Logs (#6): plain-text conversation log in a side sheet ----
-  let logText = $state('');
-  let logError = $state('');
-  let logLoading = $state(false);
-
-  async function loadLog() {
-    if (!chat) return;
-    logLoading = true;
-    logError = '';
-    try {
-      logText = await api.chatLog(chat.id);
-    } catch (e) {
-      logError = e?.message || 'Failed to load log';
-    } finally {
-      logLoading = false;
-    }
-  }
-
-  // ---- top-bar menu: theme, Logs, Tools, System prompt, Settings collapse
+  // ---- top-bar menu: theme, Tools, Settings collapse
   // into a 3-dot menu at every size; mobile additionally gets a new-chat
   // button, desktop keeps the in/out token + context-usage stats ----
   let mobileMenuOpen = $state(false);
@@ -62,23 +41,7 @@
   $effect(() => {
     if (mobileMenuOpen) return registerOverlay(() => (mobileMenuOpen = false));
   });
-  let logsOpen = $state(false);
   let toolsOpen = $state(false);
-  let systemOpen = $state(false);
-
-  // Opening a sheet programmatically doesn't fire PanelSheet's onOpenChange,
-  // so the log is loaded explicitly here.
-  function openPanel(which) {
-    mobileMenuOpen = false;
-    if (which === 'logs') {
-      logsOpen = true;
-      loadLog();
-    } else if (which === 'tools') {
-      toolsOpen = true;
-    } else {
-      systemOpen = true;
-    }
-  }
 </script>
 
 <header class="flex h-12 shrink-0 items-center gap-0.5 border-b bg-background/80 px-1.5 backdrop-blur sm:px-2">
@@ -123,28 +86,6 @@
       {/if}
     </div>
 
-    <!-- Logs: plain-text debug log of the whole conversation -->
-    <PanelSheet
-      storageKey="chattoneko-logs-width"
-      title="Logs"
-      description="Plain-text debug log of the whole conversation — models, tool calls, usage, errors."
-      bind:open={logsOpen}
-      onOpenChange={(open) => open && loadLog()}
-    >
-      {#snippet headerExtra()}
-        <CopyButton text={() => logText} label="Copy entire log to clipboard" size="sm" />
-      {/snippet}
-      {#if logLoading}
-        <p class="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground"><Spinner class="size-4" /> Loading log…</p>
-      {:else if logError}
-        <p class="py-6 text-center text-sm text-destructive">{logError}</p>
-      {:else if logText}
-        <pre class="whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">{logText}</pre>
-      {:else}
-        <p class="py-6 text-center text-sm text-muted-foreground">Log is empty.</p>
-      {/if}
-    </PanelSheet>
-
     <!-- Tools menu: available (MCP) tools + per-chat enable/disable -->
     <PanelSheet
       storageKey="chattoneko-tools-width"
@@ -174,20 +115,6 @@
       </div>
     </PanelSheet>
 
-    <!-- System prompt (read-only): config prompt + enabled tool definitions -->
-    <PanelSheet
-      storageKey="chattoneko-system-width"
-      bind:open={systemOpen}
-      title="System prompt"
-      description="The effective system prompt sent with this conversation — the configured prompt plus the definitions of the enabled tools, so the model knows what it can call."
-    >
-      {#if app.systemPrompt || config?.system_prompt}
-        <pre class="whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">{app.systemPrompt || config?.system_prompt}</pre>
-      {:else}
-        <p class="text-sm text-muted-foreground">No system prompt is configured and no tools are enabled, so no system prompt is sent.</p>
-      {/if}
-    </PanelSheet>
-
     <!-- Mobile-only: new chat straight from the top bar -->
     <a
       href="#/"
@@ -198,7 +125,7 @@
       <Plus class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
     </a>
 
-    <!-- 3-dot menu: theme, Logs, Tools, System prompt, Settings, Change Server, Log Out -->
+    <!-- 3-dot menu: theme, Tools, Settings, Change Server, Log Out -->
     <Popover.Root bind:open={mobileMenuOpen}>
       <Popover.Trigger
         class="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -216,29 +143,17 @@
           {theme === 'dark' ? 'Light mode' : 'Dark mode'}
         </button>
         <button
-          class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-40"
-          disabled={!chat}
-          onclick={() => openPanel('logs')}
-        >
-          <FileText class="size-4" strokeWidth={1.75} aria-hidden="true" />
-          Logs
-        </button>
-        <button
           class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-          onclick={() => openPanel('tools')}
+          onclick={() => {
+            mobileMenuOpen = false;
+            toolsOpen = true;
+          }}
         >
           <Wrench class="size-4" strokeWidth={1.75} aria-hidden="true" />
           Tools
           {#if enabledTools.length > 0}
             <Badge variant="secondary" class="ml-auto px-1.5 text-[10px] tabular-nums">{enabledTools.length}</Badge>
           {/if}
-        </button>
-        <button
-          class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-          onclick={() => openPanel('system')}
-        >
-          <Info class="size-4" strokeWidth={1.75} aria-hidden="true" />
-          System prompt
         </button>
         <button
           class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"

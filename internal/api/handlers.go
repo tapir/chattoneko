@@ -144,9 +144,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			"default_chat_model":   cfg.Models.DefaultChatModel,
 			"default_vision_model": cfg.Models.DefaultVisionModel,
 		},
-		"model_info":    s.engine.ModelInfo(r.Context()),
-		"tools":         s.tools.Tools(),
-		"system_prompt": s.engine.SystemPrompt(),
+		"model_info": s.engine.ModelInfo(r.Context()),
+		"tools":      s.tools.Tools(),
 		"limits": map[string]any{
 			"upload_max_file_bytes": cfg.Limits.UploadMaxFileBytes,
 			"max_tool_iterations":   cfg.Limits.MaxToolIterations,
@@ -471,101 +470,11 @@ func (s *Server) handleGetChat(w http.ResponseWriter, r *http.Request) {
 		"chat":     chat,
 		"messages": msgs,
 		"active":   s.engine.HasActiveGeneration(id),
-		// Effective system prompt for this chat (the configured base prompt);
-		// shown verbatim in the System sheet.
-		"system_prompt": s.engine.SystemPrompt(),
 		"usage": map[string]any{
 			"prompt_tokens":     promptTotal,
 			"completion_tokens": completionTotal,
 		},
 	})
-}
-
-// handleChatLog renders the full conversation log as plain text for debugging
-// (opened in a new browser tab). Includes chat settings, the effective system
-// prompt, and per-message metadata: model, status, timestamps, usage/duration,
-// errors, tool calls (with arguments), tool results, reasoning and attachments.
-func (s *Server) handleChatLog(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	chat, ok := s.chatByID(w, r.Context(), id)
-	if !ok {
-		return
-	}
-	msgs, err := s.store.ListMessages(r.Context(), id)
-	if err != nil {
-		internalError(w, "chat log: list messages", err)
-		return
-	}
-
-	ts := func(ms int64) string { return time.UnixMilli(ms).UTC().Format(time.RFC3339) }
-
-	// Stream straight to the client: a full history can span hundreds of
-	// messages and building it as one string would hold every byte twice.
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	fmt.Fprintf(w, "Chattoneko Full History (debug log)\n")
-	fmt.Fprintf(w, "==============================\n\n")
-	fmt.Fprintf(w, "Chat ID:  %s\n", chat.ID)
-	fmt.Fprintf(w, "Title:    %s\n", chat.Title)
-	fmt.Fprintf(w, "Model:    %s (current chat default; each assistant message records its own)\n", chat.Model)
-	fmt.Fprintf(w, "Created:  %s\n", ts(chat.CreatedAt))
-	fmt.Fprintf(w, "Updated:  %s\n", ts(chat.UpdatedAt))
-	if pj, err := json.Marshal(chat.Params); err == nil && string(pj) != "{}" {
-		fmt.Fprintf(w, "Params:   %s\n", pj)
-	}
-	if len(chat.Tools) > 0 {
-		if tj, err := json.Marshal(chat.Tools); err == nil {
-			fmt.Fprintf(w, "Tool overrides: %s\n", tj)
-		}
-	}
-	if sp := s.engine.SystemPrompt(); sp != "" {
-		fmt.Fprintf(w, "\n--- EFFECTIVE SYSTEM PROMPT ---\n%s\n", sp)
-	} else {
-		fmt.Fprintf(w, "\n--- EFFECTIVE SYSTEM PROMPT ---\n(empty: no system prompt configured)\n")
-	}
-	fmt.Fprintf(w, "\n--- MESSAGES (%d) ---\n", len(msgs))
-	for _, m := range msgs {
-		fmt.Fprint(w, "\n------------------------------------------------\n")
-		fmt.Fprintf(w, "seq=%d [%s] role=%s status=%s id=%s\n", m.Seq, ts(m.CreatedAt), m.Role, m.Status, m.ID)
-		if m.UpdatedAt != m.CreatedAt {
-			fmt.Fprintf(w, "  updated: %s\n", ts(m.UpdatedAt))
-		}
-		// Per-message model: falls back to the chat default for messages
-		// that predate per-message model tracking.
-		if m.Role == store.RoleAssistant {
-			model := m.Model
-			if model == "" {
-				model = chat.Model + " (assumed; predates per-message tracking)"
-			}
-			fmt.Fprintf(w, "  model: %s\n", model)
-		}
-		if m.Role == store.RoleAssistant && (m.PromptTokens > 0 || m.CompletionTokens > 0 || m.DurationMs > 0) {
-			fmt.Fprintf(w, "  usage: input=%d output=%d duration=%dms\n", m.PromptTokens, m.CompletionTokens, m.DurationMs)
-		}
-		if m.Role == store.RoleTool {
-			fmt.Fprintf(w, "  tool result for call_id=%s name=%s\n", m.ToolCallID, m.Name)
-		}
-		if m.Error != "" {
-			fmt.Fprintf(w, "  error: %s\n", m.Error)
-		}
-		for _, tc := range m.ToolCalls {
-			fmt.Fprintf(w, "  TOOL CALL #%d %s (call_id=%s)\n    arguments: %s\n", tc.Position, tc.Name, tc.ProviderCallID, tc.Arguments)
-		}
-		for _, a := range m.Attachments {
-			fmt.Fprintf(w, "  ATTACHMENT id=%s %s (kind=%s, mime=%s, %d bytes)\n", a.ID, a.Filename, a.Kind, a.Mime, a.Size)
-			if a.HasDescription {
-				if full, err := s.store.GetAttachment(r.Context(), a.ID); err == nil && full.Description != "" {
-					fmt.Fprintf(w, "  [image description sent to chat models without image input]\n%s\n", full.Description)
-				}
-			}
-		}
-		if m.Reasoning != "" {
-			fmt.Fprintf(w, "\n  [reasoning]\n%s\n", m.Reasoning)
-		}
-		if m.Content != "" {
-			fmt.Fprintf(w, "\n%s\n", m.Content)
-		}
-	}
 }
 
 func (s *Server) handlePatchChat(w http.ResponseWriter, r *http.Request) {

@@ -193,6 +193,12 @@
 
   body {
     height: 100%;
+    /* html is overflow:visible, so this propagates to the viewport: the
+       document itself never scrolls (every pane has its own scroller). Also
+       what keeps the browser from scrolling the page to a focused input
+       while .h-app is mid-transition and momentarily taller than the
+       viewport. */
+    overflow: hidden;
     background-color: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
@@ -200,6 +206,31 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+  }
+
+  /* Full-screen shells read the px mirror of window.innerHeight that
+     lib/viewport.js keeps on <html> instead of 100dvh, because a viewport
+     unit cannot be transitioned — see .kb-anim below. In @layer base so the
+     layered Tailwind utilities still win where they override it
+     (SettingsSheet's sm:h-auto). */
+  .h-app {
+    height: var(--app-h, 100dvh);
+  }
+  .min-h-app {
+    min-height: var(--app-h, 100dvh);
+  }
+
+  /* Soft keyboard: the shell eases into its new height instead of snapping
+     the content up. Coarse pointers only — a desktop window drag has to
+     track the cursor, not glide behind it. kb-anim is set per-resize by
+     viewport.js, so rotations stay instant. */
+  @media (pointer: coarse) {
+    .kb-anim .h-app {
+      transition: height 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .kb-anim .min-h-app {
+      transition: min-height 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+    }
   }
 
   /* Deliberately not --accent: user message bubbles are bg-accent, so an
@@ -618,6 +649,10 @@
   .chat-progress-fill {
     animation: none;
     width: 80%;
+  }
+  .kb-anim .h-app,
+  .kb-anim .min-h-app {
+    transition: none;
   }
 }
 

@@ -69,7 +69,7 @@
   }
 </script>
 
-<div class="login-glow flex min-h-screen items-center justify-center p-6 p-safe-pad">
+<div class="login-glow flex min-h-app items-center justify-center p-6 p-safe-pad">
   <!-- Change-server (opened over an existing server) can be bailed out of
        while the address is still editable. Pins to the SCREEN top-right.
        Absolute positioning ignores the container's padding, so the safe-area

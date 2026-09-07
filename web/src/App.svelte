@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { initTheme } from './lib/theme.svelte.js';
+  import { initViewport } from './lib/viewport.js';
   import { app } from './lib/state.svelte.js';
   import { isNative } from './lib/server.js';
   import { registerOverlay, closeTopOverlay } from './lib/overlays.svelte.js';
@@ -108,6 +109,7 @@
 
   onMount(() => {
     initTheme(); // re-sync theme (head script already seeded it pre-paint)
+    initViewport(); // mirror the viewport height so the keyboard squeeze animates
     app.init(); // route is applied by the auth-gated $effect below
     // Dynamic import so the web bundle never loads Capacitor plugins
     // (same pattern as the camera/file-picker/status-bar plugins). The
@@ -163,7 +165,7 @@
 <svelte:window onhashchange={() => applyRoute()} onfocus={() => app.onFocus()} onclick={openSidebarFromTrigger} />
 
 {#if !app.authChecked}
-  <div class="loading-delay flex min-h-screen items-center justify-center p-safe-pad">
+  <div class="loading-delay flex min-h-app items-center justify-center p-safe-pad">
     <Spinner class="size-8" />
   </div>
 {:else if app.needsServerSetup || (app.authEnabled && !app.authed)}
@@ -171,7 +173,7 @@
        top; web renders the same card without it. -->
   <LoginScreen />
 {:else if app.serverDown}
-  <div class="flex min-h-screen items-center justify-center p-safe-pad">
+  <div class="flex min-h-app items-center justify-center p-safe-pad">
     <div class="flex w-full max-w-md flex-col items-center gap-4 rounded-xl border bg-card p-8 text-center shadow-sm">
       <div class="space-y-1.5">
         <div class="text-base font-semibold">Cannot reach the server</div>
@@ -190,7 +192,7 @@
   </div>
 {:else}
   <Tooltip.Provider delayDuration={400}>
-    <div class="flex h-dvh overflow-hidden bg-background text-foreground p-safe">
+    <div class="flex h-app overflow-hidden bg-background text-foreground p-safe">
     <!-- Desktop sidebar (user-resizable via the right-edge drag handle) -->
     {#if !desktopSidebarCollapsed}
       <!-- min-w-max: the sidebar can never be dragged narrower than its

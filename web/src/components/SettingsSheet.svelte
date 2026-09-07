@@ -416,7 +416,7 @@
 
     <!-- Fullscreen on mobile (like the sidebar and panel sheets); a
          centered dialog on sm+. -->
-    <div class="relative z-10 flex h-dvh w-full max-w-2xl flex-col bg-card text-card-foreground p-safe sm:h-auto sm:max-h-[92dvh] sm:rounded-xl sm:border sm:shadow-xl">
+    <div class="relative z-10 flex h-app w-full max-w-2xl flex-col bg-card text-card-foreground p-safe sm:h-auto sm:max-h-[92dvh] sm:rounded-xl sm:border sm:shadow-xl">
       <!-- Header -->
       <div class="flex items-start justify-between gap-4 border-b px-4 py-4 sm:px-6">
         <div class="min-w-0">

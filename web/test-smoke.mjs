@@ -187,6 +187,67 @@ console.log('OK streaming parity');
   console.log('OK AppStream routing + dedupe');
 }
 
+// --- viewport: which resizes animate (soft keyboard) and which must not ---
+// Last because it shims window/document. viewport.js reads the viewport size
+// at import time, so the shim has to be in place before the dynamic import.
+{
+  const vars = {};
+  const classes = new Set();
+  let onResize = null;
+  const win = {
+    innerWidth: 400,
+    innerHeight: 800,
+    visualViewport: { scale: 1, height: 800 },
+    addEventListener: (type, fn) => (onResize = fn),
+  };
+  win.visualViewport.addEventListener = win.addEventListener;
+  globalThis.window = win;
+  globalThis.document = {
+    documentElement: {
+      classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
+      style: { setProperty: (k, v) => (vars[k] = v) },
+    },
+  };
+  const { initViewport } = await import('./src/lib/viewport.js');
+
+  // Platforms that resize the LAYOUT viewport: the native WebView, and mobile
+  // browsers through interactive-widget=resizes-content.
+  const resize = (w, h) => {
+    win.innerWidth = w;
+    win.innerHeight = h;
+    win.visualViewport.height = h;
+    onResize();
+  };
+
+  initViewport();
+  assert(vars['--app-h'] === '800px' && !classes.has('kb-anim'),
+    `first measure mirrors the viewport and never animates (got ${vars['--app-h']})`);
+
+  resize(400, 500);
+  assert(classes.has('kb-anim') && vars['--app-h'] === '500px', 'keyboard-sized drop animates');
+  resize(400, 800);
+  assert(classes.has('kb-anim') && vars['--app-h'] === '800px', 'keyboard-sized gain animates');
+  resize(400, 740);
+  assert(!classes.has('kb-anim'), 'browser-chrome-sized delta stays instant');
+
+  // A platform that shrinks only the VISUAL viewport (a WebView that pans,
+  // iOS Safari): the shell still has to follow it down.
+  win.visualViewport.height = 440;
+  onResize();
+  assert(classes.has('kb-anim') && vars['--app-h'] === '440px',
+    `visual-viewport-only keyboard followed (got ${vars['--app-h']})`);
+
+  // Pinch zoom shrinks the visual viewport too and must be ignored.
+  win.visualViewport.scale = 2;
+  win.visualViewport.height = 220;
+  onResize();
+  assert(vars['--app-h'] === '740px', `pinch zoom ignored (got ${vars['--app-h']})`);
+
+  resize(800, 380);
+  assert(!classes.has('kb-anim'), 'rotation stays instant');
+  console.log('OK viewport keyboard heuristic');
+}
+
 function assert(cond, msg) {
   if (!cond) {
     console.error('FAIL:', msg);

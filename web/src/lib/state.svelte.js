@@ -481,6 +481,14 @@ class AppState {
     }
   }
 
+  // User-facing label for a tool name: the catalog's title (integrated tools'
+  // hardcoded one, MCP tools' settings override or what their server
+  // declared). '' when there is none or the tool left the catalog — callers
+  // fall back to the raw name.
+  toolTitle(name) {
+    return (this.config?.tools ?? []).find((t) => t.name === name)?.title || '';
+  }
+
   // ---- active chat ----
 
   // (Re)open the one SSE connection. chatId null = home view: the global

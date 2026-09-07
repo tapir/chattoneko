@@ -6,7 +6,8 @@
 //
 // Adding a new integrated tool:
 //  1. Create a file for it here (e.g. timelocation.go) with a `var MyTool = Tool{...}`
-//     holding all LLM-facing text (name, description, schema) hardcoded.
+//     holding all LLM-facing text (name, description, schema) and its
+//     user-facing title hardcoded.
 //  2. Add it to the list in Builtin() (catalog.go).
 package tools
 
@@ -37,7 +38,11 @@ type Tool struct {
 	Description    string          // LLM-facing description
 	Schema         json.RawMessage // JSON schema for the arguments
 	DefaultEnabled bool            // enabled by default (configurable here in code)
-	Handler        Handler
+	// Title is the USER-facing label the chat UI shows instead of Name
+	// ("Coding…"). Hardcoded here like the rest of the tool's text; the
+	// model never sees it. Empty falls back to Name in the UI.
+	Title   string
+	Handler Handler
 }
 
 // Handler executes one tool call. argsJSON is the raw arguments JSON the
@@ -87,6 +92,7 @@ func (r *Registry) Tools() []mcphub.Entry {
 			Server:         serverLabel,
 			Schema:         t.Schema,
 			DefaultEnabled: t.DefaultEnabled,
+			Title:          t.Title,
 		})
 	}
 	return out

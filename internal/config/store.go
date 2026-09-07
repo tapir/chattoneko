@@ -27,6 +27,7 @@ const (
 	keyMaxToolIterations     = "max_tool_iterations"
 	keyMCPCallTimeoutSeconds = "mcp_call_timeout_seconds"
 	keyToolDefaults          = "tool_defaults"
+	keyToolTitles            = "tool_titles"
 	// Auth has NO keys here: it is env-var driven (authFromEnv), read once
 	// at startup, and never persisted to the config table.
 )
@@ -137,6 +138,7 @@ func writeConfigRows(ctx context.Context, tx *sql.Tx, c *Config, now int64) erro
 	whitelist, _ := json.Marshal(c.Models.Whitelist)
 	servers, _ := json.Marshal(c.MCPServers)
 	toolDefaults, _ := json.Marshal(c.ToolDefaults)
+	toolTitles, _ := json.Marshal(c.ToolTitles)
 	rows := map[string]string{
 		keySystemPrompt:          c.SystemPrompt,
 		keyProviderBaseURL:       c.Provider.BaseURL,
@@ -150,6 +152,7 @@ func writeConfigRows(ctx context.Context, tx *sql.Tx, c *Config, now int64) erro
 		keyMaxToolIterations:     strconv.Itoa(c.Limits.MaxToolIterations),
 		keyMCPCallTimeoutSeconds: strconv.Itoa(c.Limits.MCPCallTimeoutSeconds),
 		keyToolDefaults:          string(toolDefaults),
+		keyToolTitles:            string(toolTitles),
 		// Auth is env-var driven and never persisted.
 	}
 	// One transaction, so write order is unobservable — range the map.
@@ -241,6 +244,11 @@ func loadSnapshot(ctx context.Context, db *sql.DB) (*Config, error) {
 	if v := kv[keyToolDefaults]; v != "" {
 		if err := json.Unmarshal([]byte(v), &c.ToolDefaults); err != nil {
 			slog.Warn("config: corrupt tool_defaults, ignoring", "error", err)
+		}
+	}
+	if v := kv[keyToolTitles]; v != "" {
+		if err := json.Unmarshal([]byte(v), &c.ToolTitles); err != nil {
+			slog.Warn("config: corrupt tool_titles, ignoring", "error", err)
 		}
 	}
 	if v := kv[keyUploadMaxFileBytes]; v != "" {

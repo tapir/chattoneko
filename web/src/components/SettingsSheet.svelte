@@ -51,6 +51,11 @@
   // live catalog (app.config.tools) or a card's fetched list; a tool absent
   // from the map keeps its own default_enabled.
   let toolDefaults = $state({});
+  // Global per-tool user-facing titles: sparse map (tool name → label) shown
+  // in the chat instead of the raw name. MCP tools only — integrated titles
+  // are hardcoded in the backend. Optional: an empty box keeps whatever the
+  // catalog already reports.
+  let toolTitles = $state({});
 
   // Models: one card per whitelisted model. The default chat/task models are
   // flagged from these cards — there are no separate inputs for them.
@@ -95,6 +100,7 @@
       mcp: mcpServers,
       // Sorted so the comparison is deterministic regardless of toggle order.
       tools: Object.entries(toolDefaults).sort(([a], [b]) => a.localeCompare(b)),
+      titles: Object.entries(toolTitles).sort(([a], [b]) => a.localeCompare(b)),
       limits: [uploadMaxBytes, maxToolIter, mcpTimeout],
     });
   }
@@ -129,6 +135,7 @@
     // every row, so drop the stale keys with them.
     serverTools = {};
     toolDefaults = { ...(c.tool_defaults ?? {}) };
+    toolTitles = { ...(c.tool_titles ?? {}) };
     baseline = snapshot();
     baselineMcp = JSON.stringify(mcpServers);
   }
@@ -383,6 +390,16 @@
     toolDefaults = { ...toolDefaults, [name]: checked };
   }
 
+  // Titles stay sparse: clearing the box drops the entry so the catalog's own
+  // title (the server's, or the placeholder in the box) shows again. Stored
+  // as typed — the backend trims — so typing a space doesn't fight the box.
+  function setToolTitle(name, value) {
+    const titles = { ...toolTitles };
+    if (value.trim()) titles[name] = value;
+    else delete titles[name];
+    toolTitles = titles;
+  }
+
   // ---- save ----
   async function save() {
     saving = true;
@@ -417,6 +434,7 @@
       // Auth is not patchable: it is driven by the CHATTO_USERNAME /
       // CHATTO_PASSWORD server environment variables.
       patch.tool_defaults = toolDefaults;
+      patch.tool_titles = toolTitles;
       // Only re-send the MCP server list when it actually changed, so
       // untouched servers don't get reconnected.
       if (JSON.stringify(mcpServers) !== baselineMcp) patch.mcp_servers = buildMcpServers();
@@ -751,15 +769,22 @@
                   {/each}
                   <Button variant="outline" size="sm" class="h-9" onclick={() => (s.headers = [...(s.headers ?? []), { id: `hdr-${++rowSeq}`, key: '', value: '' }])}>Add</Button>
                 </div>
-                <!-- This server's tool defaults: the same global tool_defaults
-                     map the integrated list below writes, only scoped to the
-                     card so the tools sit next to the server providing them. -->
+                <!-- This server's tool defaults + optional user-facing titles:
+                     the same global tool_defaults / tool_titles maps the
+                     integrated list below writes, only scoped to the card so
+                     the tools sit next to the server providing them. -->
                 {#if toolsFor(s).length}
                   <div class="space-y-1.5 border-t pt-2.5">
                     <Label class={labelCls}>Tools</Label>
                     <div class="flex flex-col gap-0.5">
                       {#each toolsFor(s) as tool (tool.name)}
-                        <ToolToggleRow {tool} checked={toolDefaultOn(tool)} onToggle={(checked) => setToolDefault(tool.name, checked)} />
+                        <ToolToggleRow
+                          {tool}
+                          checked={toolDefaultOn(tool)}
+                          onToggle={(checked) => setToolDefault(tool.name, checked)}
+                          titleValue={toolTitles[tool.name] ?? ''}
+                          onTitle={(v) => setToolTitle(tool.name, v)}
+                        />
                       {/each}
                     </div>
                   </div>

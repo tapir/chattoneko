@@ -37,6 +37,10 @@ type Entry struct {
 	Server         string          `json:"server"`          // config server name
 	Schema         json.RawMessage `json:"schema"`          // JSON schema for arguments
 	DefaultEnabled bool            `json:"default_enabled"` // config default toggle
+	// Title is the USER-facing label the UI shows instead of the raw name
+	// ("Coding…" for simple_code). Empty means "no title" — the UI falls back
+	// to Display. Never sent to the model, which only ever sees Display.
+	Title string `json:"title"`
 }
 
 // connectTimeout bounds dialing + tool listing for one MCP server so a dead
@@ -290,6 +294,7 @@ func listTools(ctx context.Context, session *mcp.ClientSession, sc config.MCPSer
 				Server:         sc.Name,
 				Schema:         schema,
 				DefaultEnabled: sc.DefaultEnabled,
+				Title:          mcpTitle(t),
 			})
 		}
 		if res.NextCursor == "" {
@@ -298,6 +303,20 @@ func listTools(ctx context.Context, session *mcp.ClientSession, sc config.MCPSer
 		cursor = res.NextCursor
 	}
 	return out, nil
+}
+
+// mcpTitle is the display title the MCP server itself declared, using the
+// spec's own precedence (title, then annotations.title). Empty when the
+// server sent neither — the configured tool_titles override (see tools.Merge)
+// and, failing that, the raw name is what the UI shows.
+func mcpTitle(t *mcp.Tool) string {
+	if t.Title != "" {
+		return t.Title
+	}
+	if t.Annotations != nil {
+		return t.Annotations.Title
+	}
+	return ""
 }
 
 // Tools returns the aggregated catalog.

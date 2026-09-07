@@ -1,9 +1,14 @@
 <script>
   // Expandable tool-call activity item: "Using tool X…" with arguments + result.
   import { Wrench } from '@lucide/svelte';
+  import { app } from '../lib/state.svelte.js';
   import CollapsibleStatus from './CollapsibleStatus.svelte';
 
   let { call, status = '' } = $props();
+
+  // The user-facing title from the catalog (hardcoded for integrated tools,
+  // configurable for MCP ones); the raw name shows when there is none.
+  let label = $derived(app.toolTitle(call.name) || call.name || '…');
 
   // A call still pending on a message that is no longer generating was cut
   // off (stop/failure/disconnect) — render it as failed, not spinning forever.
@@ -23,7 +28,7 @@
 
 <CollapsibleStatus
   icon={Wrench}
-  title={call.name || '…'}
+  title={label}
   {running}
   error={isError}
   errorBadge={!call.pending}

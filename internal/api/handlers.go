@@ -188,6 +188,10 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 	if toolDefaults == nil {
 		toolDefaults = map[string]bool{}
 	}
+	toolTitles := c.ToolTitles
+	if toolTitles == nil {
+		toolTitles = map[string]string{}
+	}
 	return map[string]any{
 		"system_prompt": c.SystemPrompt,
 		"provider": map[string]any{
@@ -207,6 +211,9 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 		// so the JSON stays deterministic (the settings UI compares snapshots
 		// to detect unsaved edits).
 		"tool_defaults": toolDefaults,
+		// Global per-tool user-facing titles (MCP tools; integrated tools are
+		// hardcoded). Same determinism note as above.
+		"tool_titles": toolTitles,
 		"limits": map[string]any{
 			"upload_max_file_bytes":    c.Limits.UploadMaxFileBytes,
 			"max_tool_iterations":      c.Limits.MaxToolIterations,
@@ -381,10 +388,11 @@ func (s *Server) handleSetupMCPTools(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "could not list tools: "+err.Error())
 		return
 	}
-	// Name + description is all the card renders; the schemas stay server-side.
+	// Name + description + the server's own display title is all the card
+	// renders; the schemas stay server-side.
 	tools := make([]map[string]string, 0, len(entries))
 	for _, e := range entries {
-		tools = append(tools, map[string]string{"name": e.Display, "description": e.Description})
+		tools = append(tools, map[string]string{"name": e.Display, "description": e.Description, "title": e.Title})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
 }

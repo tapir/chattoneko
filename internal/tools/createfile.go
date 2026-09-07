@@ -54,6 +54,7 @@ func CreateTextFile(files FileStore) Tool {
 		"additionalProperties": false
 	}`),
 		DefaultEnabled: true,
+		Title:          "Writing a file…",
 		Handler: func(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (string, error) {
 			return createTextFile(ctx, argsJSON, meta, files)
 		},

@@ -139,6 +139,12 @@ type Config struct {
 	// default_enabled) for chats that carry no override of their own. A
 	// tool absent from the map keeps the catalog default.
 	ToolDefaults map[string]bool `json:"tool_defaults"`
+	// ToolTitles is the global per-tool USER-facing label (settings UI):
+	// tool display name → title shown in the chat instead of the raw name.
+	// It overrides the catalog's own title (integrated tools' hardcoded one,
+	// MCP tools' server-declared one). Optional and sparse: a tool absent
+	// from the map — or mapped to "" — keeps its catalog title.
+	ToolTitles map[string]string `json:"tool_titles"`
 }
 
 // clone returns a deep copy so patches never mutate a published snapshot.
@@ -159,6 +165,12 @@ func (c *Config) clone() *Config {
 		cp.ToolDefaults = make(map[string]bool, len(c.ToolDefaults))
 		for k, v := range c.ToolDefaults {
 			cp.ToolDefaults[k] = v
+		}
+	}
+	if c.ToolTitles != nil {
+		cp.ToolTitles = make(map[string]string, len(c.ToolTitles))
+		for k, v := range c.ToolTitles {
+			cp.ToolTitles[k] = v
 		}
 	}
 	return &cp
@@ -191,6 +203,21 @@ func (c *Config) finalize() {
 	}
 	c.sanitizeWhitelist()
 	c.sanitizeMCPServers()
+	c.sanitizeToolTitles()
+}
+
+// sanitizeToolTitles trims the configured user-facing tool titles and drops
+// the blank ones, so an emptied settings box hands the label back to the
+// catalog (integrated tools' hardcoded title, MCP tools' server-declared one)
+// instead of storing a whitespace title.
+func (c *Config) sanitizeToolTitles() {
+	for name, title := range c.ToolTitles {
+		if t := strings.TrimSpace(title); t == "" {
+			delete(c.ToolTitles, name)
+		} else {
+			c.ToolTitles[name] = t
+		}
+	}
 }
 
 // sanitizeWhitelist drops empty and duplicate model ids and clears a

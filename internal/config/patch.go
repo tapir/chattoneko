@@ -22,6 +22,10 @@ type Patch struct {
 	// ToolDefaults replaces the whole global per-tool default map when
 	// present (empty map = every tool falls back to its catalog default).
 	ToolDefaults *map[string]bool `json:"tool_defaults,omitempty"`
+	// ToolTitles replaces the whole global per-tool user-facing title map
+	// when present (empty map = every tool falls back to its catalog title).
+	// Values are trimmed and blank ones dropped on write.
+	ToolTitles *map[string]string `json:"tool_titles,omitempty"`
 }
 
 // ProviderPatch updates the provider endpoint settings.
@@ -132,6 +136,11 @@ func applyPatch(c *Config, p Patch) {
 		// The decoded map is freshly allocated by the JSON decoder and never
 		// reused by the caller, so it can be adopted as-is.
 		c.ToolDefaults = *p.ToolDefaults
+	}
+	if p.ToolTitles != nil {
+		// Adopted as-is like ToolDefaults; finalize trims the values and drops
+		// the blank ones so the stored map stays sparse.
+		c.ToolTitles = *p.ToolTitles
 	}
 	if p.Limits != nil {
 		if p.Limits.UploadMaxFileBytes != nil {

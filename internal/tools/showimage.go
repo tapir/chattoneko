@@ -58,6 +58,7 @@ func ShowImage(files FileStore, limits *config.Store) Tool {
 		"additionalProperties": false
 	}`),
 		DefaultEnabled: true,
+		Title:          "Fetching an image…",
 		Handler: func(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (string, error) {
 			return showImage(ctx, argsJSON, meta, files, limits)
 		},

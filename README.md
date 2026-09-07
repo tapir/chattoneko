@@ -93,7 +93,7 @@ Four integrated tools, each toggleable per chat and globally in settings:
 - `create_text_file` — writes a complete UTF-8 text file that shows up as a download link on the reply. Text only, no binary formats.
 - `show_image` — fetches a direct image URL and displays it inline in the chat, so the model can show you a picture rather than paste a link.
 
-Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart. Each server card carries a **Fetch** button top right, next to the delete icon, that dials it and lists its tools right there with their own on/off defaults, so the global **Tool defaults** list stays purely the integrated tools above.
+Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart. Each server card carries a **Fetch** button top right, next to the delete icon, that dials it and lists its tools right there with their own on/off defaults, so the global **Tool defaults** list stays purely the integrated tools above. Every MCP tool row also has an optional **title** box: the friendly label the chat shows while that tool runs (`web_exa_search` → "Searching web…") instead of the raw name. Leave it empty to keep the tool's own title, or the name when it has none — integrated tools have theirs built in.
 
 ## Vision
 

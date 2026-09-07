@@ -28,7 +28,11 @@ type Source interface {
 // gets its DefaultEnabled replaced, so both the engine's per-chat effective
 // tool set and the API's tool listing see the configured default. A tool
 // absent from the map keeps its source's own default (integrated tools:
-// hardcoded; MCP tools: their server's default_enabled). cfg may be nil.
+// hardcoded; MCP tools: their server's default_enabled). The same goes for
+// the user-facing title: cfg's tool_titles map (tool name → label, edited in
+// the settings UI for MCP tools) replaces an entry's Title when it holds a
+// non-empty value, otherwise the source's own stays (integrated tools:
+// hardcoded; MCP tools: the title their server declared). cfg may be nil.
 type Merged struct {
 	cfg     *config.Store
 	sources []Source
@@ -42,11 +46,14 @@ func Merge(cfg *config.Store, sources ...Source) *Merged {
 
 // dedup merges the sources' tool lists, first source wins on display-name
 // collisions (the later entry is dropped, keeping Tools and Call consistent),
-// and applies the configured per-tool defaults.
+// and applies the configured per-tool defaults and titles.
 func (m *Merged) dedup() []mcphub.Entry {
 	var over map[string]bool
+	var titles map[string]string
 	if m.cfg != nil {
-		over = m.cfg.Get().ToolDefaults
+		cfg := m.cfg.Get()
+		over = cfg.ToolDefaults
+		titles = cfg.ToolTitles
 	}
 	owners := map[string]bool{}
 	var out []mcphub.Entry
@@ -60,6 +67,11 @@ func (m *Merged) dedup() []mcphub.Entry {
 			owners[e.Display] = true
 			if v, ok := over[e.Display]; ok {
 				e.DefaultEnabled = v
+			}
+			// Only a non-empty configured title wins: clearing the settings
+			// input must hand the label back to the source, not blank it.
+			if v := titles[e.Display]; v != "" {
+				e.Title = v
 			}
 			out = append(out, e)
 		}

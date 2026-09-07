@@ -31,6 +31,7 @@ var TimeLocation = Tool{
 	// No arguments.
 	Schema:         nil, // defaults to an empty object schema (see New)
 	DefaultEnabled: true,
+	Title:          "Checking the time…",
 	Handler:        timeLocation,
 }
 

@@ -26,6 +26,7 @@ func testMCPServer(t *testing.T) string {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "echo",
 		Description: "echo the given text back",
+		Title:       "Echoing…",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, args echoArgs) (*mcp.CallToolResult, any, error) {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: "echo: " + args.Text}},
@@ -98,6 +99,11 @@ func TestHubListAndCall(t *testing.T) {
 	}
 	if names["echo"].Server != "test" || !names["echo"].DefaultEnabled {
 		t.Fatalf("echo entry wrong: %+v", names["echo"])
+	}
+	// The server's own display title reaches the catalog; a tool that declares
+	// none (always_fails) keeps Title empty and the UI shows its raw name.
+	if names["echo"].Title != "Echoing…" || names["always_fails"].Title != "" {
+		t.Fatalf("titles wrong: echo=%q always_fails=%q", names["echo"].Title, names["always_fails"].Title)
 	}
 	if len(names["echo"].Schema) == 0 {
 		t.Fatal("echo schema empty")

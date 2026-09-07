@@ -108,6 +108,7 @@ var SimpleCode = Tool{
 		"return values are discarded. Execution is instruction-capped, so keep loops reasonable.",
 	Schema:         simpleCodeSchema,
 	DefaultEnabled: true,
+	Title:          "Coding…",
 	Handler:        simpleCode,
 }
 

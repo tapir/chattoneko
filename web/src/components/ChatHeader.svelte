@@ -82,6 +82,13 @@
         >
           <div class="absolute inset-y-0 left-0 bg-primary/60" style="width: {Math.min(100, Number(contextPct) || 0)}%"></div>
           <span class="absolute inset-0 flex items-center justify-center tabular-nums">{contextPct === '0.0' ? '0' : contextPct}%</span>
+          <!-- Same label clipped to the filled part, in the fill's contrast color,
+               so the % stays readable over the fill at any width, both themes. -->
+          <span
+            aria-hidden="true"
+            class="absolute inset-0 flex items-center justify-center tabular-nums text-primary-foreground"
+            style="clip-path: inset(0 {100 - Math.min(100, Number(contextPct) || 0)}% 0 0)"
+            >{contextPct === '0.0' ? '0' : contextPct}%</span>
         </div>
       {/if}
     </div>

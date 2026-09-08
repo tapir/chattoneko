@@ -110,11 +110,23 @@
           : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
     ]}
   >
-    <span class={['min-w-0 flex-1 truncate', isGenerating && 'breathing']}>{displayTitle()}</span>
-    <!-- Absolutely positioned overlay so the row never reflows when the
-         actions appear on hover. No background/gradient here: the row
-         itself carries the hover color, and a separate overlay background
-         would lag behind the row's color transition and show as a patch. -->
+    <!-- The delete icon below is an absolute overlay that takes no layout
+         space, so reserve its width (right-1 + size-6 + gap-1 = pr-5.5) in
+         exactly the states it is visible: the title then ellipsizes like it
+         does on a narrower sidebar instead of sliding under the icon. -->
+    <span
+      class={[
+        'min-w-0 flex-1 truncate',
+        isGenerating && 'breathing',
+        revealed
+          ? 'pr-5.5'
+          : '[@media(hover:hover)]:group-hover:pr-5.5 group-focus-within:pr-5.5'
+      ]}>{displayTitle()}</span>
+    <!-- Absolutely positioned overlay so the row itself never reflows when
+         the actions appear on hover (only the title's padding, above). No
+         background/gradient here: the row itself carries the hover color,
+         and a separate overlay background would lag behind the row's color
+         transition and show as a patch. -->
     <span
       class={[
         'absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-md transition-opacity',

@@ -5,6 +5,7 @@
   import logoUrl from '$lib/logo.svg';
   import { X } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
+  import { fade, slide } from 'svelte/transition';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
@@ -81,6 +82,7 @@
       class="absolute right-[max(1.25rem,env(safe-area-inset-right))] top-[max(1.25rem,env(safe-area-inset-top))] rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       title="Close without changes"
       onclick={() => app.cancelChangeServer()}
+      transition:fade={{ duration: 120 }}
     >
       <X class="size-5" strokeWidth={1.75} aria-hidden="true" />
     </button>
@@ -90,13 +92,20 @@
   <div class="w-full max-w-sm -translate-y-[6vh]">
     <div class="flex flex-col items-center pb-6 text-center">
       <img src={logoUrl} alt="Chattoねこ logo" class="mb-4 size-24" />
-      {#if !credsPhase}
-        <h2 class="text-xl font-semibold">Connect to a サーバー</h2>
-        <p class="text-sm text-muted-foreground">Enter the address of your Chattoねこ server</p>
-      {:else}
-        <h2 class="text-xl font-semibold">Sign in to Chattoねこ</h2>
-        <p class="text-sm text-muted-foreground">Enter your credentials to continue</p>
-      {/if}
+      <!-- Heading swaps with the phase: keyed so the new copy fades in
+           instead of snapping. Out-fade would stack both copies in flow and
+           shove the form down, so it's in-only. -->
+      {#key credsPhase}
+        <div class="flex flex-col items-center" in:fade={{ duration: 150 }}>
+          {#if !credsPhase}
+            <h2 class="text-xl font-semibold">Connect to a サーバー</h2>
+            <p class="text-sm text-muted-foreground">Enter the address of your Chattoねこ server</p>
+          {:else}
+            <h2 class="text-xl font-semibold">Sign in to Chattoねこ</h2>
+            <p class="text-sm text-muted-foreground">Enter your credentials to continue</p>
+          {/if}
+        </div>
+      {/key}
     </div>
 
     <form onsubmit={submit} class="space-y-4">
@@ -123,14 +132,17 @@
           />
         </div>
       {/if}
+      <!-- Grows the form open when the address locks and credentials appear. -->
       {#if credsPhase}
-        <div class="space-y-1.5">
-          <Label for="login-username">Username</Label>
-          <Input id="login-username" type="text" class="h-9" bind:value={username} autocomplete="username" required />
-        </div>
-        <div class="space-y-1.5">
-          <Label for="login-password">Password</Label>
-          <Input id="login-password" type="password" class="h-9" bind:value={password} autocomplete="current-password" required />
+        <div class="space-y-4" transition:slide={{ duration: 200 }}>
+          <div class="space-y-1.5">
+            <Label for="login-username">Username</Label>
+            <Input id="login-username" type="text" class="h-9" bind:value={username} autocomplete="username" required />
+          </div>
+          <div class="space-y-1.5">
+            <Label for="login-password">Password</Label>
+            <Input id="login-password" type="password" class="h-9" bind:value={password} autocomplete="current-password" required />
+          </div>
         </div>
       {/if}
       <Button type="submit" class="h-9 w-full" disabled={busy}>

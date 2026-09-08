@@ -59,6 +59,21 @@
     };
   }
 
+  // Crossfade between the fullscreen gates (login / server-down / app). Plain
+  // `fade` isn't enough: the outgoing screen would stay in flow and push the
+  // incoming one below the fold, so the outro pins it out of flow (and
+  // click-through) for the length of the fade. Declared as separate in:/out:
+  // directives because Svelte caches one `transition:` config for both
+  // directions, which would leave us unable to tell them apart here.
+  // ponytail: the spinner branch gets no transition — its .loading-delay
+  // animation keeps it invisible for 0.5s, and an outro would force it to
+  // opacity 1 and flash it on fast boots.
+  function screenFade(node, { duration = 180 } = {}, { direction } = {}) {
+    if (direction === 'out')
+      Object.assign(node.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+    return { duration, easing: cubicOut, css: (t) => `opacity: ${t}` };
+  }
+
   function parseHash() {
     const h = location.hash || '#/';
     const m = h.match(/^#\/c\/([^/]+)/);
@@ -170,10 +185,17 @@
   </div>
 {:else if app.needsServerSetup || (app.authEnabled && !app.authed)}
   <!-- One screen for both gates: native adds the server-address field on
-       top; web renders the same card without it. -->
-  <LoginScreen />
+       top; web renders the same card without it. The wrapper carries the
+       crossfade: transitions go on elements, not components. -->
+  <div in:screenFade out:screenFade>
+    <LoginScreen />
+  </div>
 {:else if app.serverDown}
-  <div class="flex min-h-app items-center justify-center p-safe-pad">
+  <div
+    class="flex min-h-app items-center justify-center p-safe-pad"
+    in:screenFade
+    out:screenFade
+  >
     <div class="flex w-full max-w-md flex-col items-center gap-4 rounded-xl border bg-card p-8 text-center shadow-sm">
       <div class="space-y-1.5">
         <div class="text-base font-semibold">Cannot reach the server</div>
@@ -192,7 +214,11 @@
   </div>
 {:else}
   <Tooltip.Provider delayDuration={400}>
-    <div class="flex h-app overflow-hidden bg-background text-foreground p-safe">
+    <div
+      class="flex h-app overflow-hidden bg-background text-foreground p-safe"
+      in:screenFade
+      out:screenFade
+    >
     <!-- Desktop sidebar (user-resizable via the right-edge drag handle) -->
     {#if !desktopSidebarCollapsed}
       <!-- min-w-max: the sidebar can never be dragged narrower than its

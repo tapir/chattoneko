@@ -45,10 +45,10 @@
   let toolsOpen = $state(false);
 </script>
 
-{#snippet stats(cls)}
+{#snippet stats(cls, barCls = 'text-[9px]')}
   <!-- Token totals + context usage: header on desktop, 3-dot menu top row on mobile -->
   <div
-    class="items-center gap-2.5 text-[11px] tabular-nums text-muted-foreground {cls}"
+    class="items-center gap-2.5 tabular-nums text-muted-foreground {cls}"
     title="Total input / output tokens for this chat"
   >
     <span class="flex items-center gap-0.5">
@@ -59,7 +59,7 @@
     </span>
     {#if contextWindow > 0}
       <div
-        class="relative h-4 w-16 overflow-hidden rounded-full border border-border bg-muted text-[9px] leading-none"
+        class="relative h-4 w-16 overflow-hidden rounded-full border border-border bg-muted leading-none {barCls}"
         title="{contextUsed.toLocaleString()} of {contextWindow.toLocaleString()} tokens used"
         role="progressbar"
         aria-valuenow={Number(contextPct) || 0}
@@ -97,7 +97,7 @@
   <!-- Right: token/context stats (desktop), new chat (mobile), 3-dot menu -->
   <div class="flex items-center gap-0.5">
     <!-- Token totals + context usage (desktop only) -->
-    {@render stats('hidden px-2 sm:flex')}
+    {@render stats('hidden px-2 text-[11px] sm:flex')}
 
     <!-- Tools menu: available (MCP) tools + per-chat enable/disable -->
     <PanelSheet
@@ -136,10 +136,11 @@
       >
         <EllipsisVertical class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
       </Popover.Trigger>
-      <Popover.Content align="end" class="w-64 p-1.5">
+      <!-- Mobile: shrink-wrap to the stats row (with a floor so short rows still read as a menu); desktop keeps the fixed width -->
+      <Popover.Content align="end" class="w-fit min-w-52 p-1.5 sm:w-64">
         <!-- Mobile-only top row: token/context stats left, theme toggle (icon only) right -->
         <div class="flex items-center sm:hidden">
-          {@render stats('flex pl-3')}
+          {@render stats('flex pl-3 text-[13px]', 'text-[10px]')}
           <!-- mr-0.5: optically centers the icon over the ~19px Tools count badge below,
                whose right edge is flush with the item padding but whose pill is faint. -->
           <button

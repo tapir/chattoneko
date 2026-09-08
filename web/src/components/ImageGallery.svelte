@@ -15,8 +15,16 @@
   // button (never inside it), so controls like the "what the model saw"
   // badge can capture their own clicks without also opening the viewer.
   import { viewer } from '../lib/viewer.svelte.js';
+  import { attachMenu } from '../lib/attachmenu.svelte.js';
+  import { longPress } from '../lib/longpress.js';
   import { cn } from '../lib/utils.js';
   import AttachmentImage from './AttachmentImage.svelte';
+
+  // Long press (touch only) opens the Share / Copy sheet instead of the
+  // browser's own image menu. `select-none` + the iOS callout kill keep the
+  // native long-press affordances off the cell; message text keeps them.
+  const PRESS = 'select-none [-webkit-touch-callout:none]';
+  const press = (att) => longPress(() => attachMenu.open(att));
 
   let {
     items, // image attachments ({id, filename, kind, ...}); see AttachmentImage for local previews
@@ -55,10 +63,11 @@
       <div class="relative inline-block">
         <button
           type="button"
-          class="block cursor-zoom-in"
+          class="block cursor-zoom-in {PRESS}"
           title={`View ${items[0].filename}`}
           aria-label={`View ${items[0].filename}`}
           onclick={() => viewer.open(items[0], items)}
+          {...press(items[0])}
         >
           <AttachmentImage
             att={items[0]}
@@ -74,7 +83,7 @@
           <div class="relative">
             <button
               type="button"
-              class="relative block aspect-square w-full cursor-zoom-in overflow-hidden rounded-lg border bg-muted"
+              class="relative block aspect-square w-full cursor-zoom-in overflow-hidden rounded-lg border bg-muted {PRESS}"
               title={`View ${att.filename}`}
               aria-label={
                 i === visible.length - 1 && hidden > 0
@@ -82,6 +91,7 @@
                   : `View ${att.filename}`
               }
               onclick={() => viewer.open(att, items)}
+              {...press(att)}
             >
               <AttachmentImage {att} class="size-full object-cover" loading="lazy" />
               {#if i === visible.length - 1 && hidden > 0}

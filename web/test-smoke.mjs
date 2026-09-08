@@ -292,6 +292,96 @@ console.log('OK streaming parity');
   console.log('OK attachment text sniff');
 }
 
+// --- long press (the attachment action sheet's trigger) ---
+// The whole point is what it does NOT do: message text keeps the browser's
+// long press, and a desktop right-click keeps the native menu.
+{
+  const { longPress } = await import('./src/lib/longpress.js');
+
+  const fakeEl = () => {
+    const on = [];
+    return {
+      addEventListener: (t, fn, o) => on.push({ t, fn, o }),
+      removeEventListener: (t, fn) => {
+        const i = on.findIndex((l) => l.t === t && l.fn === fn);
+        if (i >= 0) on.splice(i, 1);
+      },
+      // Dispatch a click the way the browser would after a long press.
+      click() {
+        const e = evt('click');
+        for (const l of on.filter((l) => l.t === 'click' && l.o?.capture)) l.fn(e);
+        return e;
+      },
+    };
+  };
+  const evt = (type, over = {}) => ({
+    type,
+    defaultPrevented: false,
+    stopped: false,
+    preventDefault() {
+      this.defaultPrevented = true;
+    },
+    stopPropagation() {
+      this.stopped = true;
+    },
+    ...over,
+  });
+  const touch = (el, type, x = 0, y = 0) =>
+    evt(type, { pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, currentTarget: el });
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // A held touch fires exactly once, and the click that follows is swallowed
+  // so the lightbox doesn't open under the sheet.
+  let fired = 0;
+  const el = fakeEl();
+  const h = longPress(() => fired++);
+  h.onpointerdown(touch(el, 'pointerdown'));
+  await wait(500);
+  assert(fired === 1, `held touch fires once (got ${fired})`);
+  const click = el.click();
+  assert(click.defaultPrevented && click.stopped, 'the click after a long press is swallowed');
+  h.onpointerup(touch(el, 'pointerup'));
+
+  // Android fires contextmenu at its own threshold: prevented, and never a
+  // second open.
+  fired = 0;
+  const el2 = fakeEl();
+  const h2 = longPress(() => fired++);
+  h2.onpointerdown(touch(el2, 'pointerdown'));
+  const menu = evt('contextmenu');
+  h2.oncontextmenu(menu);
+  await wait(500);
+  assert(menu.defaultPrevented && fired === 1, 'touch contextmenu opens the sheet once');
+  h2.onpointerup(touch(el2, 'pointerup'));
+
+  // A scroll (finger drift, or the browser reclaiming the gesture) cancels.
+  fired = 0;
+  const h3 = longPress(() => fired++);
+  h3.onpointerdown(touch(fakeEl(), 'pointerdown', 10, 10));
+  h3.onpointermove(touch(null, 'pointermove', 10, 60));
+  await wait(500);
+  assert(fired === 0, `drift past the slop cancels (got ${fired})`);
+
+  fired = 0;
+  const h4 = longPress(() => fired++);
+  const el4 = fakeEl();
+  h4.onpointerdown(touch(el4, 'pointerdown'));
+  h4.onpointercancel(touch(el4, 'pointercancel'));
+  await wait(500);
+  assert(fired === 0, 'pointercancel (scroll takeover) cancels');
+
+  // Desktop: a mouse press never fires, and a right-click keeps the native
+  // menu — that's the "don't break anything else" half of the contract.
+  fired = 0;
+  const h5 = longPress(() => fired++);
+  h5.onpointerdown(evt('pointerdown', { pointerType: 'mouse', isPrimary: true, currentTarget: el4 }));
+  const rc = evt('contextmenu');
+  h5.oncontextmenu(rc);
+  await wait(500);
+  assert(fired === 0 && !rc.defaultPrevented, 'mouse press and right-click stay the browser\'s');
+  console.log('OK long press');
+}
+
 function assert(cond, msg) {
   if (!cond) {
     console.error('FAIL:', msg);

@@ -14,6 +14,7 @@
   import LoginScreen from './components/LoginScreen.svelte';
   import SettingsSheet from './components/SettingsSheet.svelte';
   import AttachmentViewer from './components/AttachmentViewer.svelte';
+  import AttachmentMenu from './components/AttachmentMenu.svelte';
   import { viewer } from './lib/viewer.svelte.js';
   import { lsGet, lsSet } from './lib/persist.js';
   import Spinner from './components/Spinner.svelte';
@@ -285,5 +286,10 @@
     onnext={() => viewer.step(1)}
   />
 {/if}
+
+<!-- Long-press sheet for an image / file chip in the chat (Share, Copy).
+     Always mounted, opens off the attachMenu singleton — the drawer needs
+     its close animation, so it can't be {#if}-mounted per press. -->
+<AttachmentMenu />
 
 <Toaster position="bottom-right" />

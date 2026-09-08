@@ -16,10 +16,10 @@
   // resolve inside the dialog exactly as they do everywhere else.
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
-  import { app } from '../lib/state.svelte.js';
   import { formatBytes } from '../lib/format.js';
   import { isNative } from '../lib/server.js';
   import { registerOverlay } from '../lib/overlays.svelte.js';
+  import { shareAttachment } from '../lib/attach-actions.js';
   import { Check, ChevronLeft, ChevronRight, Copy, Download, Share2, X, ZoomIn, ZoomOut } from '@lucide/svelte';
   import { copyText } from '../lib/clipboard.js';
 
@@ -139,57 +139,17 @@
   onDestroy(() => clearTimeout(copyTimer));
 
   // ---- share (native only) ----
-  // Capacitor's Share plugin wants a local file:// URL, so the bytes are
-  // staged in the app cache dir first — already exposed to other apps by the
-  // FileProvider in mobile/android/.../res/xml/file_paths.xml. `url` is the
-  // viewer's own source, so a staged, not-yet-uploaded image shares from its
-  // local object URL too.
+  // The staging + system sheet live in lib/attach-actions.js, shared with the
+  // chat's long-press sheet; this is just the button's busy state.
   let sharing = $state(false);
   async function share() {
     if (sharing) return;
     sharing = true;
     try {
-      // no-store: the <img> in this very dialog caches the same URL without
-      // CORS headers, and a poisoned cache entry makes the fetch fail ("Failed
-      // to fetch") on pictures that are visibly on screen. Servers now send
-      // Vary: Origin, which fixes it for good — this keeps sharing working
-      // against older ones too.
-      const res = await fetch(url, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { Filesystem, Directory } = await import('@capacitor/filesystem');
-      const { Share } = await import('@capacitor/share');
-      // The extension is what gives the share sheet its MIME type; stripping
-      // separators keeps a hostile filename inside the cache dir.
-      const name = (attachment?.filename || 'attachment').replace(/[^\w.-]+/g, '_');
-      await Filesystem.writeFile({
-        path: name,
-        data: await blobBase64(await res.blob()),
-        directory: Directory.Cache,
-        recursive: true, // the plugin's cache folder may not exist yet
-      });
-      const { uri } = await Filesystem.getUri({ path: name, directory: Directory.Cache });
-      await Share.share({ files: [uri] });
-    } catch (e) {
-      // Dismissing the system sheet comes back as a rejection, not a failure.
-      if (!/cancel/i.test(e?.message ?? ''))
-        app.toast('error', `Couldn't share: ${e?.message ?? 'unknown error'}`);
+      await shareAttachment(attachment);
     } finally {
       sharing = false;
     }
-  }
-
-  // Filesystem's binary write path takes base64 (no `encoding`); FileReader is
-  // the only portable encoder and the data-URL prefix isn't part of it.
-  // ponytail: the whole file crosses the bridge as base64 — fine at the sizes
-  // the server hands back (images are re-encoded to <=2048px); swap in
-  // Filesystem.downloadFile, which streams natively, if that ever hurts.
-  function blobBase64(blob) {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onloadend = () => resolve(String(r.result).split(',')[1] ?? '');
-      r.onerror = () => reject(new Error('could not read the file'));
-      r.readAsDataURL(blob);
-    });
   }
 
   async function loadText(id) {

@@ -13,6 +13,8 @@
   import { finishedTurns, boxCount } from '../lib/turns.js';
   import { api } from '../lib/api.js';
   import { viewer } from '../lib/viewer.svelte.js';
+  import { attachMenu } from '../lib/attachmenu.svelte.js';
+  import { longPress } from '../lib/longpress.js';
   import { Eye, FileText, Info, Paperclip, Pencil, RotateCcw, Workflow, X } from '@lucide/svelte';
   import CollapsibleStatus from './CollapsibleStatus.svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
@@ -397,9 +399,10 @@
                          but the click stays inside the app. -->
                     <button
                       type="button"
-                      class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                      class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors select-none [-webkit-touch-callout:none] hover:text-foreground"
                       title={`View ${att.filename}`}
                       onclick={() => viewer.open(att)}
+                      {...longPress(() => attachMenu.open(att))}
                     >
                       <Paperclip class="size-3" strokeWidth={1.75} aria-hidden="true" />
                       {att.filename}
@@ -473,9 +476,10 @@
                (the viewer keeps the real URL on its download anchor). -->
           <button
             type="button"
-            class="inline-flex items-center gap-1.5 rounded-lg border bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            class="inline-flex items-center gap-1.5 rounded-lg border bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors select-none [-webkit-touch-callout:none] hover:bg-muted hover:text-foreground"
             title={`View ${att.filename}`}
             onclick={() => viewer.open(att)}
+            {...longPress(() => attachMenu.open(att))}
           >
             <FileText class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
             <span class="max-w-48 truncate">{att.filename}</span>

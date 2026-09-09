@@ -188,6 +188,18 @@
     lastHeight = container.scrollHeight;
   }
 
+  // Each NEW reply re-engages auto-scroll: the user scrolled up mid-stream to
+  // read, then asked again — they expect to follow the fresh answer. Keyed on
+  // the live message id (a new uuid per generation), so stream deltas of the
+  // same reply don't yank a deliberately-unpinned list back down.
+  let liveId = app.live?.messageId ?? null;
+  $effect(() => {
+    const id = app.live?.messageId ?? null;
+    if (!id || id === liveId) return;
+    liveId = id;
+    scrollToBottom();
+  });
+
   function trackContent() {
     updateCanScroll();
     if (!pinned || !container) return;

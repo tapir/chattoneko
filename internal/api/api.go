@@ -33,11 +33,13 @@ type Server struct {
 	tools  ToolCatalog
 
 	staticFS fs.FS
+	// Build version (main.version, stamped by ldflags): reported on /api/meta.
+	version string
 }
 
 // New builds the server. staticFS is the embedded web/dist tree.
-func New(cfg *config.Store, st *store.Store, a *auth.Auth, eng *engine.Engine, tools ToolCatalog, staticFS fs.FS) *Server {
-	return &Server{cfg: cfg, store: st, auth: a, engine: eng, tools: tools, staticFS: staticFS}
+func New(cfg *config.Store, st *store.Store, a *auth.Auth, eng *engine.Engine, tools ToolCatalog, staticFS fs.FS, version string) *Server {
+	return &Server{cfg: cfg, store: st, auth: a, engine: eng, tools: tools, staticFS: staticFS, version: version}
 }
 
 // Handler returns the root mux. http.Server MUST NOT set WriteTimeout

@@ -45,6 +45,11 @@ import (
 //go:embed web/dist
 var webFS embed.FS
 
+// version is stamped at link time (make build → -ldflags -X main.version=…):
+// the release workflow passes the git tag, anything built by hand keeps this
+// default. Served on /api/meta so the SPA can show what it is talking to.
+var version = "1.0.0-local"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "chattoneko:", err)
@@ -149,7 +154,7 @@ func run() error {
 		return fmt.Errorf("embedded frontend: %w", err)
 	}
 	a := auth.New(cfgStore)
-	srv := api.New(cfgStore, st, a, eng, catalog, distFS)
+	srv := api.New(cfgStore, st, a, eng, catalog, distFS, version)
 
 	// Live config wiring: re-dial the provider and reconcile MCP servers
 	// whenever the relevant settings change. Both can take real time (MCP

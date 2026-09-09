@@ -58,6 +58,8 @@ make run          # builds the web UI, generates queries, packs the binary, star
 
 The Android APK is built with `make mobile-apk`.
 
+Both artifacts carry a version, shown in the sidebar's footer: `VERSION` (default `1.0.0-local`) is stamped into the binary as `main.version` — served on `/api/meta` — and into the APK as its `versionName`. The release workflow passes the git tag, so `make build VERSION=1.2.3` reproduces what a release ships.
+
 ## Configuration
 
 There is no config file. On first start the database is seeded with defaults and the server comes up. All configuration happens after your first visit to the page: enter your provider's base URL and API key, pick your models, done. Settings are stored in the database and apply live, no restart needed.
@@ -129,4 +131,4 @@ Open for contributions. The mobile app is Capacitor plus a WebView around the sa
 
 ## Disclaimer
 
-All cat pictures are from [magnific.com](https://magnific.com).
+All cat pictures are from [magnific.com](https://magnific.com) — attribution is required, so the app's sidebar footer links to them too.

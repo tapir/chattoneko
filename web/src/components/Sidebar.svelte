@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import { app } from '../lib/state.svelte.js';
 import logoUrl from '$lib/logo.svg';
   import { api } from '../lib/api.js';
@@ -86,6 +87,22 @@ import logoUrl from '$lib/logo.svg';
     }
     pull = 0;
   }
+
+  // ---- footer: build version + cat-art attribution ----
+  // Native reads the APK's own versionName through Capacitor's App plugin
+  // (dynamic import, so the web bundle never pulls it in) and shows ONLY that —
+  // falling back to the server's would flash the wrong number for the tick
+  // getInfo() takes. Web shows the server binary's version from /api/meta; a
+  // server too old to report one leaves the line out.
+  let apkVersion = $state('');
+  onMount(() => {
+    if (!app.nativeApp) return;
+    import('@capacitor/app')
+      .then(({ App }) => App.getInfo())
+      .then((info) => (apkVersion = info?.version ?? ''))
+      .catch(() => {});
+  });
+  let version = $derived(app.nativeApp ? apkVersion : app.serverVersion);
 </script>
 
 <!-- border-r only on lg+ (desktop inline sidebar). In the mobile sheet the
@@ -232,4 +249,20 @@ import logoUrl from '$lib/logo.svg';
       </Button>
     </div>
   {/if}
+
+  <!-- Furniture, not content: 11px, muted, no icons. -->
+  <footer class="shrink-0 space-y-0.5 border-t border-sidebar-border px-4 py-2 text-[11px] leading-snug text-muted-foreground">
+    {#if version}
+      <p>Version: {version}</p>
+    {/if}
+    <p>
+      All meow art by
+      <a
+        href="https://magnific.com"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="underline decoration-dotted underline-offset-2 hover:text-sidebar-foreground"
+      >magnific.com</a>
+    </p>
+  </footer>
 </aside>

@@ -57,7 +57,9 @@ The Android project is committed, but the web bundle is always regenerated from 
 
 1. `scripts/icons.mjs` — renders all launcher icon PNGs from the canonical SVGs with `rsvg-convert`: adaptive-icon layers (background + foreground) at 108dp per density bucket (mdpi 108 → xxxhdpi 432px), non-adaptive glyphs (`ic_launcher`, `ic_launcher_round`) at launcher sizes (48 → 192px).
 2. `npm run sync` — `npm run build` in `web/`, then `npx cap sync android` (copies `web/dist` into the Android project's assets and regenerates plugin wiring).
-3. `cd mobile/android && ./gradlew assembleDebug` → APK at `app/build/outputs/apk/debug/app-debug.apk`.
+3. `cd mobile/android && ./gradlew assembleDebug -PversionName=<version>` → APK at `app/build/outputs/apk/debug/app-debug.apk`.
+
+Versioning: `versionName` defaults to `1.0.0-local` in `app/build.gradle` and is overridden by the Makefile's `VERSION` (CI passes the git tag), `versionCode` by `GRADLE_FLAGS` (`-PversionCode=X*10000+Y*100+Z`). The sidebar's version line reads `versionName` back at runtime through Capacitor's `App.getInfo()` — the mobile counterpart of the server binary's version from `/api/meta`.
 
 Gradle/Android versions: Android Gradle Plugin 8.13, Java 21 source/target compatibility, `minSdk 24`, `compileSdk`/`targetSdk 36`.
 
@@ -68,7 +70,7 @@ Repo-root Makefile targets wrap emulator development (`ANDROID_SDK`, `AVD=chatto
 | Target | Does |
 | --- | --- |
 | `mobile` | `npm ci` + `npm run sync` in `mobile/` |
-| `mobile-apk` | `mobile` + `./gradlew assembleDebug` |
+| `mobile-apk` | `mobile` + `./gradlew assembleDebug -PversionName=$(VERSION) $(GRADLE_FLAGS)` |
 | `mobile-avd` | create the AVD if missing (and enable hardware keyboard input) |
 | `mobile-emulator` | start the AVD headless in the background (log: `/tmp/emulator.log`) |
 | `mobile-emulator-wait` | block until `sys.boot_completed` |

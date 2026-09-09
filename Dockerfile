@@ -22,7 +22,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN make build
+# The release workflow passes the git tag (vX.Y.Z); a plain `docker build`
+# keeps the Makefile's local default. The tag's leading v is stripped here so
+# the binary carries the same bare number the APK's versionName does.
+ARG VERSION=1.0.0-local
+RUN make build VERSION="${VERSION#v}"
 
 # ── Stage 2: runtime — alpine + su-exec entrypoint ───────────────────────────
 FROM alpine:3.21

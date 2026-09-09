@@ -7,11 +7,13 @@ android {
         applicationId "com.chattoneko.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // CI passes -PversionName/-PversionCode from the git tag; the defaults
-        // keep `make mobile-apk` working locally. Assignment form on purpose:
-        // `versionCode (x).toString()` parses as `versionCode(x).toString()`.
+        // `make mobile-apk` passes -PversionName (VERSION, the same string the
+        // Go binary is stamped with) and CI adds -PversionCode from the git tag;
+        // the defaults keep a bare `./gradlew` working locally. Assignment form
+        // on purpose: `versionCode (x).toString()` parses as
+        // `versionCode(x).toString()`.
         versionCode = Integer.parseInt(project.findProperty('versionCode') ?: '1')
-        versionName = project.findProperty('versionName') ?: '1.0'
+        versionName = project.findProperty('versionName') ?: '1.0.0-local'
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61

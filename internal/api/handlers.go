@@ -107,6 +107,10 @@ func (s *Server) handleMeta(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auth_enabled":   s.auth.Enabled(),
 		"setup_complete": s.cfg.Complete(),
+		// Immutable for the process lifetime and public anyway (it is the
+		// image tag / release name), so it rides along on the boot probe the
+		// SPA already makes — the sidebar's version line needs no extra call.
+		"version": s.version,
 	})
 }
 

@@ -81,6 +81,9 @@ var testStatic = fstest.MapFS{
 	"assets/app.css": &fstest.MapFile{Data: []byte("body{}")},
 }
 
+// Stamped into every test server as main.version would be at link time.
+const testVersion = "9.9.9-test"
+
 func newTestServer(t *testing.T, prov provider.Provider, authEnabled bool) *testServer {
 	t.Helper()
 	sqlDB, err := db.Open(t.TempDir() + "/test.db")
@@ -110,7 +113,7 @@ func newTestServer(t *testing.T, prov provider.Provider, authEnabled bool) *test
 	eng := engine.New(serverCtx, st, prov, emptyMCP{}, cfg, nil)
 	hub := mcphub.New(cfg)
 	a := auth.New(cfg)
-	srv := New(cfg, st, a, eng, hub, testStatic)
+	srv := New(cfg, st, a, eng, hub, testStatic, testVersion)
 	ts := &testServer{
 		server: httptest.NewServer(srv.Handler()),
 		store:  st,

@@ -70,6 +70,9 @@ class AppState {
   needsServerSetup = $state(false);
   nativeApp = $state(false);
   serverUrl = $state(""); // configured server address (native only)
+  // Build version of the server binary, from /api/meta. Shown in the sidebar
+  // footer on web; native shows the APK's own versionName instead.
+  serverVersion = $state("");
 
   // Server setup status: does the provider + designated models exist yet?
   // Sourced from /api/meta `setup_complete`. null = not known yet.
@@ -191,6 +194,7 @@ class AppState {
       const meta = await api.meta();
       this.authEnabled = !!meta?.auth_enabled;
       this.setupComplete = !!meta?.setup_complete;
+      this.serverVersion = meta?.version ?? "";
       if (this.authEnabled) {
         const token = getToken();
         if (token && isTokenExpired(token)) {

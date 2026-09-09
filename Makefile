@@ -10,6 +10,13 @@ ANDROID_AVD_HOME ?= $(HOME)/.android/avd
 SYS_IMG ?= system-images;android-36;google_apis;x86_64
 AVD_DEVICE ?= pixel_8
 
+# One version for both artifacts: stamped into the binary as main.version
+# (served on /api/meta → the sidebar's version line) and into the APK as
+# gradle's versionName (Capacitor's App.getInfo → same line on mobile). The
+# release workflow overrides it with the git tag; anything built by hand keeps
+# this local default.
+VERSION ?= 1.0.0-local
+
 web:
 	cd web && npm ci && npm run build
 
@@ -17,7 +24,7 @@ sqlc:
 	sqlc generate
 
 build: web sqlc
-	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o chattoneko .
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o chattoneko .
 	@if command -v upx >/dev/null 2>&1; then \
 		if upx -t chattoneko >/dev/null 2>&1; then \
 			echo "chattoneko already packed, skipping compression"; \
@@ -38,15 +45,15 @@ tidy:
 	go mod tidy
 
 docker:
-	docker build -t chattoneko .
+	docker build --build-arg VERSION=$(VERSION) -t chattoneko .
 
 mobile:
 	cd mobile && npm ci && npm run sync
 
-# GRADLE_FLAGS is the passthrough for CI versioning, e.g.
-#   make mobile-apk GRADLE_FLAGS="-PversionName=1.0.0 -PversionCode=10000"
+# GRADLE_FLAGS carries CI's extra -P properties (versionCode), e.g.
+#   make mobile-apk VERSION=1.2.3 GRADLE_FLAGS="-PversionCode=10203"
 mobile-apk: mobile
-	cd mobile/android && ./gradlew assembleDebug $(GRADLE_FLAGS)
+	cd mobile/android && ./gradlew assembleDebug -PversionName=$(VERSION) $(GRADLE_FLAGS)
 
 # Create the AVD if it doesn't exist; skip otherwise.
 mobile-avd:

@@ -230,7 +230,6 @@ func looksText(data []byte) bool {
 	return total > 0 && float64(good)/float64(total) >= 0.95
 }
 
-
 // downscale reduces img so its longest side is at most maxSide, preserving
 // the aspect ratio.
 func downscale(img image.Image, maxSide int) image.Image {
@@ -269,4 +268,3 @@ func SerializeImageDescription(filename, id, description string) string {
 		filename, description)
 	return SerializeText(filename, id, body)
 }
-

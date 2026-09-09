@@ -40,6 +40,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamped into the binary as main.version (served on /api/meta, shown
+          # in the sidebar); the Dockerfile strips the tag's leading v.
+          build-args: VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -96,7 +99,7 @@ jobs:
           v="${TAG#v}"
           IFS=. read -r maj min pat <<<"$v"
           # ponytail: X*10000+Y*100+Z — collides if minor or patch ever hit 100.
-          make mobile-apk GRADLE_FLAGS="-PversionName=$v -PversionCode=$((maj * 10000 + min * 100 + pat))"
+          make mobile-apk VERSION=$v GRADLE_FLAGS="-PversionCode=$((maj * 10000 + min * 100 + pat))"
           cp mobile/android/app/build/outputs/apk/debug/app-debug.apk "chattoneko-$v.apk"
 
       - name: Publish release

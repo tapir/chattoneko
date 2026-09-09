@@ -115,6 +115,23 @@ func TestMetaExposesSetupComplete(t *testing.T) {
 	}
 }
 
+// The sidebar's version line reads /api/meta: the build version (main.version,
+// stamped by ldflags) must ride along on the boot probe.
+func TestMetaReportsBuildVersion(t *testing.T) {
+	ts := newTestServer(t, quickProvider{}, false)
+
+	var meta struct {
+		Version string `json:"version"`
+	}
+	rec := ts.do(t, "GET", "/api/meta", nil, nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.Version != testVersion {
+		t.Fatalf("version = %q, want %q", meta.Version, testVersion)
+	}
+}
+
 // ---- PUT /api/setup ----
 
 func TestPutSetupPartialUpdate(t *testing.T) {

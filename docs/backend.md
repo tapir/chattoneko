@@ -33,6 +33,8 @@ internal/
 7. Create the engine on a server-scoped context — generations survive HTTP client disconnects and end only via stop, chat deletion, or server shutdown. Recover crashed generations left behind by an interrupted process (see engine section).
 8. Start the title task (its own goroutine + independent SSE hub).
 9. Assemble the API server with the embedded `web/dist` filesystem, bind the `-listen` address (a bind failure is fatal) and serve. The `http.Server` sets `ReadHeaderTimeout` only — no `WriteTimeout`/`ReadTimeout`, which would kill SSE.
+
+**Build version.** `main.version` is stamped at link time (`make build VERSION=…` → `-ldflags -X main.version=…`) and handed to `api.New`, which reports it on `GET /api/meta` for the sidebar's version line. The release workflow passes the git tag (the Dockerfile strips its leading `v`, so the binary and the APK's `versionName` carry the same bare number); anything built by hand keeps the `1.0.0-local` default from the Makefile.
 10. Graceful shutdown on SIGINT/SIGTERM: stop the HTTP listener (10s), then `engine.Shutdown()` (cancels active generations and waits for their final persistence), close MCP sessions, close the DB, cancel the server context.
 
 **Live config wiring.** `cfgStore.Subscribe` registers the reactive components once at startup: `prov.Reconfigure` re-dials the provider when base_url/api_key change, `warnIfExposed` re-checks the open-API combination, and `hub.Reload` connects/closes/reconnects MCP servers to match the new list. The reload runs async (MCP dials can take real time) and, when it changed the tool catalog, the engine publishes a `config_changed` event on the global stream so clients refetch `/api/config` — the setup-save response goes out before the dial finishes. Engine, API, auth and the title task all read the current snapshot per request/sweep, so system prompt, limits, models, and credentials change with no restart. The listen address is NOT live-editable: it is the `-listen` flag, bound once at startup.
@@ -151,7 +153,7 @@ Optional single-user auth, driven entirely by environment variables — there is
 - The credentials live only in the process environment (`CHATTO_USERNAME` / `CHATTO_PASSWORD`) — they are never persisted to the config table and are not exposed through the setup API.
 - The JWT signing key is derived from the credentials (`sha256("chattoneko-jwt:" + username + "\x00" + password)`), so tokens survive restarts and changing the env password invalidates every outstanding token. Tokens are stateless: no server-side session store, no logout invalidation — clients discard the token to log out.
 - Requests are admitted with `Authorization: Bearer <token>`, or (GET only) `?token=` — EventSource streams and `<img>` attachment loads can't set headers. Only HS256 is accepted (no algorithm downgrade).
-- `GET /api/meta` (auth_enabled + setup_complete flags) and login are public; every other `/api/*` route goes through the auth middleware. Expired tokens get a 401 and the clients (web + mobile) drop back to the login screen.
+- `GET /api/meta` (auth_enabled + setup_complete flags + the build version) and login are public; every other `/api/*` route goes through the auth middleware. Expired tokens get a 401 and the clients (web + mobile) drop back to the login screen.
 
 ## HTTP surface (internal/api)
 
@@ -159,7 +161,7 @@ Route table (`ServeMux` with method patterns):
 
 | Route | Handler |
 | --- | --- |
-| `GET /api/meta` | auth_enabled + setup_complete flags (public) |
+| `GET /api/meta` | auth_enabled + setup_complete flags, build version (public) |
 | `POST /api/auth/login` | JWT login, returns `{username, token}` (public) |
 | `GET /api/auth/me` | current username |
 | `GET /api/config` | models whitelist + chat/vision defaults, model_info, tools catalog, limits (`upload_max_file_bytes`, `max_tool_iterations`, `max_upload_files`, `max_raw_upload_bytes`) |

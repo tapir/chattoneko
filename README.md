@@ -131,4 +131,4 @@ Open for contributions. The mobile app is Capacitor plus a WebView around the sa
 
 ## Disclaimer
 
-All cat pictures are from [magnific.com](https://magnific.com) — attribution is required, so the app's sidebar footer links to them too.
+All cat pictures are from [magnific.com](https://magnific.com)

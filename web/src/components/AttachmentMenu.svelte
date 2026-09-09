@@ -1,6 +1,6 @@
 <script>
-  // Long-press an image or a file chip in the chat → Share / Copy: the two
-  // things a phone wants with an attachment, where a hover-revealed action
+  // Long-press an image or a file chip in the chat → Share (+ Copy for text):
+  // the things a phone wants with an attachment, where a hover-revealed action
   // row can't reach. Touch-only by construction (lib/longpress.js) — message
   // text keeps the browser's own long press for selecting and copying.
   //
@@ -29,16 +29,16 @@
     if (att) return registerOverlay(() => attachMenu.close());
   });
 
-  let rows = $derived([
-    { key: 'share', icon: Share2, label: 'Share', hint: 'Send it to another app', run: shareAttachment },
-    {
-      key: 'copy',
-      icon: Copy,
-      label: image ? 'Copy image' : 'Copy text',
-      hint: image ? 'Put the picture on the clipboard' : 'Copy the file contents',
-      run: copyAttachment,
-    },
-  ]);
+  // No Copy for a picture: nothing on a phone pastes an image out of the
+  // clipboard, and Share already gets the bytes wherever they're going.
+  let rows = $derived(
+    [
+      { key: 'share', icon: Share2, label: 'Share', hint: 'Send it to another app', run: shareAttachment },
+      image
+        ? null
+        : { key: 'copy', icon: Copy, label: 'Copy text', hint: 'Copy the file contents', run: copyAttachment },
+    ].filter(Boolean),
+  );
 
   // A row fires and closes at once — the sheet has no business staying up
   // under the system share dialog. The work then runs on the tap's user

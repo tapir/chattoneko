@@ -8,10 +8,9 @@
 //     mobile/android/app/src/main/res/xml/file_paths.xml). Web: the Web Share
 //     API takes a File straight from the blob — but only in a secure context,
 //     so a plain-http LAN address has neither path and says so.
-//   copy — text attachments copy their contents (the server serves them as
-//     text/plain); images copy the picture through the async Clipboard API,
-//     which only accepts image/png — exactly what internal/attach stores
-//     (every upload is re-encoded to PNG).
+//   copy — text attachments only: they copy their contents (the server serves
+//     them as text/plain). An image gets no Copy row, so the async Clipboard
+//     API is out of this file.
 //
 // Failures report themselves as toasts and return false, so callers are
 // one-liners; dismissing the system share sheet is not a failure.
@@ -24,14 +23,12 @@ import { copyText } from './clipboard.js';
 // Where the bytes come from: a staged local preview if there still is one,
 // otherwise the server copy (attachmentUrl appends ?token= — an <img> or a
 // bare fetch cannot carry the Authorization header).
-export const attachmentSrc = (att) => att.previewUrl || api.attachmentUrl(att.id);
-
 async function fetchBlob(att) {
   // no-store: an <img> already on screen caches the same URL without CORS
   // headers, and a poisoned cache entry makes this fail ("Failed to fetch")
   // for a picture that is visibly there. Servers send Vary: Origin now, which
   // fixes it for good — this keeps working against older ones.
-  const res = await fetch(attachmentSrc(att), { cache: 'no-store' });
+  const res = await fetch(att.previewUrl || api.attachmentUrl(att.id), { cache: 'no-store' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.blob();
 }
@@ -70,18 +67,10 @@ export async function shareAttachment(att) {
 
 export async function copyAttachment(att) {
   try {
-    if (att.kind !== 'image') {
-      // These files are usually code — copy the text, not a URL to it.
-      if (!(await copyText(await api.attachmentText(att.id))))
-        throw new Error('the clipboard refused the copy');
-      app.toast('success', `Copied ${att.filename}`);
-      return true;
-    }
-    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined')
-      throw new Error('copying images needs the app or an HTTPS page');
-    const blob = await fetchBlob(att);
-    await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
-    app.toast('success', 'Copied image');
+    // These files are usually code — copy the text, not a URL to it.
+    if (!(await copyText(await api.attachmentText(att.id))))
+      throw new Error('the clipboard refused the copy');
+    app.toast('success', `Copied ${att.filename}`);
     return true;
   } catch (e) {
     app.toast('error', `Couldn't copy: ${e?.message ?? 'unknown error'}`);

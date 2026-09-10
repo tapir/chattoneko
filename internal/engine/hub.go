@@ -38,6 +38,7 @@ type WireEvent struct {
 	Title     string `json:"title,omitempty"`
 	// Per-turn usage + duration, set on the "done" event (#5 + top-bar totals).
 	PromptTokens     int64          `json:"prompt_tokens,omitempty"`
+	ContextTokens    int64          `json:"context_tokens,omitempty"`
 	CompletionTokens int64          `json:"completion_tokens,omitempty"`
 	DurationMs       int64          `json:"duration_ms,omitempty"`
 	Message          *store.Message `json:"message,omitempty"`

@@ -44,7 +44,9 @@ func (e *Engine) runGeneration(ag *activeGen) {
 	// Track per-turn usage + wall-clock duration across all iterations.
 	// Declared before the finish closure so it can capture them.
 	startTime := time.Now()
-	var totalPrompt, totalCompletion int64
+	// total* = billed sum over every request of the turn; last* = final
+	// request only, i.e. the context snapshot the next request resends.
+	var totalPrompt, totalCompletion, lastPrompt, lastCompletion int64
 
 	// Incremental persistence ticker.
 	done := make(chan struct{})
@@ -119,7 +121,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 				slog.Error("engine: finalize message", "error", err)
 			}
 			if totalPrompt > 0 || totalCompletion > 0 || durationMs > 0 {
-				if err := e.store.UpdateMessageUsage(persistCtx, ag.messageID, totalPrompt, totalCompletion, durationMs); err != nil {
+				if err := e.store.UpdateMessageUsage(persistCtx, ag.messageID, totalPrompt, totalCompletion, lastPrompt+lastCompletion, durationMs); err != nil {
 					slog.Debug("engine: persist usage", "error", err)
 				}
 			}
@@ -135,6 +137,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 			Type:             "done",
 			PromptTokens:     totalPrompt,
 			CompletionTokens: totalCompletion,
+			ContextTokens:    lastPrompt + lastCompletion,
 			DurationMs:       durationMs,
 		})
 		h.mu.Unlock()
@@ -273,6 +276,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 				finishReason = ev.Finish
 				totalPrompt += ev.Usage.PromptTokens
 				totalCompletion += ev.Usage.CompletionTokens
+				lastPrompt, lastCompletion = ev.Usage.PromptTokens, ev.Usage.CompletionTokens
 			}
 			// Honor stop promptly even mid-stream.
 			select {

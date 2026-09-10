@@ -51,6 +51,7 @@ type Message struct {
 	DurationMs       int64
 	CreatedAt        int64
 	UpdatedAt        int64
+	ContextTokens    int64
 }
 
 type Model struct {

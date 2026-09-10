@@ -287,7 +287,7 @@ func (q *Queries) DistinctToolNamesInChat(ctx context.Context, chatID string) ([
 }
 
 const firstUserMessage = `-- name: FirstUserMessage :one
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at FROM messages
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages
 WHERE chat_id = ? AND role = 'user'
 ORDER BY seq ASC
 LIMIT 1
@@ -314,6 +314,7 @@ func (q *Queries) FirstUserMessage(ctx context.Context, chatID string) (Message,
 		&i.DurationMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContextTokens,
 	)
 	return i, err
 }
@@ -361,7 +362,7 @@ func (q *Queries) GetChat(ctx context.Context, id string) (Chat, error) {
 }
 
 const getMessage = `-- name: GetMessage :one
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at FROM messages WHERE id = ?
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages WHERE id = ?
 `
 
 func (q *Queries) GetMessage(ctx context.Context, id string) (Message, error) {
@@ -384,12 +385,13 @@ func (q *Queries) GetMessage(ctx context.Context, id string) (Message, error) {
 		&i.DurationMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContextTokens,
 	)
 	return i, err
 }
 
 const lastAssistantMessage = `-- name: LastAssistantMessage :one
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at FROM messages
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages
 WHERE chat_id = ? AND role = 'assistant'
 ORDER BY seq DESC
 LIMIT 1
@@ -415,6 +417,7 @@ func (q *Queries) LastAssistantMessage(ctx context.Context, chatID string) (Mess
 		&i.DurationMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContextTokens,
 	)
 	return i, err
 }
@@ -727,7 +730,7 @@ func (q *Queries) ListEmptyChatsOlderThan(ctx context.Context, createdAt int64) 
 }
 
 const listGeneratingMessages = `-- name: ListGeneratingMessages :many
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at FROM messages WHERE status = 'generating'
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages WHERE status = 'generating'
 `
 
 func (q *Queries) ListGeneratingMessages(ctx context.Context) ([]Message, error) {
@@ -756,6 +759,7 @@ func (q *Queries) ListGeneratingMessages(ctx context.Context) ([]Message, error)
 			&i.DurationMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContextTokens,
 		); err != nil {
 			return nil, err
 		}
@@ -771,7 +775,7 @@ func (q *Queries) ListGeneratingMessages(ctx context.Context) ([]Message, error)
 }
 
 const listMessagesByChat = `-- name: ListMessagesByChat :many
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at FROM messages WHERE chat_id = ? ORDER BY seq ASC
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages WHERE chat_id = ? ORDER BY seq ASC
 `
 
 func (q *Queries) ListMessagesByChat(ctx context.Context, chatID string) ([]Message, error) {
@@ -800,6 +804,7 @@ func (q *Queries) ListMessagesByChat(ctx context.Context, chatID string) ([]Mess
 			&i.DurationMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContextTokens,
 		); err != nil {
 			return nil, err
 		}
@@ -1098,12 +1103,13 @@ func (q *Queries) UpdateMessageStatus(ctx context.Context, arg UpdateMessageStat
 }
 
 const updateMessageUsage = `-- name: UpdateMessageUsage :exec
-UPDATE messages SET prompt_tokens = ?, completion_tokens = ?, duration_ms = ?, updated_at = ? WHERE id = ?
+UPDATE messages SET prompt_tokens = ?, completion_tokens = ?, context_tokens = ?, duration_ms = ?, updated_at = ? WHERE id = ?
 `
 
 type UpdateMessageUsageParams struct {
 	PromptTokens     int64
 	CompletionTokens int64
+	ContextTokens    int64
 	DurationMs       int64
 	UpdatedAt        int64
 	ID               string
@@ -1113,6 +1119,7 @@ func (q *Queries) UpdateMessageUsage(ctx context.Context, arg UpdateMessageUsage
 	_, err := q.db.ExecContext(ctx, updateMessageUsage,
 		arg.PromptTokens,
 		arg.CompletionTokens,
+		arg.ContextTokens,
 		arg.DurationMs,
 		arg.UpdatedAt,
 		arg.ID,

@@ -25,7 +25,19 @@
   let promptTotal = $derived(app.chatUsage?.prompt_tokens ?? 0);
   let completionTotal = $derived(app.chatUsage?.completion_tokens ?? 0);
   let contextWindow = $derived(app.contextWindowFor(currentModel));
-  let contextUsed = $derived(promptTotal + completionTotal);
+  // Context occupancy = final request's input+output of the last turn (what
+  // the next request resends), NOT the billed totals: tool loops re-send full
+  // history per request, so billed sums exceed the window while the context
+  // stays inside it. Pre-migration rows lack context_tokens; for them the
+  // billed sum equals the snapshot (single-request turns).
+  let contextUsed = $derived.by(() => {
+    for (let i = app.messages.length - 1; i >= 0; i--) {
+      const m = app.messages[i];
+      if (m.role === 'assistant' && (m.context_tokens || m.prompt_tokens))
+        return m.context_tokens || (m.prompt_tokens ?? 0) + (m.completion_tokens ?? 0);
+    }
+    return 0;
+  });
   let contextPct = $derived.by(() => {
     if (contextWindow <= 0) return null;
     const pct = Math.min(100, (contextUsed / contextWindow) * 100);

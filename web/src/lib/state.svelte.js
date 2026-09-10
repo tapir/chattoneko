@@ -1160,6 +1160,7 @@ class AppState {
                 ? {
                     prompt_tokens: ev.prompt_tokens ?? 0,
                     completion_tokens: ev.completion_tokens ?? 0,
+                    context_tokens: ev.context_tokens ?? 0,
                     duration_ms: ev.duration_ms ?? 0,
                   }
                 : {}),

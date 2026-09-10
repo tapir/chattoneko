@@ -106,6 +106,7 @@ type Message struct {
 	PromptTokens     int64            `json:"prompt_tokens,omitempty"`
 	CompletionTokens int64            `json:"completion_tokens,omitempty"`
 	DurationMs       int64            `json:"duration_ms,omitempty"`
+	ContextTokens    int64            `json:"context_tokens,omitempty"` // final request's prompt+completion = context snapshot
 	ToolCalls        []ToolCall       `json:"tool_calls,omitempty"`
 	Attachments      []AttachmentMeta `json:"attachments,omitempty"`
 }
@@ -198,6 +199,7 @@ func messageFromRow(m query.Message) *Message {
 		PromptTokens:     m.PromptTokens,
 		CompletionTokens: m.CompletionTokens,
 		DurationMs:       m.DurationMs,
+		ContextTokens:    m.ContextTokens,
 	}
 }
 
@@ -502,10 +504,11 @@ func (s *Store) FinalizeMessage(ctx context.Context, id, status, errText, conten
 
 // UpdateMessageUsage records per-turn token usage + wall-clock duration on an
 // assistant message.
-func (s *Store) UpdateMessageUsage(ctx context.Context, id string, promptTokens, completionTokens, durationMs int64) error {
+func (s *Store) UpdateMessageUsage(ctx context.Context, id string, promptTokens, completionTokens, contextTokens, durationMs int64) error {
 	return s.q.UpdateMessageUsage(ctx, query.UpdateMessageUsageParams{
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
+		ContextTokens:    contextTokens,
 		DurationMs:       durationMs,
 		UpdatedAt:        time.Now().UnixMilli(),
 		ID:               id,

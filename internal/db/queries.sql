@@ -98,7 +98,7 @@ UPDATE messages SET content = ?, reasoning = ?, updated_at = ? WHERE id = ?;
 UPDATE messages SET status = ?, error = ?, content = ?, reasoning = ?, updated_at = ? WHERE id = ?;
 
 -- name: UpdateMessageUsage :exec
-UPDATE messages SET prompt_tokens = ?, completion_tokens = ?, duration_ms = ?, updated_at = ? WHERE id = ?;
+UPDATE messages SET prompt_tokens = ?, completion_tokens = ?, context_tokens = ?, duration_ms = ?, updated_at = ? WHERE id = ?;
 
 -- name: ChatTokenTotals :one
 SELECT

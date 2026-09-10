@@ -221,11 +221,11 @@ func TestMessagesToolCallsAttachmentsRoundTrip(t *testing.T) {
 	if err := s.FinalizeMessage(ctx, am.ID, StatusComplete, "", "answer", []string{"thought one", "", "thought three"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateMessageUsage(ctx, am.ID, 10, 20, 30); err != nil {
+	if err := s.UpdateMessageUsage(ctx, am.ID, 10, 20, 25, 30); err != nil {
 		t.Fatal(err)
 	}
 	m, _ := s.GetMessage(ctx, am.ID)
-	if m.Status != StatusComplete || m.PromptTokens != 10 || m.DurationMs != 30 {
+	if m.Status != StatusComplete || m.PromptTokens != 10 || m.ContextTokens != 25 || m.DurationMs != 30 {
 		t.Fatalf("finalize/usage wrong: %+v", m)
 	}
 	if len(m.Reasoning) != 3 || m.Reasoning[0] != "thought one" || m.Reasoning[1] != "" || m.Reasoning[2] != "thought three" {

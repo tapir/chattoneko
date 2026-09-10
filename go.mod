@@ -6,7 +6,7 @@ require (
 	github.com/North-web-dev/impersonate-http v0.4.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
-	github.com/iceisfun/golua/v2 v2.0.5
+	github.com/iceisfun/golua v1.1.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/openai/openai-go/v3 v3.55.0
 	golang.org/x/image v0.45.0

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/iceisfun/golua/v2/vm"
+	"github.com/iceisfun/golua/vm"
 )
 
 // A small "json" library for the simple_code sandbox: json.encode(value) and

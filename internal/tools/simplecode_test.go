@@ -357,3 +357,87 @@ func TestSimpleCodeDoesNotLeakToStdout(t *testing.T) {
 		t.Fatalf("print() leaked to stdout: %q", captured)
 	}
 }
+
+// TestSimpleCodeLua54Semantics pins the language the Description advertises.
+// Every expectation here was probed against the running sandbox, and the ones
+// that differ between golua v1 (Lua 5.4) and golua /v2 (Lua 5.5) are included
+// deliberately: bumping the dependency — or a golua release that changes
+// behaviour — fails this test instead of silently making the description lie
+// to the model. The 5.5 branch makes for-loop control variables read-only,
+// which is what killed a real snippet in production.
+func TestSimpleCodeLua54Semantics(t *testing.T) {
+	// Loop control variables are assignable in 5.4, a compile error in 5.5.
+	wantOut(t, `for w in ('a b'):gmatch('%S+') do w = w:upper() print(w) end`, "A\nB\n")
+	wantOut(t, `for i=1,3 do i = i*10 print(i) end`, "10\n20\n30\n")
+	// table.create is 5.5-only; the compat aliases stock Lua dropped in 5.3
+	// are still here in 5.4.
+	wantOut(t, `print(table.create)`, "nil\n")
+	wantOut(t, `print(type(math.pow), type(math.atan2), type(math.log10), type(math.cosh), type(math.frexp), type(math.ldexp), type(bit32))`,
+		strings.Repeat("function\t", 6)+"table\n")
+	wantOut(t, `print(math.pow(2,10), math.log10(1000), math.log(1000,10), bit32.bxor(5,3))`, "1024.0\t3.0\t3.0\t6\n")
+
+	// Removed or renamed since 5.1.
+	wantOut(t, `print(setfenv, getfenv, unpack, loadstring, table.maxn, table.getn, table.foreach, table.foreachi, module, newproxy, string.gfind, math.mod)`,
+		strings.Repeat("nil\t", 11)+"nil\n")
+	wantOut(t, `local a,b = table.unpack({1,2}) print(a, b, load('return 6*7')(), #'abc', select('#',1,nil,3), (table.pack(1,nil,3)).n, math.fmod(-7,3))`,
+		"1\t2\t42\t3\t3\t3\t-1\n")
+	// _ENV replaced setfenv/getfenv and is a plain assignable upvalue.
+	wantOut(t, `print(type(_ENV), _ENV == _G)`, "table\ttrue\n")
+
+	// Integers and floats (5.3).
+	wantOut(t, `print(math.type(3), math.type(3.0), math.type('3'), tostring(3.0), 7/2, 7//2, 7.0//2, -7//2, 7%3, -7%3, math.fmod(-7,3))`,
+		"integer\tfloat\tnil\t3.0\t3.5\t3\t3.0\t-4\t1\t2\t-1\n")
+	wantOut(t, `print(math.maxinteger+1 == math.mininteger, math.tointeger(3.0), math.tointeger(3.5), math.type(math.floor(3.7)), math.type(math.ceil(3.2)), math.type(math.sqrt(9)), math.type(math.random(1,3)))`,
+		"true\t3\tnil\tinteger\tinteger\tfloat\tinteger\n")
+	// Floats print with 14 significant digits, which hides binary error.
+	wantOut(t, `print(0.1+0.2, (0.1+0.2) == 0.3, string.format('%.17g', 0.1+0.2), 2^62, math.pi, tostring(2^10))`,
+		"0.3\tfalse\t0.30000000000000004\t4.6116860184274e+18\t3.1415926535898\t1024.0\n")
+	// Above 2^53 an integer does not survive a float round-trip.
+	wantOut(t, `print(tostring(math.maxinteger), tostring(math.maxinteger + 0.0), math.maxinteger == math.maxinteger + 0.0)`,
+		"9223372036854775807\t9.2233720368548e+18\tfalse\n")
+	wantOut(t, `print(5&3, 5|3, 5~3, ~0, 1<<4, 16>>2, 5.0 & 3)`, "1\t7\t6\t-1\t16\t4\t1\n")
+	// A float with a fractional part has no integer representation; 5.0 does.
+	wantErr(t, `print(3.5 & 3)`, "number has no integer representation")
+	wantErr(t, `print(string.format('%d', 3.5))`, "number has no integer representation")
+	wantErr(t, `print(7//0)`, "attempt to divide by zero")
+	wantOut(t, `local z=0 print(1/z, -1/z, 0/0)`, "inf\t-inf\t-nan\n")
+	wantOut(t, `math.randomseed(42) local a=math.random(1,100) math.randomseed(42) print(a == math.random(1,100))`, "true\n")
+
+	// New since 5.1.
+	wantOut(t, `for i=1,3 do if i==2 then goto cont end print('i', i) ::cont:: end`, "i\t1\ni\t3\n")
+	wantOut(t, `local log={} do local f <close> = setmetatable({}, {__close=function() log[#log+1]='closed' end}) end print(table.concat(log, ','))`,
+		"closed\n")
+	wantErr(t, `local c <const> = 7 c = 8 print(c)`, "attempt to assign to const variable")
+	wantOut(t, `print(#('héllo'), utf8.len('héllo'), utf8.codepoint('é'), utf8.char(233))`, "6\t5\t233\té\n")
+	wantOut(t, `print(#string.pack('>i4',7), string.unpack('>i4', string.pack('>i4',-7)), string.packsize('d'), string.packsize('>i4'))`,
+		"4\t-7\t8\t4\n")
+	wantErr(t, `print(string.packsize('z'))`, "variable-length format")
+	wantOut(t, `print(string.rep('ab',3,'-'), rawlen('abc'), rawlen({1,2}), 0x1p4, 0x1p-1, table.move({1},1,1,2,{9})[2])`,
+		"ab-ab-ab\t3\t2\t16.0\t0.5\t1\n")
+	wantOut(t, `print(xpcall(function(a,b) return a+b end, function(e) return e end, 1, 2))`, "true\t3\n")
+	// A numeric for at math.maxinteger terminates instead of wrapping (5.4).
+	wantOut(t, `local n=0 for i=math.maxinteger-3, math.maxinteger do n=n+1 end print(n)`, "4\n")
+
+	// Patterns, not regex.
+	wantErr(t, `print(('a1'):find('\d'))`, "invalid escape sequence")
+	wantOut(t, `print(('a1_!'):gsub('%a','#'), ('a1_!'):gsub('%w','#'), ('a1_!'):gsub('%p','#'))`, "#1_!\t##_!\ta1##\t2\n")
+	wantOut(t, `print(('a.b'):find('.',1,true), ('a.b'):find('.'))`, "2\t1\t1\n")
+	wantOut(t, `print(('2026-09-10'):match('(%d+)-(%d+)-(%d+)'))`, "2026\t09\t10\n")
+	wantOut(t, `print(('<a><b>'):match('(.-)>'), ('hello world'):match('%f[%a]%w+%f[%A]'), ('a(b(c))d'):match('%b()'))`, "<a\thello\t(b(c))\n")
+	wantOut(t, `print(('abc'):gsub('%w', {a='1'}), ('abc'):gsub('%w', function(c) return c:upper() end))`, "1bc\tABC\t3\n")
+	wantOut(t, `local parts={} for p in ('a,b,,c'):gmatch('([^,]*)') do parts[#parts+1]=p end print(#parts, table.concat(parts,'|'))`,
+		"4\ta|b||c\n")
+	// A call truncates to one value except in tail position.
+	wantOut(t, `print('x' .. ('aaa'):gsub('a','b'), ('aaa'):gsub('a','b'))`, "xbbb\tbbb\t3\n")
+
+	// Tables.
+	wantOut(t, `print(#{nil}, select('#',1,nil,3), (table.pack(1,nil,3)).n)`, "0\t3\t3\n")
+	wantOut(t, `local n=0 for i,v in ipairs({1,2,nil,4}) do n=n+1 end print(n)`, "2\n")
+	wantErr(t, `print(table.concat({1,nil,3}))`, "invalid value (nil) at index 2")
+	wantErr(t, `local t={} for i=1,100 do t[i]=i end table.sort(t, function(a,b) return true end)`,
+		"invalid order function for sorting")
+
+	// No clock, no host: the description sends date work to time_location.
+	wantOut(t, `print(os, io, debug, coroutine, dofile, loadfile, warn, collectgarbage)`,
+		strings.Repeat("nil\t", 7)+"nil\n")
+}

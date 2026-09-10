@@ -72,7 +72,7 @@ func TestJSONDecodeStructure(t *testing.T) {
 
 func TestJSONNumberTypes(t *testing.T) {
 	// A whole number stays an integer, a fractional or exponent literal is a
-	// float — Lua 5.5 keeps the distinction, and so does math.type.
+	// float — Lua 5.3+ keeps the distinction, and so does math.type.
 	wantOut(t, `print(math.type(json.decode('123')), math.type(json.decode('1.5')), math.type(json.decode('2.0')), math.type(json.decode('1e3')))`,
 		"integer\tfloat\tfloat\tfloat\n")
 }

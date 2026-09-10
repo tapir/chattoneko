@@ -91,7 +91,7 @@ The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `
 Four integrated tools, each toggleable per chat and globally in settings:
 
 - `time_location` — the server's current date, time and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow", "next Friday" or "near me".
-- `simple_code` — runs a short Lua 5.5 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8 and JSON encode/decode. No file, network, environment or debug access, capped by time, by work, and by output size.
+- `simple_code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8 and JSON encode/decode. No file, network, environment or debug access, capped by time, by work, and by output size. The tool description doubles as a Lua 5.1 → 5.4 migration guide for the model (what was renamed or removed, integer/float semantics, patterns vs regex, table borders).
 - `create_text_file` — writes a complete UTF-8 text file that shows up as a download link on the reply. Text only, no binary formats.
 - `fetch` — fetches any URL. With `show=true` the result lands in the chat: an image inline, a text file (JSON, HTML, markdown, CSV, source code) as an attachment on the reply. With `show=false` the text goes to the model instead and nothing is shown — what you want when the data is just a step, e.g. a JSON API response it then crunches with `simple_code`. Files that are neither image nor text are refused.
 

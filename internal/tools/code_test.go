@@ -12,17 +12,17 @@ import (
 	"chattoneko/internal/mcphub"
 )
 
-// callSimpleCode invokes the registered tool through the catalog the same way
+// callCode invokes the registered tool through the catalog the same way
 // the engine does, returning (result, isError, err).
-func callSimpleCode(t *testing.T, argsJSON string) (string, bool, error) {
+func callCode(t *testing.T, argsJSON string) (string, bool, error) {
 	t.Helper()
-	return Builtin(nil, nil).Call(context.Background(), "simple_code", argsJSON, mcphub.CallMeta{})
+	return Builtin(nil, nil).Call(context.Background(), "code", argsJSON, mcphub.CallMeta{})
 }
 
-func TestSimpleCodeBasicArithmetic(t *testing.T) {
+func TestCodeBasicArithmetic(t *testing.T) {
 	// Lua 5.3+ separates integers from floats: 2^10 is a float, so it prints
 	// with the trailing ".0" (Lua 5.2 printed "1024").
-	out, isErr, err := callSimpleCode(t, `{"code":"print(1+2*3)\nprint(2^10)\nprint(7//2)"}`)
+	out, isErr, err := callCode(t, `{"code":"print(1+2*3)\nprint(2^10)\nprint(7//2)"}`)
 	if err != nil || isErr {
 		t.Fatalf("out=%q isErr=%v err=%v", out, isErr, err)
 	}
@@ -31,10 +31,10 @@ func TestSimpleCodeBasicArithmetic(t *testing.T) {
 	}
 }
 
-func TestSimpleCodePrintCaptureFormatting(t *testing.T) {
+func TestCodePrintCaptureFormatting(t *testing.T) {
 	// Multiple args are tab-separated, each print ends with a newline,
 	// and booleans/nil/floats stringify like standard Lua print.
-	out, isErr, err := callSimpleCode(t, `{"code":"print(\"hi\", true, nil, 1.5, {1,2})"}`)
+	out, isErr, err := callCode(t, `{"code":"print(\"hi\", true, nil, 1.5, {1,2})"}`)
 	if err != nil || isErr {
 		t.Fatalf("out=%q isErr=%v err=%v", out, isErr, err)
 	}
@@ -46,8 +46,8 @@ func TestSimpleCodePrintCaptureFormatting(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeAllowedLibraries(t *testing.T) {
-	out, isErr, err := callSimpleCode(t, `{
+func TestCodeAllowedLibraries(t *testing.T) {
+	out, isErr, err := callCode(t, `{
 		"code": "print(string.upper('abc'), table.concat({1,2,3},'-'), math.floor(3.7), bit32.bxor(5,3), type(pcall))"
 	}`)
 	if err != nil || isErr {
@@ -58,11 +58,11 @@ func TestSimpleCodeAllowedLibraries(t *testing.T) {
 	}
 }
 
-// TestSimpleCodeLibrariesShopifyLacked covers the standard-Lua facilities the
+// TestCodeLibrariesShopifyLacked covers the standard-Lua facilities the
 // previous VM did not implement at all: pattern matching, binary packing,
 // UTF-8, table.move.
-func TestSimpleCodeLibrariesShopifyLacked(t *testing.T) {
-	out, isErr, err := callSimpleCode(t, `{
+func TestCodeLibrariesShopifyLacked(t *testing.T) {
+	out, isErr, err := callCode(t, `{
 		"code": "print(string.match('a=1','(%w+)=(%d+)'), (string.gsub('xxx','x','y')), utf8.len('héllo'), table.move({1},1,1,2,{9})[2], #string.pack('>i4',7), math.type(3.0))"
 	}`)
 	if err != nil || isErr {
@@ -73,13 +73,13 @@ func TestSimpleCodeLibrariesShopifyLacked(t *testing.T) {
 	}
 }
 
-// TestSimpleCodeCoroutinesUnreachable covers why coroutines are removed: each
+// TestCodeCoroutinesUnreachable covers why coroutines are removed: each
 // one runs on its own goroutine, and an abandoned suspended coroutine costs
 // ~16 KB that neither the deadline nor the checkpoint budget bounds, so within
 // the budget a snippet can strand ~1.2M of them (~20 GB) and get the process
 // OOM-killed. Nil-ing the global alone is not enough — package.loaded hands
 // the module straight back through require().
-func TestSimpleCodeCoroutinesUnreachable(t *testing.T) {
+func TestCodeCoroutinesUnreachable(t *testing.T) {
 	before := runtime.NumGoroutine()
 	wantOut(t, `print(type(coroutine), type(package.loaded.coroutine))
 		local ok, m = pcall(require, 'coroutine')
@@ -90,11 +90,11 @@ func TestSimpleCodeCoroutinesUnreachable(t *testing.T) {
 	}
 }
 
-// TestSimpleCodeSandboxBlocksHostLibraries checks the capability gating: no
+// TestCodeSandboxBlocksHostLibraries checks the capability gating: no
 // provider is set, so every host-facing module is never registered and
 // dofile/loadfile do not exist.
-func TestSimpleCodeSandboxBlocksHostLibraries(t *testing.T) {
-	out, isErr, err := callSimpleCode(t, `{
+func TestCodeSandboxBlocksHostLibraries(t *testing.T) {
+	out, isErr, err := callCode(t, `{
 		"code": "print(type(io), type(os), type(debug), type(chan), type(time), type(exec), type(http), type(dofile), type(loadfile))"
 	}`)
 	if err != nil || isErr {
@@ -105,10 +105,10 @@ func TestSimpleCodeSandboxBlocksHostLibraries(t *testing.T) {
 	}
 }
 
-// TestSimpleCodeRemovedGlobals checks the globals we drop on top of the
+// TestCodeRemovedGlobals checks the globals we drop on top of the
 // capability gating (see removedGlobals for why each one goes).
-func TestSimpleCodeRemovedGlobals(t *testing.T) {
-	out, isErr, err := callSimpleCode(t, `{
+func TestCodeRemovedGlobals(t *testing.T) {
+	out, isErr, err := callCode(t, `{
 		"code": "print(type(collectgarbage), type(warn), type(glob), type(_lastoutput), type(_outputlines))"
 	}`)
 	if err != nil || isErr {
@@ -119,13 +119,13 @@ func TestSimpleCodeRemovedGlobals(t *testing.T) {
 	}
 }
 
-// TestSimpleCodePackageIsInert proves require/searchpath/loadlib cannot reach
+// TestCodePackageIsInert proves require/searchpath/loadlib cannot reach
 // the filesystem or dlopen anything without a code/loadlib provider.
-func TestSimpleCodePackageIsInert(t *testing.T) {
+func TestCodePackageIsInert(t *testing.T) {
 	// require raises "module not found"; loadlib RETURNS the standard absent
 	// triple (nil, errmsg, "absent") instead of raising; searchpath never
 	// finds a real file because the searchers only reach disk via a provider.
-	out, isErr, err := callSimpleCode(t, `{
+	out, isErr, err := callCode(t, `{
 		"code": "local ok = pcall(require,'os'); local f,msg,where = package.loadlib('/usr/lib/libc.so.6','printf'); print(ok, type(f), where, msg ~= nil, (package.searchpath('passwd','/etc/?')))"
 	}`)
 	if err != nil || isErr {
@@ -136,9 +136,9 @@ func TestSimpleCodePackageIsInert(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeLoadIsTextOnly(t *testing.T) {
+func TestCodeLoadIsTextOnly(t *testing.T) {
 	// A valid text chunk still compiles and runs via load.
-	out, isErr, err := callSimpleCode(t, `{"code":"local f = load('return 6*7'); print(f())"}`)
+	out, isErr, err := callCode(t, `{"code":"local f = load('return 6*7'); print(f())"}`)
 	if err != nil || isErr {
 		t.Fatalf("out=%q isErr=%v err=%v", out, isErr, err)
 	}
@@ -147,10 +147,10 @@ func TestSimpleCodeLoadIsTextOnly(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeLoadRejectsBinary(t *testing.T) {
+func TestCodeLoadRejectsBinary(t *testing.T) {
 	// Neither bytecode this VM produced (string.dump) nor hand-crafted bytes
 	// carrying the Lua signature may reach the undumper.
-	out, isErr, err := callSimpleCode(t, `{"code":"local f,e1 = load(string.dump(load('return 1'))); local g,e2 = load(string.char(27)..'Lua'..'GARBAGE'); print(type(f), e1 ~= nil, type(g), e2 ~= nil)"}`)
+	out, isErr, err := callCode(t, `{"code":"local f,e1 = load(string.dump(load('return 1'))); local g,e2 = load(string.char(27)..'Lua'..'GARBAGE'); print(type(f), e1 ~= nil, type(g), e2 ~= nil)"}`)
 	if err != nil || isErr {
 		t.Fatalf("out=%q isErr=%v err=%v", out, isErr, err)
 	}
@@ -159,10 +159,10 @@ func TestSimpleCodeLoadRejectsBinary(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeLoadAcceptsReaderFunction(t *testing.T) {
+func TestCodeLoadAcceptsReaderFunction(t *testing.T) {
 	// Apart from the mode, stock load() semantics are preserved: the
 	// reader-function form works (golua caps readers at 256 MB / 4M calls).
-	out, isErr, err := callSimpleCode(t, `{"code":"local c={'return ','6*7'}; local i=0; local f=load(function() i=i+1; return c[i] end); print(f())"}`)
+	out, isErr, err := callCode(t, `{"code":"local c={'return ','6*7'}; local i=0; local f=load(function() i=i+1; return c[i] end); print(f())"}`)
 	if err != nil || isErr {
 		t.Fatalf("out=%q isErr=%v err=%v", out, isErr, err)
 	}
@@ -171,10 +171,10 @@ func TestSimpleCodeLoadAcceptsReaderFunction(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeRecursiveMetamethodSafe(t *testing.T) {
+func TestCodeRecursiveMetamethodSafe(t *testing.T) {
 	// A self-referential __tostring hits the VM's call-depth cap and must
 	// surface as an in-band error, not a host crash.
-	out, isErr, err := callSimpleCode(t, `{"code":"local t={}; setmetatable(t,{__tostring=function() return tostring(t) end}); print(tostring(t))"}`)
+	out, isErr, err := callCode(t, `{"code":"local t={}; setmetatable(t,{__tostring=function() return tostring(t) end}); print(tostring(t))"}`)
 	if err != nil {
 		t.Fatalf("expected in-band error, got Go error: %v", err)
 	}
@@ -183,10 +183,10 @@ func TestSimpleCodeRecursiveMetamethodSafe(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeDeepRecursionIsCatchable(t *testing.T) {
+func TestCodeDeepRecursionIsCatchable(t *testing.T) {
 	// Limits.MaxCallDepth turns unbounded recursion into a Lua error the
 	// snippet could even pcall — no Go stack exhaustion.
-	out, isErr, err := callSimpleCode(t, `{"code":"local function f(n) return 1+f(n) end; print(f(0))"}`)
+	out, isErr, err := callCode(t, `{"code":"local function f(n) return 1+f(n) end; print(f(0))"}`)
 	if err != nil || !isErr {
 		t.Fatalf("expected in-band error: out=%q isErr=%v err=%v", out, isErr, err)
 	}
@@ -195,8 +195,8 @@ func TestSimpleCodeDeepRecursionIsCatchable(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeRuntimeErrorSurfacesInBand(t *testing.T) {
-	out, isErr, err := callSimpleCode(t, `{"code":"local t=nil; print(t.x)"}`)
+func TestCodeRuntimeErrorSurfacesInBand(t *testing.T) {
+	out, isErr, err := callCode(t, `{"code":"local t=nil; print(t.x)"}`)
 	// Handler error -> Registry returns it in-band with isError=true, no Go error.
 	if err != nil {
 		t.Fatalf("expected in-band error, got Go error: %v", err)
@@ -209,8 +209,8 @@ func TestSimpleCodeRuntimeErrorSurfacesInBand(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeSyntaxError(t *testing.T) {
-	out, isErr, err := callSimpleCode(t, `{"code":"print(( "}`)
+func TestCodeSyntaxError(t *testing.T) {
+	out, isErr, err := callCode(t, `{"code":"print(( "}`)
 	if err != nil || !isErr {
 		t.Fatalf("expected in-band error: out=%q isErr=%v err=%v", out, isErr, err)
 	}
@@ -223,7 +223,7 @@ func TestSimpleCodeSyntaxError(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeInfiniteLoopAborted(t *testing.T) {
+func TestCodeInfiniteLoopAborted(t *testing.T) {
 	// A `while true do end` burns the checkpoint budget in well under the
 	// context deadline and returns an error instead of hanging the host.
 	start := time.Now()
@@ -239,10 +239,10 @@ func TestSimpleCodeInfiniteLoopAborted(t *testing.T) {
 	}
 }
 
-// TestSimpleCodeRunawayPrintLoopBounded covers the reason the checkpoint
+// TestCodeRunawayPrintLoopBounded covers the reason the checkpoint
 // budget exists at all: the capture buffer is an uncapped append, so a
 // deadline alone would let a print loop retain hundreds of MB.
-func TestSimpleCodeRunawayPrintLoopBounded(t *testing.T) {
+func TestCodeRunawayPrintLoopBounded(t *testing.T) {
 	start := time.Now()
 	_, err := runLua(context.Background(), "while true do print(1) end")
 	if err == nil {
@@ -256,7 +256,7 @@ func TestSimpleCodeRunawayPrintLoopBounded(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeCancelledContextAborts(t *testing.T) {
+func TestCodeCancelledContextAborts(t *testing.T) {
 	// The VM runs under the handler's context, so a cancelled turn stops it —
 	// something a debug count-hook alone could not do.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -274,7 +274,7 @@ func TestSimpleCodeCancelledContextAborts(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeBoundedLoopUnderDefaultBudget(t *testing.T) {
+func TestCodeBoundedLoopUnderDefaultBudget(t *testing.T) {
 	// A legit bounded loop must run fine under the production budget.
 	out, err := runLua(context.Background(), "local s=0; for i=1,100000 do s=s+i end; print(s)")
 	if err != nil {
@@ -285,10 +285,10 @@ func TestSimpleCodeBoundedLoopUnderDefaultBudget(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeOutputTruncated(t *testing.T) {
+func TestCodeOutputTruncated(t *testing.T) {
 	// 20k lines x 100 bytes = ~2 MB captured, well under the checkpoint
 	// budget, so the run succeeds and the RESULT is what gets capped.
-	out, isErr, err := callSimpleCode(t, `{"code":"for i=1,20000 do print(string.rep('x',100)) end"}`)
+	out, isErr, err := callCode(t, `{"code":"for i=1,20000 do print(string.rep('x',100)) end"}`)
 	if err != nil || isErr {
 		t.Fatalf("out(len)=%d isErr=%v err=%v", len(out), isErr, err)
 	}
@@ -300,8 +300,8 @@ func TestSimpleCodeOutputTruncated(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeNoPrintProducesGuidance(t *testing.T) {
-	out, isErr, err := callSimpleCode(t, `{"code":"local x=42"}`)
+func TestCodeNoPrintProducesGuidance(t *testing.T) {
+	out, isErr, err := callCode(t, `{"code":"local x=42"}`)
 	if err != nil || isErr {
 		t.Fatalf("out=%q isErr=%v err=%v", out, isErr, err)
 	}
@@ -310,7 +310,7 @@ func TestSimpleCodeNoPrintProducesGuidance(t *testing.T) {
 	}
 }
 
-func TestSimpleCodeArgumentValidation(t *testing.T) {
+func TestCodeArgumentValidation(t *testing.T) {
 	cases := []struct {
 		name string
 		args string
@@ -322,7 +322,7 @@ func TestSimpleCodeArgumentValidation(t *testing.T) {
 		{"oversized code", `{"code":"` + strings.Repeat("x", maxCodeBytes+1) + `"}`, "code too large"},
 	}
 	for _, tc := range cases {
-		out, isErr, err := callSimpleCode(t, tc.args)
+		out, isErr, err := callCode(t, tc.args)
 		if err != nil {
 			t.Fatalf("%s: expected in-band error, got Go error: %v", tc.name, err)
 		}
@@ -335,10 +335,10 @@ func TestSimpleCodeArgumentValidation(t *testing.T) {
 	}
 }
 
-// TestSimpleCodeDoesNotLeakToStdout proves print() is captured in-memory: the
+// TestCodeDoesNotLeakToStdout proves print() is captured in-memory: the
 // VM's fallback when nothing captures output is os.Stdout, so a missing
 // WithCaptureOutput would show up as bytes on stdout here.
-func TestSimpleCodeDoesNotLeakToStdout(t *testing.T) {
+func TestCodeDoesNotLeakToStdout(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -358,14 +358,14 @@ func TestSimpleCodeDoesNotLeakToStdout(t *testing.T) {
 	}
 }
 
-// TestSimpleCodeLua54Semantics pins the language the Description advertises.
+// TestCodeLua54Semantics pins the language the Description advertises.
 // Every expectation here was probed against the running sandbox, and the ones
 // that differ between golua v1 (Lua 5.4) and golua /v2 (Lua 5.5) are included
 // deliberately: bumping the dependency — or a golua release that changes
 // behaviour — fails this test instead of silently making the description lie
 // to the model. The 5.5 branch makes for-loop control variables read-only,
 // which is what killed a real snippet in production.
-func TestSimpleCodeLua54Semantics(t *testing.T) {
+func TestCodeLua54Semantics(t *testing.T) {
 	// Loop control variables are assignable in 5.4, a compile error in 5.5.
 	wantOut(t, `for w in ('a b'):gmatch('%S+') do w = w:upper() print(w) end`, "A\nB\n")
 	wantOut(t, `for i=1,3 do i = i*10 print(i) end`, "10\n20\n30\n")
@@ -437,7 +437,7 @@ func TestSimpleCodeLua54Semantics(t *testing.T) {
 	wantErr(t, `local t={} for i=1,100 do t[i]=i end table.sort(t, function(a,b) return true end)`,
 		"invalid order function for sorting")
 
-	// No clock, no host: the description sends date work to time_location.
+	// No clock, no host: the description sends date work to time.
 	wantOut(t, `print(os, io, debug, coroutine, dofile, loadfile, warn, collectgarbage)`,
 		strings.Repeat("nil\t", 7)+"nil\n")
 }

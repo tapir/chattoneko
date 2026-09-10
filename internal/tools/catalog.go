@@ -7,13 +7,13 @@ import "chattoneko/internal/config"
 // schema, default toggle, handler) lives in its own file; tools that need
 // dependencies (stores) are constructed here with them, so no package-level
 // wiring state is needed. files is the attachment store used by tools that
-// persist artifacts (create_text_file, fetch); limits supplies the
+// persist artifacts (text_file, fetch); limits supplies the
 // live-configured size limits.
 func Builtin(files FileStore, limits *config.Store) *Registry {
 	return New(
-		TimeLocation,
-		SimpleCode,
-		CreateTextFile(files),
+		Time,
+		Code,
+		TextFile(files),
 		Fetch(files, limits),
 	)
 }

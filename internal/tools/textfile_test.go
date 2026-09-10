@@ -35,14 +35,14 @@ func (f *fakeFileStore) CreateLinkedAttachment(_ context.Context, chatID, messag
 func callCreate(t *testing.T, fs FileStore, args string, meta mcphub.CallMeta) (string, bool) {
 	t.Helper()
 	r := Builtin(fs, nil)
-	out, isErr, err := r.Call(context.Background(), "create_text_file", args, meta)
+	out, isErr, err := r.Call(context.Background(), "text_file", args, meta)
 	if err != nil {
 		t.Fatalf("transport error: %v", err)
 	}
 	return out, isErr
 }
 
-func TestCreateTextFile(t *testing.T) {
+func TestTextFile(t *testing.T) {
 	fs := &fakeFileStore{}
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 	out, isErr := callCreate(t, fs, `{"filename":"notes.md","content":"# hi\n"}`, meta)
@@ -68,7 +68,7 @@ func TestCreateTextFile(t *testing.T) {
 	}
 }
 
-func TestCreateTextFileValidation(t *testing.T) {
+func TestTextFileValidation(t *testing.T) {
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 	cases := []struct {
 		name string
@@ -104,7 +104,7 @@ func TestCreateTextFileValidation(t *testing.T) {
 	}
 }
 
-func TestCreateTextFileNilStore(t *testing.T) {
+func TestTextFileNilStore(t *testing.T) {
 	out, isErr := callCreate(t, nil, `{"filename":"a.txt","content":"x"}`, mcphub.CallMeta{ChatID: "c", MessageID: "m"})
 	if !isErr || !strings.Contains(out, "not available") {
 		t.Fatalf("want storage-unavailable error, got isErr=%v %q", isErr, out)

@@ -83,7 +83,7 @@ func TestRegistryCallPanicIsolated(t *testing.T) {
 	}
 }
 
-// mustParseRFC extracts the RFC 3339 timestamp from a time_location result.
+// mustParseRFC extracts the RFC 3339 timestamp from a time result.
 // It is the only parenthesised group, so this works whether or not a location
 // suffix follows it.
 func mustParseRFC(t *testing.T, out string) time.Time {
@@ -100,12 +100,12 @@ func mustParseRFC(t *testing.T, out string) time.Time {
 	return ts
 }
 
-func TestTimeLocation(t *testing.T) {
+func TestTime(t *testing.T) {
 	t.Run("without location", func(t *testing.T) {
 		t.Setenv(EnvLocationString, "")
-		out, isErr, err := Builtin(nil, nil).Call(context.Background(), "time_location", "", mcphub.CallMeta{})
+		out, isErr, err := Builtin(nil, nil).Call(context.Background(), "time", "", mcphub.CallMeta{})
 		if err != nil || isErr {
-			t.Fatalf("time_location: out=%q isErr=%v err=%v", out, isErr, err)
+			t.Fatalf("time: out=%q isErr=%v err=%v", out, isErr, err)
 		}
 		// No location configured → the result ends at the RFC3339 paren.
 		if !strings.HasSuffix(out, ")") {
@@ -120,9 +120,9 @@ func TestTimeLocation(t *testing.T) {
 	t.Run("with location", func(t *testing.T) {
 		const loc = "Berlin, Germany"
 		t.Setenv(EnvLocationString, loc)
-		out, isErr, err := Builtin(nil, nil).Call(context.Background(), "time_location", "", mcphub.CallMeta{})
+		out, isErr, err := Builtin(nil, nil).Call(context.Background(), "time", "", mcphub.CallMeta{})
 		if err != nil || isErr {
-			t.Fatalf("time_location: out=%q isErr=%v err=%v", out, isErr, err)
+			t.Fatalf("time: out=%q isErr=%v err=%v", out, isErr, err)
 		}
 		// Location configured → appended as " — <location>".
 		if !strings.HasSuffix(out, " — "+loc) {
@@ -142,7 +142,7 @@ func TestMerge(t *testing.T) {
 			out:     "from-" + server,
 		}
 	}
-	m := Merge(nil, mk("time_location", "builtin"), mk("time_location", "mcp-a"), mk("search", "mcp-a"))
+	m := Merge(nil, mk("time", "builtin"), mk("time", "mcp-a"), mk("search", "mcp-a"))
 
 	entries := m.Tools()
 	if len(entries) != 2 {
@@ -150,9 +150,9 @@ func TestMerge(t *testing.T) {
 	}
 
 	// Collision: the FIRST source (builtin) owns the name.
-	out, _, err := m.Call(context.Background(), "time_location", "", mcphub.CallMeta{})
+	out, _, err := m.Call(context.Background(), "time", "", mcphub.CallMeta{})
 	if err != nil || out != "from-builtin" {
-		t.Fatalf("time_location routed wrong: out=%q err=%v", out, err)
+		t.Fatalf("time routed wrong: out=%q err=%v", out, err)
 	}
 	out, _, err = m.Call(context.Background(), "search", "", mcphub.CallMeta{})
 	if err != nil || out != "from-mcp-a" {

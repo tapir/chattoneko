@@ -212,7 +212,7 @@ func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 // CleanFilename validates and normalizes an uploaded or tool-provided
 // filename: a plain name of bounded length, no directories, no control
 // characters. Names end up in the DB, in LLM prompts and in download
-// headers, so both call sites (user uploads, create_text_file) share this
+// headers, so both call sites (user uploads, text_file) share this
 // one check.
 func CleanFilename(name string) (string, error) {
 	name = strings.TrimSpace(name)

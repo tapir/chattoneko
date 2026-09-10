@@ -74,7 +74,7 @@ All optional. They are read once at startup.
 | --- | --- |
 | `CHATTO_USERNAME` | Login name. Set both this and the password to require a sign-in; if either is missing there is no auth at all. |
 | `CHATTO_PASSWORD` | Login password, used as-is. Nothing about the login is written to the database; changing it means restarting. |
-| `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time_location` tool result so agents know where you are. |
+| `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time` tool result so agents know where you are. |
 
 ### Command line flags
 
@@ -90,10 +90,10 @@ The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `
 
 Four integrated tools, each toggleable per chat and globally in settings:
 
-- `time_location` — the server's current date, time and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow", "next Friday" or "near me".
-- `simple_code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8 and JSON encode/decode. No file, network, environment or debug access, capped by time, by work, and by output size. The tool description doubles as a Lua 5.1 → 5.4 migration guide for the model (what was renamed or removed, integer/float semantics, patterns vs regex, table borders).
-- `create_text_file` — writes a complete UTF-8 text file that shows up as a download link on the reply. Text only, no binary formats.
-- `fetch` — fetches any URL. With `show=true` the result lands in the chat: an image inline, a text file (JSON, HTML, markdown, CSV, source code) as an attachment on the reply. With `show=false` the text goes to the model instead and nothing is shown — what you want when the data is just a step, e.g. a JSON API response it then crunches with `simple_code`. Files that are neither image nor text are refused.
+- `time` — the server's current date, time and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow", "next Friday" or "near me".
+- `code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8 and JSON encode/decode. No file, network, environment or debug access, capped by time, by work, and by output size. The tool description doubles as a Lua 5.1 → 5.4 migration guide for the model (what was renamed or removed, integer/float semantics, patterns vs regex, table borders).
+- `text_file` — writes a complete UTF-8 text file that shows up as a download link on the reply. Text only, no binary formats.
+- `fetch` — fetches any URL. With `show=true` the result lands in the chat: an image inline, a text file (JSON, HTML, markdown, CSV, source code) as an attachment on the reply. With `show=false` the text goes to the model instead and nothing is shown — what you want when the data is just a step, e.g. a JSON API response it then crunches with `code`. Files that are neither image nor text are refused.
 
 Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart. Each server card carries a **Fetch** button top right, next to the delete icon, that dials it and lists its tools right there with their own on/off defaults, so the global **Tool defaults** list stays purely the integrated tools above. Every MCP tool row also has an optional **title** box: the friendly label the chat shows while that tool runs (`web_exa_search` → "Searching web…") instead of the raw name. Leave it empty to keep the tool's own title, or the name when it has none — integrated tools have theirs built in.
 

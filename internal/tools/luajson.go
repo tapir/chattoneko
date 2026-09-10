@@ -9,7 +9,7 @@ import (
 	"github.com/iceisfun/golua/vm"
 )
 
-// A small "json" library for the simple_code sandbox: json.encode(value) and
+// A small "json" library for the code sandbox: json.encode(value) and
 // json.decode(text), both backed by the standard library's encoding/json.
 //
 // The conversion mirrors golua's own (unexported) JSON helpers in

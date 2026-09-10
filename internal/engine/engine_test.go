@@ -758,7 +758,7 @@ func TestHubEpochChangesAcrossRecreation(t *testing.T) {
 }
 
 // TestToolCreatedAttachment runs the tool loop against the REAL integrated
-// catalog (create_text_file) and verifies the file lands as an attachment
+// catalog (text_file) and verifies the file lands as an attachment
 // linked to the assistant message, and that attachment_created is published
 // into the replay buffer with the meta.
 func TestToolCreatedAttachment(t *testing.T) {
@@ -766,7 +766,7 @@ func TestToolCreatedAttachment(t *testing.T) {
 	prov := &scriptedProvider{
 		scripts: [][]provider.StreamEvent{
 			{
-				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "create_text_file", Args: args},
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "text_file", Args: args},
 				{Kind: provider.EventDone, Finish: "tool_calls"},
 			},
 			{

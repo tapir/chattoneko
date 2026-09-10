@@ -21,7 +21,7 @@ type FileStore interface {
 // lower anyway: the content passes through the model's output tokens.
 const maxFileBytes = 5 * 1024 * 1024 // 5 MiB
 
-// CreateTextFile returns the "create_text_file" tool bound to the given
+// TextFile returns the "text_file" tool bound to the given
 // file store: the model writes a complete text file which is stored as an
 // attachment linked to the assistant message that produced it, and surfaces
 // in the UI as a download link on that reply. Content passes through the
@@ -30,9 +30,9 @@ const maxFileBytes = 5 * 1024 * 1024 // 5 MiB
 // via attach.Process).
 //
 // All user/LLM-facing text is hardcoded here — edit in place to change it.
-func CreateTextFile(files FileStore) Tool {
+func TextFile(files FileStore) Tool {
 	return Tool{
-		Name: "create_text_file",
+		Name: "text_file",
 		Description: "Create a UTF-8 text file that is attached to your reply as a download " +
 			"link for the user. Use it when the user asks for a downloadable/saveable file " +
 			"(.txt, .md, .csv, .json, source code, ...). Provide the COMPLETE file content " +
@@ -56,12 +56,12 @@ func CreateTextFile(files FileStore) Tool {
 		DefaultEnabled: true,
 		Title:          "Writing a file…",
 		Handler: func(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (string, error) {
-			return createTextFile(ctx, argsJSON, meta, files)
+			return writeTextFile(ctx, argsJSON, meta, files)
 		},
 	}
 }
 
-func createTextFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, files FileStore) (string, error) {
+func writeTextFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, files FileStore) (string, error) {
 	if files == nil {
 		return "", errors.New("file storage is not available")
 	}

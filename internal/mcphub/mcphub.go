@@ -38,7 +38,7 @@ type Entry struct {
 	Schema         json.RawMessage `json:"schema"`          // JSON schema for arguments
 	DefaultEnabled bool            `json:"default_enabled"` // config default toggle
 	// Title is the USER-facing label the UI shows instead of the raw name
-	// ("Coding…" for simple_code). Empty means "no title" — the UI falls back
+	// ("Coding…" for code). Empty means "no title" — the UI falls back
 	// to Display. Never sent to the model, which only ever sees Display.
 	Title string `json:"title"`
 }

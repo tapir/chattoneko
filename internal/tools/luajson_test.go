@@ -17,7 +17,7 @@ func callLua(t *testing.T, code string) (string, bool, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Builtin(nil, nil).Call(context.Background(), "simple_code", string(args), mcphub.CallMeta{})
+	return Builtin(nil, nil).Call(context.Background(), "code", string(args), mcphub.CallMeta{})
 }
 
 // wantOut runs code and asserts the exact printed output.

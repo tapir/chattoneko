@@ -15,7 +15,7 @@ import (
 	"chattoneko/internal/mcphub"
 )
 
-// The "simple_code" tool: runs a small Lua snippet in a restricted sandbox
+// The "code" tool: runs a small Lua snippet in a restricted sandbox
 // and returns whatever the snippet prints. It exists so the model can do
 // exact arithmetic, string/data wrangling, or logic that is error-prone to
 // do "in its head" — an advanced calculator / expression evaluator.
@@ -39,7 +39,7 @@ import (
 // for an LLM, not a place to adopt a language version no model has seen; v1
 // keeps the 5.1/5.2 compat aliases (math.pow, bit32, ...) so those idioms run
 // too. Bumping to /v2 is an import-path change plus this description's
-// version text — and TestSimpleCodeLua54Semantics below will fail first.
+// version text — and TestCodeLua54Semantics below will fail first.
 //
 // hardenSandbox then drops the few globals that do not belong here — see
 // removedGlobals for why each one goes, and note that dropping a module also
@@ -78,8 +78,8 @@ import (
 const maxCodeBytes = 64 * 1024
 
 // chunkName is what Lua error messages report as the source of the snippet
-// ("[string \"simple_code\"]:1: ...") instead of echoing the code itself.
-const chunkName = "simple_code"
+// ("[string \"code\"]:1: ...") instead of echoing the code itself.
+const chunkName = "code"
 
 // luaCheckpointBudget bounds VM checkpoints — loop backedges, calls and tail
 // calls, NOT raw instructions. Wall-clock time is already bounded by the
@@ -105,7 +105,7 @@ const luaCheckpointBudget = 5_000_000
 const maxOutputBytes = 1 * 1024 * 1024
 
 // The code argument is a single required string.
-var simpleCodeSchema = json.RawMessage(`{
+var codeSchema = json.RawMessage(`{
 	"type": "object",
 	"properties": {
 		"code": {
@@ -117,8 +117,8 @@ var simpleCodeSchema = json.RawMessage(`{
 	"additionalProperties": false
 }`)
 
-var SimpleCode = Tool{
-	Name: "simple_code",
+var Code = Tool{
+	Name: "code",
 	Description: "Run a short Lua 5.4 snippet in a restricted sandbox and get back whatever it prints. " +
 		"Use it as an advanced calculator / expression evaluator for work that is error-prone to do in your head: " +
 		"exact arithmetic, date and duration math on epoch seconds, text processing with Lua patterns, base conversions, table and data wrangling.\n\n" +
@@ -133,7 +133,7 @@ var SimpleCode = Tool{
 		"NOT AVAILABLE — these are nil, not gated: io, os, debug, coroutine, warn, collectgarbage, dofile, loadfile, " +
 		"and require() cannot load any module. No files, no network, no environment, no threads. " +
 		"load() accepts text only (string.dump exists but its bytecode cannot be loaded back). " +
-		"There is no clock in here: get the current date and time from the time_location tool, then do the arithmetic yourself " +
+		"There is no clock in here: get the current date and time from the time tool, then do the arithmetic yourself " +
 		"(86400 seconds per day, and mind leap years and month lengths).\n\n" +
 
 		"LUA 5.1 -> 5.4: REMOVED OR RENAMED. Snippets written from 5.1/LuaJIT memory fail on these — " +
@@ -199,17 +199,17 @@ var SimpleCode = Tool{
 
 		"LIMITS AND ERRORS. 64 KiB of code, a 30 s wall clock, about 5M checkpoints (loop backedges and calls — a few " +
 		"million iterations of a simple loop) and 1 MiB of returned output. " +
-		"Errors arrive in-band as 'Error: [string \"simple_code\"]:LINE: message' and abort the snippet; a syntax error means " +
+		"Errors arrive in-band as 'Error: [string \"code\"]:LINE: message' and abort the snippet; a syntax error means " +
 		"nothing ran at all. pcall and xpcall catch runtime errors (including the 'stack overflow' of deep recursion) but " +
 		"never a syntax error in the chunk you submitted — for code you build at runtime use load(text) and check its " +
 		"second return value.",
-	Schema:         simpleCodeSchema,
+	Schema:         codeSchema,
 	DefaultEnabled: true,
 	Title:          "Coding…",
-	Handler:        simpleCode,
+	Handler:        runCode,
 }
 
-func simpleCode(ctx context.Context, argsJSON string, _ mcphub.CallMeta) (string, error) {
+func runCode(ctx context.Context, argsJSON string, _ mcphub.CallMeta) (string, error) {
 	var args struct {
 		Code string `json:"code"`
 	}

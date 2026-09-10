@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"strings"
 
-	lua "github.com/Shopify/go-lua"
+	"github.com/iceisfun/golua/v2/compiler"
+	"github.com/iceisfun/golua/v2/parser"
+	"github.com/iceisfun/golua/v2/stdlib"
+	"github.com/iceisfun/golua/v2/vm"
 
 	"chattoneko/internal/mcphub"
 )
@@ -17,52 +20,45 @@ import (
 // exact arithmetic, string/data wrangling, or logic that is error-prone to
 // do "in its head" — an advanced calculator / expression evaluator.
 //
-// SANDBOXING — only five libraries are loaded into the Lua state:
+// The VM is golua (Lua 5.5). Sandboxing is capability-based rather than a
+// hand-picked library whitelist: stdlib.Open registers the standard modules,
+// and every host-facing one only appears when its provider is set. We set no
+// providers, so io, os, debug, chan, time, exec and http are never
+// registered at all, and dofile/loadfile do not exist without a code
+// provider. What is left is base plus string, table, math, bit32, utf8, an
+// inert package/require (its searchers only reach the filesystem through a
+// code provider, and package.loadlib always reports "absent") and our own
+// json module (luajson.go).
 //
-//	base   (print, pcall, tostring, type, pairs, ipairs, ...)
-//	string
-//	table
-//	math
-//	bit32
-//
-// The io, os, package, coroutine and debug libraries are deliberately NOT
-// opened, so the snippet has no file, network, environment, or debug access.
-// The allowed set is hardcoded below in sandboxLibraries; the LLM-facing
-// description repeats it so the model knows what it can rely on.
-//
-// HARDENING — a few base-library globals are unsafe in this context and are
-// neutralized after the libraries are opened (see hardenSandbox):
-//
-//   - dofile()/loadfile() read arbitrary files from the server's filesystem;
-//     both are removed.
-//   - load() in its default "bt" mode also parses precompiled binary
-//     bytecode, which is a parser over attacker-controlled bytes. It is
-//     replaced with a text-only wrapper (mode "t") that keeps the useful
-//     string-compilation behavior but rejects binary chunks.
-//   - collectgarbage() calls the host's runtime.GC() (a stop-the-world
-//     pause that a snippet could hammer) and leaks heap statistics; it is
-//     removed.
-//
-// Everything else in base (print, pcall, tostring, type, pairs, ipairs,
-// load-as-text, ...) is kept.
+// hardenSandbox then drops the few globals that do not belong here — see
+// removedGlobals for why each one goes, and note that dropping a module also
+// has to clear its package.loaded entry or require() hands it straight back —
+// and replaces load() with a text-only wrapper so no precompiled bytecode
+// reaches the undumper.
 //
 // GETTING RESULTS BACK — the tool returns ONLY what the snippet sends to
-// print(). We do not read return values off the Lua stack (we cannot know
-// what the model will compute), so the description tells the model to always
-// print() its final result; the return value of the last expression is
-// discarded. To make this work, the standard print() is replaced with a Go
-// function that appends to a buffer instead of writing to the process
-// stdout (which the go-lua default print does directly).
+// print(), captured in-memory by the VM (vm.WithCaptureOutput) rather than
+// written to the process stdout; stdlib does the tab-joining and honors
+// __tostring. We do not read return values off the VM (we cannot know what
+// the model will compute), so the description tells the model to always
+// print() its final result.
 //
-// SAFETY — the snippet is executed exclusively through lua.DoString (which
-// itself uses a protected call), so a Lua error is returned as a Go error
-// rather than crashing the host. Two further limits keep a hostile or
-// runaway snippet from wedging the turn loop:
+// LIMITS — a snippet is bounded three ways, none of them hand-rolled:
 //
-//   - an instruction budget enforced by a debug count-hook, which aborts an
-//     infinite loop without ever touching os.Exit/panic in the host, and
-//   - an output cap, so a snippet that prints in a tight loop cannot grow an
-//     unbounded result string.
+//   - wall clock: the VM runs under the handler's context, which
+//     Registry.Call already bounds (30s). golua checks cancellation at loop
+//     backedges, calls and tail calls, so a runaway loop is aborted —
+//     something a debug count-hook alone cannot do.
+//   - work/memory: luaCheckpointBudget. A deadline bounds CPU but not
+//     memory, and the capture buffer is an uncapped append; this is what
+//     stops a print loop from retaining hundreds of MB before the deadline
+//     lands.
+//   - output: the returned result is truncated at maxOutputBytes, so a
+//     chatty snippet cannot produce a multi-megabyte tool result.
+//
+// Lua errors (including the limit errors, which are catchable by pcall) come
+// back as a Go error, which the Registry surfaces to the model in-band as
+// "Error: ..." — the host never crashes.
 //
 // All user/LLM-facing text is hardcoded here — edit in place to change it.
 
@@ -70,18 +66,31 @@ import (
 // small; this keeps a pathological payload from even reaching the VM.
 const maxCodeBytes = 64 * 1024
 
-// luaInstructionBudget bounds total executed VM instructions. It is generous
-// enough for any realistic calculation but aborts a `while true do end`
-// within a fraction of a second (this VM runs ~100M instructions/sec).
-const luaInstructionBudget = 100_000_000
+// chunkName is what Lua error messages report as the source of the snippet
+// ("[string \"simple_code\"]:1: ...") instead of echoing the code itself.
+const chunkName = "simple_code"
 
-// luaHookBatch is how many instructions pass between count-hook firings.
-// Coarse batching keeps hook overhead negligible; the effective ceiling is
-// budget ± batch, which is fine for a runaway guard.
-const luaHookBatch = 10_000
+// luaCheckpointBudget bounds VM checkpoints — loop backedges, calls and tail
+// calls, NOT raw instructions. Wall-clock time is already bounded by the
+// handler's context; this bound exists because a deadline cannot bound
+// memory. golua's output capture appends without limit, so a runaway print
+// loop retains ~450 MB/s until the context deadline lands. 5M checkpoints
+// caps that at roughly 2.5M captured lines while leaving ~50x the headroom
+// any realistic calculation needs.
+//
+// ponytail: this bounds iterations, not bytes per iteration, so retention is
+// still only bounded by the deadline — a loop keeping string.rep results
+// grows at ~400 MB/s, i.e. ~12 GB across the 30s window. golua caps each
+// string at 1 GB and clamps table growth into a catchable "not enough
+// memory", but nothing caps how many live strings a run may hold, and
+// debug.SetMemoryLimit would only turn the OOM kill into a fatal throw.
+// Upgrade path if this ever faces untrusted users: run the VM in a subprocess
+// under RLIMIT_AS or a cgroup memory.max.
+const luaCheckpointBudget = 5_000_000
 
-// maxOutputBytes caps captured print output. Exceeding it aborts the run
-// with a clear error rather than producing a multi-megabyte tool result.
+// maxOutputBytes caps the returned tool result. The checkpoint budget bounds
+// what a run can capture, but that is still far more than belongs in a tool
+// result the model has to read.
 const maxOutputBytes = 1 * 1024 * 1024
 
 // The code argument is a single required string.
@@ -90,7 +99,7 @@ var simpleCodeSchema = json.RawMessage(`{
 	"properties": {
 		"code": {
 			"type": "string",
-			"description": "Complete Lua 5.2 snippet. Use print(...) to emit results — anything not printed is discarded. Example: print(2^10 + math.floor(3.7))."
+			"description": "Complete Lua 5.5 snippet. Use print(...) to emit results — anything not printed is discarded. Example: print(2^10 + math.floor(3.7))."
 		}
 	},
 	"required": ["code"],
@@ -99,20 +108,30 @@ var simpleCodeSchema = json.RawMessage(`{
 
 var SimpleCode = Tool{
 	Name: "simple_code",
-	Description: "Run a short Lua 5.2 snippet in a restricted sandbox and get back whatever it prints. " +
+	Description: "Run a short Lua 5.5 snippet in a restricted sandbox and get back whatever it prints. " +
 		"Use it as an advanced calculator / expression evaluator for exact arithmetic, date/duration math, " +
-		"string manipulation, or table/data processing that you should not do in your head. " +
-		"Available libraries: base (print, pcall, tostring, type, pairs, ipairs, ...), string, table, math, bit32. " +
+		"string manipulation (string.match/gsub/gmatch, string.pack, utf8), or table/data processing that you should not do in your head. " +
+		"Available libraries: base (print, pcall, tostring, type, pairs, ipairs, ...), string, table, math, bit32, utf8, json. " +
 		"There is NO access to files, the network, the OS, or the environment. " +
+		"Lua 5.5 notes: integers and floats are distinct (2^10 prints as 1024.0), and math.pow/atan2/log10/cosh are gone — " +
+		"use ^, math.atan(y,x), math.log(x,10). " +
+		"json.encode(value) -> string, json.decode(text) -> value. " +
+		"encode takes ANY value, not just tables: json.encode(42) is 42, json.encode('x') is \"x\". " +
+		"A table becomes a JSON array only when its keys are exactly 1..n, so an empty table encodes as {} and {1,2,x=3} as {\"1\":1,\"2\":2,\"x\":3}; " +
+		"object keys come out sorted, and a NaN or infinite float is an error. " +
+		"decode keeps integers exact to int64, and JSON null becomes nil — which REMOVES that key from its table, " +
+		"so {\"a\":null} decodes to an empty table and [1,null,3] leaves a hole at index 2. " +
+		"Both RAISE a Lua error on bad input (malformed JSON, NaN, input over 16 MB) instead of returning nil, " +
+		"so wrap them in pcall when the text may not be valid JSON. " +
 		"IMPORTANT: the sandbox returns only what you send to print() — always print(...) your final result; " +
-		"return values are discarded. Execution is instruction-capped, so keep loops reasonable.",
+		"return values are discarded. Execution is time-capped and work-capped, so keep loops and output reasonable.",
 	Schema:         simpleCodeSchema,
 	DefaultEnabled: true,
 	Title:          "Coding…",
 	Handler:        simpleCode,
 }
 
-func simpleCode(_ context.Context, argsJSON string, _ mcphub.CallMeta) (string, error) {
+func simpleCode(ctx context.Context, argsJSON string, _ mcphub.CallMeta) (string, error) {
 	var args struct {
 		Code string `json:"code"`
 	}
@@ -126,138 +145,126 @@ func simpleCode(_ context.Context, argsJSON string, _ mcphub.CallMeta) (string, 
 	if len(code) > maxCodeBytes {
 		return "", fmt.Errorf("code too large (max %d bytes)", maxCodeBytes)
 	}
-	return runLua(code, luaInstructionBudget)
+	return runLua(ctx, code)
 }
 
-// sandboxLibraries is the whitelist of libraries opened in the Lua state.
-// Anything not listed here is simply absent from the VM.
-var sandboxLibraries = []struct {
-	name string
-	open lua.Function
-}{
-	{"_G", lua.BaseOpen},
-	{"string", lua.StringOpen},
-	{"table", lua.TableOpen},
-	{"math", lua.MathOpen},
-	{"bit32", lua.Bit32Open},
+// removedGlobals are dropped after stdlib.Open. Everything else the sandbox
+// lacks (io, os, debug, chan, time, exec, http, dofile, loadfile) is absent
+// because no provider was set — capability gating, not deletion.
+var removedGlobals = []string{
+	// Each Lua coroutine runs on its own goroutine, and one left suspended
+	// and abandoned costs ~16 KB that neither the deadline nor the
+	// checkpoint budget bounds — the budget counts iterations, not bytes,
+	// and a coroutine is ~180x what a printed line costs. Measured: within
+	// the budget a snippet strands ~1.2M of them (~20 GB) and the kernel
+	// OOM-kills the process. v.Close reaps them, but only after the run.
+	"coroutine",
+	// Drives the host's garbage collector, and collectgarbage("count")
+	// reports the whole Go process's heap in KB. runtime.ReadMemStats is
+	// also a stop-the-world pause, so a loop over it measurably slows down
+	// every other goroutine in the process until the deadline lands.
+	"collectgarbage",
+	// WithCaptureOutput captures print() only; warn() would write straight
+	// to the host's stderr.
+	"warn",
+	// golua extensions, not standard Lua: Go-style globbing, plus helpers
+	// for inspecting the host-side capture buffer from inside the sandbox.
+	"glob", "_lastoutput", "_outputlines",
 }
 
-// newSandboxState builds a fresh Lua state with only the whitelisted
-// libraries loaded. A new state per call keeps executions fully isolated.
-// Filesystem-touching base globals (dofile, loadfile) are then removed.
-func newSandboxState() *lua.State {
-	l := lua.NewState()
-	for _, lib := range sandboxLibraries {
-		lua.Require(l, lib.name, lib.open, true)
-		l.Pop(1) // Require leaves the module table on the stack
-	}
-	hardenSandbox(l)
-	return l
-}
-
-// hardenSandbox neutralizes base-library globals that would otherwise defeat
-// the sandbox. Called after the libraries are opened.
-func hardenSandbox(l *lua.State) {
-	// dofile/loadfile read server files; collectgarbage drives the host GC
-	// and leaks heap stats. None belong in a calculator sandbox.
-	for _, name := range []string{"dofile", "loadfile", "collectgarbage"} {
-		l.PushNil()
-		l.SetGlobal(name)
-	}
-	restrictLoadToText(l)
-}
-
-// restrictLoadToText replaces the base load() with a wrapper that only
-// compiles literal string chunks as TEXT (mode "t"). The stock load()
-// defaults to mode "bt", which additionally parses precompiled binary
-// bytecode via undump; allowing that would mean feeding attacker-controlled
-// bytes into the binary parser. The function-reader form of load() is also
-// rejected for simplicity — string chunks are all a calculator needs.
-func restrictLoadToText(l *lua.State) {
-	l.PushGoFunction(func(s *lua.State) int {
-		chunk, ok := s.ToString(1)
-		if !ok {
-			s.PushNil()
-			s.PushString("load: only literal string chunks are supported")
-			return 2
-		}
-		name := chunk
-		if n, ok := s.ToString(2); ok && n != "" {
-			name = n
-		}
-		if err := lua.LoadBuffer(s, chunk, name, "t"); err != nil {
-			// On error LoadBuffer already pushed the message string; add a
-			// nil before it so the result matches load()'s (nil, msg) contract.
-			s.PushNil()
-			s.Insert(-2)
-			return 2
-		}
-		// On success the compiled function is already on top of the stack.
-		return 1
-	})
-	l.SetGlobal("load")
-}
-
-// overridePrint replaces the base library's print with a Go function that
-// appends to out instead of writing to the process stdout. It mimics the
-// standard print: each argument is stringified (honoring __tostring),
-// arguments are separated by tabs, and each call ends with a newline. If the
-// output cap is exceeded it raises a Lua error to stop the run cleanly.
-func overridePrint(l *lua.State, out *strings.Builder) {
-	l.PushGoFunction(func(s *lua.State) int {
-		n := s.Top()
-		for i := 1; i <= n; i++ {
-			str, ok := lua.ToStringMeta(s, i)
-			if !ok {
-				str = "<unprintable>"
-			}
-			if i > 1 {
-				out.WriteString("\t")
-			}
-			out.WriteString(str)
-			s.Pop(1) // pop the stringified value ToStringMeta pushed
-		}
-		out.WriteString("\n")
-		if out.Len() > maxOutputBytes {
-			lua.Errorf(s, "output too large (exceeded %d bytes); print less", maxOutputBytes)
-		}
-		return 0
-	})
-	l.SetGlobal("print")
-}
-
-// setInstructionLimit installs a count-hook that aborts the run once the
-// instruction budget is spent. The abort is raised as a Lua error, so it is
-// caught by DoString's protected call and surfaced as a normal error — the
-// host never crashes. budget <= 0 disables the limit.
-func setInstructionLimit(l *lua.State, budget int) {
-	if budget <= 0 {
+// removeGlobal drops a global and its package.loaded entry. Clearing only the
+// global is not enough: openPackage populates package.loaded from the module
+// globals at the end of stdlib.Open, so `require("coroutine")` would hand the
+// module straight back.
+func removeGlobal(v *vm.VM, name string) {
+	v.SetGlobal(name, vm.Nil)
+	pkg := v.GetGlobal("package")
+	if !pkg.IsTable() {
 		return
 	}
-	remaining := budget
-	lua.SetDebugHook(l, func(s *lua.State, _ lua.Debug) {
-		remaining -= luaHookBatch
-		if remaining <= 0 {
-			lua.Errorf(s, "instruction budget exceeded (possible infinite loop)")
-		}
-	}, lua.MaskCount, luaHookBatch)
+	if loaded := pkg.AsTable().Get(vm.NewString("loaded")); loaded.IsTable() {
+		loaded.AsTable().Set(vm.NewString(name), vm.Nil)
+	}
 }
 
 // runLua executes code in a fresh sandbox and returns everything it printed.
-// budget bounds executed VM instructions (0 disables the limit). A Lua
-// compile/runtime error is returned as an error (which the Registry surfaces
-// to the model in-band as "Error: ...").
-func runLua(code string, budget int) (string, error) {
-	l := newSandboxState()
-	var out strings.Builder
-	overridePrint(l, &out)
-	setInstructionLimit(l, budget)
-
-	if err := lua.DoString(l, code); err != nil {
+// The run is bounded by ctx (Registry.Call gives every integrated tool a 30s
+// deadline) and by luaCheckpointBudget. A new VM per call keeps executions
+// fully isolated; there is no shared state to reset.
+func runLua(ctx context.Context, code string) (string, error) {
+	block, err := parser.Parse(chunkName, code)
+	if err != nil {
 		return "", err
 	}
-	if out.Len() == 0 {
-		return "(ran successfully but printed nothing — use print(...) to emit results)", nil
+	proto, err := compiler.Compile(chunkName, block)
+	if err != nil {
+		return "", err
 	}
-	return out.String(), nil
+
+	v := vm.New(
+		vm.WithContext(ctx),
+		vm.WithCaptureOutput(true),
+		vm.WithLimits(vm.Limits{
+			MaxInstructions: luaCheckpointBudget,
+			MinGCInterval:   -1, // Lua must never trigger the host's GC
+		}),
+	)
+	stdlib.Open(v)
+	for _, name := range removedGlobals {
+		removeGlobal(v, name)
+	}
+	textOnlyLoad(v)
+	openJSON(v)
+
+	// The documented VM lifecycle: Close is what reaps goroutines a library
+	// spawned. Coroutines are removed today, so there is nothing to reap.
+	defer v.Close(ctx)
+
+	if _, err := v.Run(proto); err != nil {
+		return "", err
+	}
+	return joinOutput(v.OutputLines()), nil
+}
+
+// textOnlyLoad keeps stock load() semantics (reader functions, chunkname,
+// env) but forces mode "t", so precompiled bytecode never reaches the
+// undumper. golua validates that parser and recovers its panics, but load()
+// defaults to mode "bt" and a snippet has no legitimate reason to feed bytes
+// to it — an LLM emits source, not bytecode.
+func textOnlyLoad(v *vm.VM) {
+	stock := v.GetGlobal("load")
+	v.SetGlobal("load", vm.NewNativeFunc(func(v *vm.VM) int {
+		args := []vm.Value{v.Get(1), v.Get(2), vm.NewString("t")}
+		if v.ArgCount() >= 4 {
+			args = append(args, v.Get(4))
+		}
+		res, err := v.ProtectedCall(stock, args)
+		if err != nil {
+			v.Set(0, vm.Nil)
+			v.Set(1, vm.NewString(err.Error()))
+			return 2
+		}
+		for i, r := range res {
+			v.Set(i, r)
+		}
+		return len(res)
+	}))
+}
+
+// joinOutput renders the captured print lines into the tool result. The VM
+// hands back one newline-free string per print() call (arguments already
+// tab-joined, __tostring already honored), so this only adds the newlines and
+// enforces maxOutputBytes.
+func joinOutput(lines []string) string {
+	if len(lines) == 0 {
+		return "(ran successfully but printed nothing — use print(...) to emit results)"
+	}
+	out := strings.Join(lines, "\n") + "\n"
+	if len(out) > maxOutputBytes {
+		// ponytail: the cut can split a multi-byte rune; encoding/json
+		// replaces the stray bytes with U+FFFD on the way to the model.
+		out = out[:maxOutputBytes] +
+			fmt.Sprintf("\n(output truncated at %d bytes — print less)\n", maxOutputBytes)
+	}
+	return out
 }

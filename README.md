@@ -91,7 +91,7 @@ The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `
 Four integrated tools, each toggleable per chat and globally in settings:
 
 - `time_location` — the server's current date, time and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow", "next Friday" or "near me".
-- `simple_code` — runs a small Lua snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing. No file, network, environment or debug access, with an instruction budget and an output cap.
+- `simple_code` — runs a short Lua 5.5 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8 and JSON encode/decode. No file, network, environment or debug access, capped by time, by work, and by output size.
 - `create_text_file` — writes a complete UTF-8 text file that shows up as a download link on the reply. Text only, no binary formats.
 - `show_image` — fetches a direct image URL and displays it inline in the chat, so the model can show you a picture rather than paste a link.
 

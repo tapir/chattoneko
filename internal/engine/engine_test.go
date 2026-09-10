@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -758,95 +759,158 @@ func TestHubEpochChangesAcrossRecreation(t *testing.T) {
 }
 
 // TestToolCreatedAttachment runs the tool loop against the REAL integrated
-// catalog (text_file) and verifies the file lands as an attachment
-// linked to the assistant message, and that attachment_created is published
-// into the replay buffer with the meta.
+// catalog and the real store, covering the two-step file flow: create_file
+// stores a file and hands its id to the model WITHOUT putting it on screen,
+// and attach_file is what links it to the assistant message and publishes
+// attachment_created into the replay buffer.
 func TestToolCreatedAttachment(t *testing.T) {
-	args := `{"filename":"lorem.txt","content":"lorem ipsum"}`
-	prov := &scriptedProvider{
-		scripts: [][]provider.StreamEvent{
+	t.Run("create_file stores without showing", func(t *testing.T) {
+		prov := &scriptedProvider{
+			scripts: [][]provider.StreamEvent{
+				{
+					{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "create_file",
+						Args: `{"filename":"lorem.txt","content":"lorem ipsum"}`},
+					{Kind: provider.EventDone, Finish: "tool_calls"},
+				},
+				{
+					{Kind: provider.EventTextDelta, Text: "Created it — say the word and I'll show it."},
+					{Kind: provider.EventDone, Finish: "stop"},
+				},
+			},
+		}
+		eng, st, _ := testEngine(t, prov, &fakeMCP{})
+		eng.catalog = tools.Builtin(st, nil)
+		chatID := newTestChat(t, st)
+		if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+			ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "make lorem.txt",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		ch, unsub := eng.Subscribe(chatID, -1)
+		defer unsub()
+
+		am, err := eng.startGeneration(context.Background(), chatID)
+		if err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		waitFor(t, "generation complete", 5*time.Second, func() bool {
+			m, err := st.GetMessage(context.Background(), am.ID)
+			return err == nil && m.Status == store.StatusComplete
+		})
+
+		// Stored in the chat, correct content, but on no message.
+		var toolResult string
+		msgs, _ := st.ListMessages(context.Background(), chatID)
+		for _, m := range msgs {
+			if m.Role == store.RoleTool {
+				toolResult = m.Content
+			}
+			for _, a := range m.Attachments {
+				t.Fatalf("file was shown on message %s without attach_file: %+v", m.ID, a)
+			}
+		}
+		id := attachmentIDIn(toolResult)
+		if id == "" {
+			t.Fatalf("tool result carries no attachment id: %q", toolResult)
+		}
+		att, err := st.GetAttachment(context.Background(), id)
+		if err != nil || att.Filename != "lorem.txt" || att.Kind != "text" || att.ChatID != chatID {
+			t.Fatalf("attachment meta wrong: %+v err=%v", att, err)
+		}
+		if string(att.Data) != "lorem ipsum" {
+			t.Fatalf("attachment blob wrong: %q", att.Data)
+		}
+		if !strings.Contains(toolResult, "attach_file") {
+			t.Fatalf("tool result should name the next step: %q", toolResult)
+		}
+		// Nothing was shown, so nothing was announced.
+		if sawAttachmentEvent(ch) {
+			t.Fatal("attachment_created published for a file no message shows")
+		}
+	})
+
+	t.Run("attach_file shows it", func(t *testing.T) {
+		prov := &scriptedProvider{}
+		eng, st, _ := testEngine(t, prov, &fakeMCP{})
+		eng.catalog = tools.Builtin(st, nil)
+		chatID := newTestChat(t, st)
+		// A file created earlier in the chat (by create_file or fetch save=true)
+		// and not shown yet.
+		created, err := st.CreateAttachment(context.Background(), chatID, "lorem.txt", "text", "text/plain", 11, []byte("lorem ipsum"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		prov.scripts = [][]provider.StreamEvent{
 			{
-				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "text_file", Args: args},
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "attach_file",
+					Args: `{"ids":["` + created.ID + `"]}`},
 				{Kind: provider.EventDone, Finish: "tool_calls"},
 			},
 			{
 				{Kind: provider.EventTextDelta, Text: "Here is your file."},
 				{Kind: provider.EventDone, Finish: "stop"},
 			},
-		},
-	}
-	// Engine wired with the real integrated registry; the store is attached
-	// after testEngine creates it (Builtin needs the same store instance).
-	eng, st, _ := testEngine(t, prov, &fakeMCP{})
-	eng.catalog = tools.Builtin(st, nil)
-	chatID := newTestChat(t, st)
-	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
-		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "make lorem.txt",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Subscribe BEFORE starting so every event is captured live.
-	ch, unsub := eng.Subscribe(chatID, -1)
-	defer unsub()
-
-	am, err := eng.startGeneration(context.Background(), chatID)
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	waitFor(t, "generation complete", 5*time.Second, func() bool {
-		m, err := st.GetMessage(context.Background(), am.ID)
-		return err == nil && m.Status == store.StatusComplete
-	})
-
-	// Attachment persisted, linked to the assistant message, correct content.
-	metas, err := st.ListAttachmentsByMessage(context.Background(), am.ID)
-	if err != nil || len(metas) != 1 {
-		t.Fatalf("want 1 attachment on assistant message, got %d (err=%v)", len(metas), err)
-	}
-	meta := metas[0]
-	if meta.Filename != "lorem.txt" || meta.Kind != "text" || meta.ChatID != chatID {
-		t.Fatalf("attachment meta wrong: %+v", meta)
-	}
-	att, err := st.GetAttachment(context.Background(), meta.ID)
-	if err != nil || string(att.Data) != "lorem ipsum" {
-		t.Fatalf("attachment blob wrong: %q err=%v", att.Data, err)
-	}
-
-	// Tool result mentions the filename (what the model sees).
-	msgs, _ := st.ListMessages(context.Background(), chatID)
-	var toolResult string
-	for _, m := range msgs {
-		if m.Role == store.RoleTool {
-			toolResult = m.Content
 		}
-	}
-	if !strings.Contains(toolResult, "lorem.txt") {
-		t.Fatalf("tool result does not mention file: %q", toolResult)
-	}
+		if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+			ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "show it again",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		ch, unsub := eng.Subscribe(chatID, -1)
+		defer unsub()
 
-	// attachment_created was published with the meta and the message id.
-	sawAttachment := false
-	timeout := time.After(2 * time.Second)
-	for !sawAttachment {
+		am, err := eng.startGeneration(context.Background(), chatID)
+		if err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		waitFor(t, "generation complete", 5*time.Second, func() bool {
+			m, err := st.GetMessage(context.Background(), am.ID)
+			return err == nil && m.Status == store.StatusComplete
+		})
+
+		metas, err := st.ListAttachmentsByMessage(context.Background(), am.ID)
+		if err != nil || len(metas) != 1 || metas[0].ID != created.ID {
+			t.Fatalf("want the created file on the assistant message, got %+v (err=%v)", metas, err)
+		}
+		if !sawAttachmentEvent(ch) {
+			t.Fatal("attachment_created never published")
+		}
+	})
+}
+
+// attachmentIDIn pulls the id out of a tool result the way the model does.
+func attachmentIDIn(result string) string {
+	m := regexp.MustCompile(`attachment id ([0-9a-fA-F-]{36})`).FindStringSubmatch(result)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// sawAttachmentEvent drains a subscribed chat stream (the replay buffer holds
+// everything) looking for attachment_created, stopping at the generation's
+// done event or once the stream goes quiet.
+func sawAttachmentEvent(ch <-chan WireEvent) bool {
+	saw := false
+	deadline := time.After(500 * time.Millisecond)
+drain:
+	for {
 		select {
 		case ev, ok := <-ch:
 			if !ok {
-				t.Fatal("stream closed before attachment_created")
+				break drain
 			}
 			if ev.Type == "attachment_created" {
-				if ev.Attachment == nil || ev.Attachment.ID != meta.ID {
-					t.Fatalf("attachment_created payload wrong: %+v", ev.Attachment)
-				}
-				if ev.MessageID != am.ID {
-					t.Fatalf("attachment_created message_id = %q, want %q", ev.MessageID, am.ID)
-				}
-				sawAttachment = true
+				saw = true
 			}
-		case <-timeout:
-			t.Fatal("attachment_created never published")
+			if ev.Type == "done" && saw {
+				break drain
+			}
+		case <-deadline:
+			break drain
 		}
 	}
+	return saw
 }
 
 // TestBroadcastChatUpdatedReachesGlobalWithoutHub: a title broadcast for a

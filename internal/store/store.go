@@ -57,11 +57,12 @@ type ToolCall struct {
 	Turn int64 `json:"turn"`
 }
 
-// AttachmentMeta is attachment metadata (no blob data).
+// AttachmentMeta is attachment metadata (no blob data). An attachment belongs
+// to a chat, not to a message: which messages show it lives in the
+// message_attachments link table (see ListAttachmentsByMessage).
 type AttachmentMeta struct {
 	ID        string `json:"id"`
 	ChatID    string `json:"chat_id"`
-	MessageID string `json:"message_id"`
 	Filename  string `json:"filename"`
 	Kind      string `json:"kind"`
 	Mime      string `json:"mime"`
@@ -247,7 +248,6 @@ func attachmentMetaRow(a query.ListAttachmentMetasForChatRow) AttachmentMeta {
 	return AttachmentMeta{
 		ID:             a.ID,
 		ChatID:         a.ChatID,
-		MessageID:      a.MessageID,
 		Filename:       a.Filename,
 		Kind:           a.Kind,
 		Mime:           a.Mime,
@@ -261,7 +261,6 @@ func attachmentMeta(a query.Attachment) AttachmentMeta {
 	return AttachmentMeta{
 		ID:             a.ID,
 		ChatID:         a.ChatID,
-		MessageID:      a.MessageID,
 		Filename:       a.Filename,
 		Kind:           a.Kind,
 		Mime:           a.Mime,
@@ -644,24 +643,13 @@ func (s *Store) DistinctToolNamesInChat(ctx context.Context, chatID string) ([]s
 
 // ---- attachments ----
 
-// CreateAttachment stores an attachment (orphan until linked). The meta is
-// constructed from the inputs — no read-back of the (potentially large) blob.
+// CreateAttachment stores an attachment. It shows on no message until
+// LinkAttachmentToMessage says so — uploads are linked when the user sends,
+// tool-created files when the model calls attach_file.
 func (s *Store) CreateAttachment(ctx context.Context, chatID, filename, kind, mime string, size int64, data []byte) (*AttachmentMeta, error) {
-	return s.createAttachment(ctx, chatID, "", filename, kind, mime, size, data)
-}
-
-// CreateLinkedAttachment stores an attachment already bound to a message
-// (tool-generated files land on the assistant message that produced them —
-// never orphaned, so the orphan sweep can't reap a file mid-generation).
-func (s *Store) CreateLinkedAttachment(ctx context.Context, chatID, messageID, filename, kind, mime string, size int64, data []byte) (*AttachmentMeta, error) {
-	return s.createAttachment(ctx, chatID, messageID, filename, kind, mime, size, data)
-}
-
-func (s *Store) createAttachment(ctx context.Context, chatID, messageID, filename, kind, mime string, size int64, data []byte) (*AttachmentMeta, error) {
 	meta := AttachmentMeta{
 		ID:        uuid.NewString(),
 		ChatID:    chatID,
-		MessageID: messageID,
 		Filename:  filename,
 		Kind:      kind,
 		Mime:      mime,
@@ -671,7 +659,6 @@ func (s *Store) createAttachment(ctx context.Context, chatID, messageID, filenam
 	err := s.q.CreateAttachment(ctx, query.CreateAttachmentParams{
 		ID:        meta.ID,
 		ChatID:    meta.ChatID,
-		MessageID: meta.MessageID,
 		Filename:  meta.Filename,
 		Kind:      meta.Kind,
 		Mime:      meta.Mime,
@@ -694,6 +681,25 @@ func (s *Store) GetAttachment(ctx context.Context, id string) (*Attachment, erro
 	return &Attachment{AttachmentMeta: attachmentMeta(row), Data: row.Data, Description: row.Description}, nil
 }
 
+// GetAttachmentMeta fetches metadata only — what a tool needs to check an id
+// without pulling the blob into memory.
+func (s *Store) GetAttachmentMeta(ctx context.Context, id string) (*AttachmentMeta, error) {
+	row, err := s.q.GetAttachmentMeta(ctx, id)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	return &AttachmentMeta{
+		ID:             row.ID,
+		ChatID:         row.ChatID,
+		Filename:       row.Filename,
+		Kind:           row.Kind,
+		Mime:           row.Mime,
+		Size:           row.Size,
+		CreatedAt:      row.CreatedAt,
+		HasDescription: row.HasDescription,
+	}, nil
+}
+
 // ListAttachmentsByMessage returns attachment metas of a message.
 func (s *Store) ListAttachmentsByMessage(ctx context.Context, messageID string) ([]AttachmentMeta, error) {
 	rows, err := s.q.ListAttachmentsByMessage(ctx, messageID)
@@ -707,12 +713,13 @@ func (s *Store) ListAttachmentsByMessage(ctx context.Context, messageID string) 
 	return metas, nil
 }
 
-// LinkAttachmentToMessage binds an orphan attachment to a message.
+// LinkAttachmentToMessage makes a message show an attachment. Idempotent, and
+// a no-op for an id that isn't in chatID.
 func (s *Store) LinkAttachmentToMessage(ctx context.Context, attachmentID, messageID, chatID string) error {
 	return s.q.LinkAttachmentToMessage(ctx, query.LinkAttachmentToMessageParams{
-		MessageID: messageID,
-		ID:        attachmentID,
-		ChatID:    chatID,
+		AttachmentID: attachmentID,
+		MessageID:    messageID,
+		ChatID:       chatID,
 	})
 }
 
@@ -726,22 +733,25 @@ func (s *Store) SetAttachmentDescription(ctx context.Context, attachmentID, desc
 	})
 }
 
-// DeleteAttachment removes an attachment (blob included) linked to a message.
+// DeleteAttachment stops messageID showing the attachment and deletes the
+// blob once no message shows it any more (an empty messageID just drops an
+// unlinked one, which is how a rolled-back upload is removed). The same call
+// serves "remove this file from my message" and "delete this staged upload".
 func (s *Store) DeleteAttachment(ctx context.Context, attachmentID, messageID string) error {
-	return s.q.DeleteAttachment(ctx, query.DeleteAttachmentParams{
-		ID:        attachmentID,
-		MessageID: messageID,
-	})
+	if messageID != "" {
+		if err := s.q.UnlinkAttachmentFromMessage(ctx, query.UnlinkAttachmentFromMessageParams{
+			AttachmentID: attachmentID,
+			MessageID:    messageID,
+		}); err != nil {
+			return err
+		}
+	}
+	return s.q.DeleteUnlinkedAttachment(ctx, attachmentID)
 }
 
-// DeleteOrphanAttachments removes unlinked attachments older than cutoff.
+// DeleteOrphanAttachments removes attachments no message shows — abandoned
+// uploads, files a tool created but never attached, and blobs left behind by
+// history truncation (their links cascade away with the messages).
 func (s *Store) DeleteOrphanAttachments(ctx context.Context, cutoffMillis int64) error {
 	return s.q.DeleteOrphanAttachmentsOlderThan(ctx, cutoffMillis)
-}
-
-// DeleteDanglingAttachments removes attachments of chatID whose message no
-// longer exists (history truncation by regenerate / edit-resend deletes
-// messages, and attachments.message_id has no FK to cascade).
-func (s *Store) DeleteDanglingAttachments(ctx context.Context, chatID string) error {
-	return s.q.DeleteDanglingAttachments(ctx, chatID)
 }

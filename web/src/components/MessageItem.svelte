@@ -15,6 +15,7 @@
   import { viewer } from '../lib/viewer.svelte.js';
   import { attachMenu } from '../lib/attachmenu.svelte.js';
   import { longPress } from '../lib/longpress.js';
+  import { downloadAttachment } from '../lib/attach-actions.js';
   import { Eye, FileText, Info, Paperclip, Pencil, RotateCcw, Workflow, X } from '@lucide/svelte';
   import CollapsibleStatus from './CollapsibleStatus.svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
@@ -55,14 +56,14 @@
   let toolCalls = $derived(live ? live.toolCalls : item.toolCalls);
   let status = $derived(live ? live.status : msg.status);
   let errorText = $derived(live ? live.error : msg.error);
-  // Tool-created attachments (text_file, fetch) on this
-  // assistant message. Deliberately NOT rendered while the message is live:
-  // they appear only once the reply is fully rendered (`done` merges
+  // Tool-created attachments (create_file + attach_file, fetch save=true) on
+  // this assistant message. Deliberately NOT rendered while the message is
+  // live: they appear only once the reply is fully rendered (`done` merges
   // live.attachments into the message, which ends `live`), instead of
   // popping in mid-stream above text that is still typing.
   let attachments = $derived(live ? [] : (msg.attachments ?? []));
-  // Image attachments render inline (fetch with show=true exists so the user
-  // SEES the picture); everything else keeps the download-chip treatment. User
+  // Image attachments render inline; everything else keeps the download-chip
+  // treatment (text opens a preview, a binary file downloads on click). User
   // rows are never live, so the same two lists feed both sides.
   let imageFiles = $derived(attachments.filter((a) => a.kind === 'image'));
   let files = $derived(attachments.filter((a) => a.kind !== 'image'));
@@ -472,13 +473,13 @@
     {#if files.length}
       <div class="mt-2 flex flex-wrap gap-1.5">
         {#each files as att (att.id)}
-          <!-- Opens the text viewer overlay; the download lives inside it
-               (the viewer keeps the real URL on its download anchor). -->
+          <!-- Text opens the viewer overlay (the download lives inside it);
+               a binary file has no preview, so its click downloads instead. -->
           <button
             type="button"
             class="inline-flex items-center gap-1.5 rounded-lg border bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors select-none [-webkit-touch-callout:none] hover:bg-muted hover:text-foreground"
-            title={`View ${att.filename}`}
-            onclick={() => viewer.open(att)}
+            title={att.kind === 'text' ? `View ${att.filename}` : `Download ${att.filename}`}
+            onclick={() => (att.kind === 'text' ? viewer.open(att) : downloadAttachment(att))}
             {...longPress(() => attachMenu.open(att))}
           >
             <FileText class="size-3.5" strokeWidth={1.75} aria-hidden="true" />

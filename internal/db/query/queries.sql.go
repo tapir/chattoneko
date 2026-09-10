@@ -43,14 +43,13 @@ func (q *Queries) ChatTokenTotals(ctx context.Context, chatID string) (ChatToken
 
 const createAttachment = `-- name: CreateAttachment :exec
 
-INSERT INTO attachments (id, chat_id, message_id, filename, kind, mime, size, data, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO attachments (id, chat_id, filename, kind, mime, size, data, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateAttachmentParams struct {
 	ID        string
 	ChatID    string
-	MessageID string
 	Filename  string
 	Kind      string
 	Mime      string
@@ -60,11 +59,12 @@ type CreateAttachmentParams struct {
 }
 
 // ---- attachments ----
+// An attachment is a chat-level blob; message_attachments is the many-to-many
+// link that puts it on screen (one file can be shown on several messages).
 func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentParams) error {
 	_, err := q.db.ExecContext(ctx, createAttachment,
 		arg.ID,
 		arg.ChatID,
-		arg.MessageID,
 		arg.Filename,
 		arg.Kind,
 		arg.Mime,
@@ -181,41 +181,12 @@ func (q *Queries) CreateToolCall(ctx context.Context, arg CreateToolCallParams) 
 	return err
 }
 
-const deleteAttachment = `-- name: DeleteAttachment :exec
-DELETE FROM attachments WHERE id = ? AND message_id = ?
-`
-
-type DeleteAttachmentParams struct {
-	ID        string
-	MessageID string
-}
-
-func (q *Queries) DeleteAttachment(ctx context.Context, arg DeleteAttachmentParams) error {
-	_, err := q.db.ExecContext(ctx, deleteAttachment, arg.ID, arg.MessageID)
-	return err
-}
-
 const deleteChat = `-- name: DeleteChat :exec
 DELETE FROM chats WHERE id = ?
 `
 
 func (q *Queries) DeleteChat(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, deleteChat, id)
-	return err
-}
-
-const deleteDanglingAttachments = `-- name: DeleteDanglingAttachments :exec
-DELETE FROM attachments
-WHERE attachments.chat_id = ? AND attachments.message_id != ''
-  AND attachments.message_id NOT IN
-    (SELECT m.id FROM messages m WHERE m.chat_id = attachments.chat_id)
-`
-
-// Attachments whose message was truncated away (regenerate / edit-resend).
-// attachments.message_id has no FK (uploads legitimately start unlinked), so
-// deleting messages leaves linked rows dangling; this cleans them up.
-func (q *Queries) DeleteDanglingAttachments(ctx context.Context, chatID string) error {
-	_, err := q.db.ExecContext(ctx, deleteDanglingAttachments, chatID)
 	return err
 }
 
@@ -248,11 +219,28 @@ func (q *Queries) DeleteMessagesFromSeq(ctx context.Context, arg DeleteMessagesF
 }
 
 const deleteOrphanAttachmentsOlderThan = `-- name: DeleteOrphanAttachmentsOlderThan :exec
-DELETE FROM attachments WHERE message_id = '' AND created_at < ?
+DELETE FROM attachments WHERE created_at < ?
+  AND NOT EXISTS (
+    SELECT 1 FROM message_attachments WHERE attachment_id = attachments.id
+  )
 `
 
+// Orphans: uploads staged but never sent, files a tool created but never
+// attached, and blobs whose messages were truncated away (their links
+// cascaded off with the messages).
 func (q *Queries) DeleteOrphanAttachmentsOlderThan(ctx context.Context, createdAt int64) error {
 	_, err := q.db.ExecContext(ctx, deleteOrphanAttachmentsOlderThan, createdAt)
+	return err
+}
+
+const deleteUnlinkedAttachment = `-- name: DeleteUnlinkedAttachment :exec
+DELETE FROM attachments WHERE id = ?1
+  AND NOT EXISTS (SELECT 1 FROM message_attachments WHERE attachment_id = ?1)
+`
+
+// The blob goes only once no message shows it any more.
+func (q *Queries) DeleteUnlinkedAttachment(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteUnlinkedAttachment, id)
 	return err
 }
 
@@ -320,7 +308,7 @@ func (q *Queries) FirstUserMessage(ctx context.Context, chatID string) (Message,
 }
 
 const getAttachment = `-- name: GetAttachment :one
-SELECT id, chat_id, message_id, filename, kind, mime, size, data, description, created_at FROM attachments WHERE id = ?
+SELECT id, chat_id, filename, kind, mime, size, data, description, created_at FROM attachments WHERE id = ?
 `
 
 func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, error) {
@@ -329,7 +317,6 @@ func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, err
 	err := row.Scan(
 		&i.ID,
 		&i.ChatID,
-		&i.MessageID,
 		&i.Filename,
 		&i.Kind,
 		&i.Mime,
@@ -337,6 +324,40 @@ func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, err
 		&i.Data,
 		&i.Description,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getAttachmentMeta = `-- name: GetAttachmentMeta :one
+SELECT id, chat_id, filename, kind, mime, size, created_at,
+       CAST((description != '') AS BOOLEAN) AS has_description
+FROM attachments WHERE id = ?
+`
+
+type GetAttachmentMetaRow struct {
+	ID             string
+	ChatID         string
+	Filename       string
+	Kind           string
+	Mime           string
+	Size           int64
+	CreatedAt      int64
+	HasDescription bool
+}
+
+// Metadata without the blob - what a tool needs to validate an id.
+func (q *Queries) GetAttachmentMeta(ctx context.Context, id string) (GetAttachmentMetaRow, error) {
+	row := q.db.QueryRowContext(ctx, getAttachmentMeta, id)
+	var i GetAttachmentMetaRow
+	err := row.Scan(
+		&i.ID,
+		&i.ChatID,
+		&i.Filename,
+		&i.Kind,
+		&i.Mime,
+		&i.Size,
+		&i.CreatedAt,
+		&i.HasDescription,
 	)
 	return i, err
 }
@@ -423,24 +444,33 @@ func (q *Queries) LastAssistantMessage(ctx context.Context, chatID string) (Mess
 }
 
 const linkAttachmentToMessage = `-- name: LinkAttachmentToMessage :exec
-UPDATE attachments SET message_id = ? WHERE id = ? AND chat_id = ?
+INSERT OR IGNORE INTO message_attachments (attachment_id, message_id)
+SELECT ?1, ?2
+WHERE EXISTS (
+  SELECT 1 FROM attachments
+  WHERE id = ?1 AND chat_id = ?3
+)
 `
 
 type LinkAttachmentToMessageParams struct {
-	MessageID string
-	ID        string
-	ChatID    string
+	AttachmentID string
+	MessageID    string
+	ChatID       string
 }
 
+// Idempotent (showing the same file twice stays one link) and chat-scoped, so
+// an id from another chat links nothing.
 func (q *Queries) LinkAttachmentToMessage(ctx context.Context, arg LinkAttachmentToMessageParams) error {
-	_, err := q.db.ExecContext(ctx, linkAttachmentToMessage, arg.MessageID, arg.ID, arg.ChatID)
+	_, err := q.db.ExecContext(ctx, linkAttachmentToMessage, arg.AttachmentID, arg.MessageID, arg.ChatID)
 	return err
 }
 
 const listAttachmentMetasForChat = `-- name: ListAttachmentMetasForChat :many
-SELECT id, chat_id, message_id, filename, kind, mime, size, created_at,
-       CAST((description != '') AS BOOLEAN) AS has_description
-FROM attachments WHERE chat_id = ? ORDER BY created_at ASC
+SELECT a.id, a.chat_id, ma.message_id, a.filename, a.kind, a.mime, a.size, a.created_at,
+       CAST((a.description != '') AS BOOLEAN) AS has_description
+FROM attachments a
+JOIN message_attachments ma ON ma.attachment_id = a.id
+WHERE a.chat_id = ? ORDER BY a.created_at ASC
 `
 
 type ListAttachmentMetasForChatRow struct {
@@ -456,7 +486,8 @@ type ListAttachmentMetasForChatRow struct {
 }
 
 // Attachment metas for a whole chat (no blob data) - used to attach metas
-// to messages in one query instead of one query per message.
+// to messages in one query instead of one query per message. One row per
+// (message, attachment) link.
 func (q *Queries) ListAttachmentMetasForChat(ctx context.Context, chatID string) ([]ListAttachmentMetasForChatRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAttachmentMetasForChat, chatID)
 	if err != nil {
@@ -491,7 +522,9 @@ func (q *Queries) ListAttachmentMetasForChat(ctx context.Context, chatID string)
 }
 
 const listAttachmentsByMessage = `-- name: ListAttachmentsByMessage :many
-SELECT id, chat_id, message_id, filename, kind, mime, size, data, description, created_at FROM attachments WHERE message_id = ? ORDER BY created_at ASC
+SELECT a.id, a.chat_id, a.filename, a.kind, a.mime, a.size, a.data, a.description, a.created_at FROM attachments a
+JOIN message_attachments ma ON ma.attachment_id = a.id
+WHERE ma.message_id = ? ORDER BY a.created_at ASC
 `
 
 func (q *Queries) ListAttachmentsByMessage(ctx context.Context, messageID string) ([]Attachment, error) {
@@ -506,7 +539,6 @@ func (q *Queries) ListAttachmentsByMessage(ctx context.Context, messageID string
 		if err := rows.Scan(
 			&i.ID,
 			&i.ChatID,
-			&i.MessageID,
 			&i.Filename,
 			&i.Kind,
 			&i.Mime,
@@ -1013,6 +1045,20 @@ type TouchChatParams struct {
 
 func (q *Queries) TouchChat(ctx context.Context, arg TouchChatParams) error {
 	_, err := q.db.ExecContext(ctx, touchChat, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const unlinkAttachmentFromMessage = `-- name: UnlinkAttachmentFromMessage :exec
+DELETE FROM message_attachments WHERE attachment_id = ? AND message_id = ?
+`
+
+type UnlinkAttachmentFromMessageParams struct {
+	AttachmentID string
+	MessageID    string
+}
+
+func (q *Queries) UnlinkAttachmentFromMessage(ctx context.Context, arg UnlinkAttachmentFromMessageParams) error {
+	_, err := q.db.ExecContext(ctx, unlinkAttachmentFromMessage, arg.AttachmentID, arg.MessageID)
 	return err
 }
 

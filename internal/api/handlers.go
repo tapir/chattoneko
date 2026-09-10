@@ -76,14 +76,12 @@ func (s *Server) startClaimedGeneration(w http.ResponseWriter, r *http.Request, 
 	return am, true
 }
 
-// reapDanglingAttachments removes attachments whose message was deleted by
-// history truncation (attachments.message_id has no FK cascade). Failures
-// only log: the truncation itself already succeeded.
-func (s *Server) reapDanglingAttachments(ctx context.Context, chatID string) {
-	if err := s.store.DeleteDanglingAttachments(ctx, chatID); err != nil {
-		slog.Warn("delete dangling attachments", "chat", chatID, "error", err)
-	}
-}
+// Truncating history no longer needs a dangling-attachment reap:
+// message_attachments.message_id carries ON DELETE CASCADE, so deleting the
+// messages unlinks their files by itself.
+// ponytail: the unlinked blobs wait for DeleteOrphanAttachments, which only
+// runs at startup — move it to a ticker if a long-lived server's disk
+// notices.
 
 // attachmentByID fetches an attachment, answering 404 when it does not
 // exist and 500 on store errors. On failure the response is already
@@ -807,9 +805,7 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "truncate history", err)
 		return
 	}
-	// Attachments of the deleted messages (user uploads and tool-generated
-	// files) have no FK cascade — reap them instead of leaking blobs.
-	s.reapDanglingAttachments(ctx, id)
+	// Attachments of the deleted messages unlink themselves (FK cascade).
 	s.engine.BroadcastChat(id, engine.WireEvent{Type: "messages_reset"})
 	// startClaimedGeneration consumes the claim (releases it on failure).
 	am, ok := s.startClaimedGeneration(w, r, id)
@@ -852,8 +848,6 @@ func (s *Server) handleRegenerate(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "truncate history", err)
 		return
 	}
-	// Reap attachments left dangling by the truncation (no FK cascade).
-	s.reapDanglingAttachments(ctx, id)
 	s.engine.BroadcastChat(id, engine.WireEvent{Type: "messages_reset"})
 	// startClaimedGeneration consumes the claim (releases it on failure).
 	am, ok := s.startClaimedGeneration(w, r, id)
@@ -994,8 +988,8 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	out := make([]*store.AttachmentMeta, 0, len(files))
 	// rollback deletes the attachments stored so far when a later file
 	// fails: orphans are only swept at startup, so a rejected file must not
-	// leave its predecessors behind in the database. They are unlinked
-	// (message_id ''), so DeleteAttachment with an empty message id hits.
+	// leave its predecessors behind in the database. They are unlinked, so
+	// DeleteAttachment with an empty message id hits.
 	rollback := func() {
 		for _, m := range out {
 			if err := s.store.DeleteAttachment(r.Context(), m.ID, ""); err != nil {
@@ -1058,15 +1052,23 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 	// Images are stored as re-encoded PNG. Text attachments are served as
 	// text/plain regardless of their detected mime so an HTML/SVG upload can
-	// never execute in the app's origin; the download gets the real filename
-	// via Content-Disposition.
+	// never execute in the app's origin, and binary ones as octet-stream for
+	// the same reason — which also makes the browser download rather than
+	// preview. Non-image downloads get the real filename via
+	// Content-Disposition.
 	ctype := "text/plain; charset=utf-8"
-	if att.Kind == attach.KindImage {
+	switch att.Kind {
+	case attach.KindImage:
 		ctype = "image/png"
-	} else if cd := mime.FormatMediaType("attachment", map[string]string{"filename": att.Filename}); cd != "" {
-		// FormatMediaType emits an RFC 5987 filename* for non-ASCII names and
-		// returns "" for invalid ones (possible in legacy rows), which we omit.
-		w.Header().Set("Content-Disposition", cd)
+	case attach.KindFile:
+		ctype = "application/octet-stream"
+	}
+	if att.Kind != attach.KindImage {
+		if cd := mime.FormatMediaType("attachment", map[string]string{"filename": att.Filename}); cd != "" {
+			// FormatMediaType emits an RFC 5987 filename* for non-ASCII names and
+			// returns "" for invalid ones (possible in legacy rows), which we omit.
+			w.Header().Set("Content-Disposition", cd)
+		}
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Cache-Control", "public, max-age=86400")

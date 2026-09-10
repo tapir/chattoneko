@@ -170,42 +170,64 @@ WHERE tc.message_id = ?
   );
 
 -- ---- attachments ----
+-- An attachment is a chat-level blob; message_attachments is the many-to-many
+-- link that puts it on screen (one file can be shown on several messages).
 
 -- name: CreateAttachment :exec
-INSERT INTO attachments (id, chat_id, message_id, filename, kind, mime, size, data, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO attachments (id, chat_id, filename, kind, mime, size, data, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetAttachment :one
 SELECT * FROM attachments WHERE id = ?;
 
+-- Metadata without the blob - what a tool needs to validate an id.
+-- name: GetAttachmentMeta :one
+SELECT id, chat_id, filename, kind, mime, size, created_at,
+       CAST((description != '') AS BOOLEAN) AS has_description
+FROM attachments WHERE id = ?;
+
 -- name: ListAttachmentsByMessage :many
-SELECT * FROM attachments WHERE message_id = ? ORDER BY created_at ASC;
+SELECT a.* FROM attachments a
+JOIN message_attachments ma ON ma.attachment_id = a.id
+WHERE ma.message_id = ? ORDER BY a.created_at ASC;
 
 -- Attachment metas for a whole chat (no blob data) - used to attach metas
--- to messages in one query instead of one query per message.
+-- to messages in one query instead of one query per message. One row per
+-- (message, attachment) link.
 -- name: ListAttachmentMetasForChat :many
-SELECT id, chat_id, message_id, filename, kind, mime, size, created_at,
-       CAST((description != '') AS BOOLEAN) AS has_description
-FROM attachments WHERE chat_id = ? ORDER BY created_at ASC;
+SELECT a.id, a.chat_id, ma.message_id, a.filename, a.kind, a.mime, a.size, a.created_at,
+       CAST((a.description != '') AS BOOLEAN) AS has_description
+FROM attachments a
+JOIN message_attachments ma ON ma.attachment_id = a.id
+WHERE a.chat_id = ? ORDER BY a.created_at ASC;
 
 -- name: SetAttachmentDescription :exec
 UPDATE attachments SET description = ? WHERE id = ?;
 
+-- Idempotent (showing the same file twice stays one link) and chat-scoped, so
+-- an id from another chat links nothing.
 -- name: LinkAttachmentToMessage :exec
-UPDATE attachments SET message_id = ? WHERE id = ? AND chat_id = ?;
+INSERT OR IGNORE INTO message_attachments (attachment_id, message_id)
+SELECT sqlc.arg(attachment_id), sqlc.arg(message_id)
+WHERE EXISTS (
+  SELECT 1 FROM attachments
+  WHERE id = sqlc.arg(attachment_id) AND chat_id = sqlc.arg(chat_id)
+);
 
+-- name: UnlinkAttachmentFromMessage :exec
+DELETE FROM message_attachments WHERE attachment_id = ? AND message_id = ?;
+
+-- The blob goes only once no message shows it any more.
+-- name: DeleteUnlinkedAttachment :exec
+DELETE FROM attachments WHERE id = sqlc.arg(id)
+  AND NOT EXISTS (SELECT 1 FROM message_attachments WHERE attachment_id = sqlc.arg(id));
+
+-- Orphans: uploads staged but never sent, files a tool created but never
+-- attached, and blobs whose messages were truncated away (their links
+-- cascaded off with the messages).
 -- name: DeleteOrphanAttachmentsOlderThan :exec
-DELETE FROM attachments WHERE message_id = '' AND created_at < ?;
-
--- Attachments whose message was truncated away (regenerate / edit-resend).
--- attachments.message_id has no FK (uploads legitimately start unlinked), so
--- deleting messages leaves linked rows dangling; this cleans them up.
--- name: DeleteDanglingAttachments :exec
-DELETE FROM attachments
-WHERE attachments.chat_id = ? AND attachments.message_id != ''
-  AND attachments.message_id NOT IN
-    (SELECT m.id FROM messages m WHERE m.chat_id = attachments.chat_id);
-
--- name: DeleteAttachment :exec
-DELETE FROM attachments WHERE id = ? AND message_id = ?;
+DELETE FROM attachments WHERE created_at < ?
+  AND NOT EXISTS (
+    SELECT 1 FROM message_attachments WHERE attachment_id = attachments.id
+  );
 

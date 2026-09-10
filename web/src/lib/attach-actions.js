@@ -11,6 +11,8 @@
 //   copy — text attachments only: they copy their contents (the server serves
 //     them as text/plain). An image gets no Copy row, so the async Clipboard
 //     API is out of this file.
+//   download — binary attachments (kind "file") have no preview at all, so the
+//     chip's click goes straight here.
 //
 // Failures report themselves as toasts and return false, so callers are
 // one-liners; dismissing the system share sheet is not a failure.
@@ -76,6 +78,21 @@ export async function copyAttachment(att) {
     app.toast('error', `Couldn't copy: ${e?.message ?? 'unknown error'}`);
     return false;
   }
+}
+
+// The click on a binary chip: no viewer, no preview, just the file. Same
+// anchor trick the lightbox's download button uses — the server answers
+// octet-stream + Content-Disposition, and on native (where the server is
+// cross-origin) the system browser takes the navigation and saves it.
+export function downloadAttachment(att) {
+  const a = document.createElement('a');
+  a.href = api.attachmentUrl(att.id);
+  a.download = att.filename || '';
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  document.body.append(a);
+  a.click();
+  a.remove();
 }
 
 // Filesystem's binary write path takes base64 (no `encoding`); FileReader is

@@ -894,4 +894,19 @@ func TestGetAttachmentServing(t *testing.T) {
 	if rec.Code != 404 {
 		t.Fatalf("unknown attachment: %d", rec.Code)
 	}
+
+	// A binary attachment is a download, never a render: the stored mime is
+	// ignored (a tool-created .html must not execute in the app's origin) and
+	// Content-Disposition carries the real name.
+	bin, err := ts.store.CreateAttachment(context.Background(), chatID, "page.html", "file", "text/html", 5, []byte("<html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = ts.do(t, "GET", "/api/attachments/"+bin.ID, nil, nil)
+	if ct := rec.Header().Get("Content-Type"); ct != "application/octet-stream" {
+		t.Fatalf("binary content-type = %q, want octet-stream", ct)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") || !strings.Contains(cd, "page.html") {
+		t.Fatalf("content-disposition = %q, want an attachment with the filename", cd)
+	}
 }

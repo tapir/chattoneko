@@ -2,7 +2,7 @@ package tools
 
 import (
 	"bytes"
-	"context"
+	"encoding/base64"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -35,37 +35,52 @@ func testJPEG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-func callFetch(t *testing.T, fs FileStore, args string, meta mcphub.CallMeta) (string, bool) {
+// serve returns a server answering every path with body (and contentType when
+// given), closed with the test.
+func serve(t *testing.T, contentType string, body []byte) *httptest.Server {
 	t.Helper()
-	r := Builtin(fs, nil)
-	out, isErr, err := r.Call(context.Background(), "fetch", args, meta)
-	if err != nil {
-		t.Fatalf("transport error: %v", err)
-	}
-	return out, isErr
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		w.Write(body)
+	}))
+	t.Cleanup(ts.Close)
+	return ts
 }
 
-func TestFetchImageShown(t *testing.T) {
+func callFetch(t *testing.T, fs FileStore, args string, meta mcphub.CallMeta) (string, bool) {
+	t.Helper()
+	return callTool(t, fs, "fetch", args, meta)
+}
+
+// savedID pulls the attachment id the result hands back.
+func savedID(t *testing.T, fs *fakeFileStore) string {
+	t.Helper()
+	if len(fs.files) != 1 {
+		t.Fatalf("want exactly 1 stored file, got %d", len(fs.files))
+	}
+	return fs.files[0].id
+}
+
+func TestFetchImageSaved(t *testing.T) {
 	allowWebFetchLoopback(t)
 	jpg := testJPEG(t, 40, 30)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/jpeg")
-		w.Write(jpg)
-	}))
-	defer ts.Close()
+	ts := serve(t, "image/jpeg", jpg)
 
 	fs := &fakeFileStore{}
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
-	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/pics/cat.jpg","show":true}`, meta)
+	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/pics/cat.jpg","save":true}`, meta)
 	if isErr {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
-	if len(fs.calls) != 1 {
-		t.Fatalf("want 1 store call, got %d", len(fs.calls))
+	c := fs.files[0]
+	if c.chatID != "c1" {
+		t.Fatalf("wrong chat: %+v", c)
 	}
-	c := fs.calls[0]
-	if c.chatID != "c1" || c.messageID != "m1" {
-		t.Fatalf("wrong linkage: %+v", c)
+	// Saving no longer shows anything: the model decides that with attach_file.
+	if len(fs.links) != 0 {
+		t.Fatalf("a saved file must stay unlinked: %+v", fs.links)
 	}
 	// The JPEG source must be converted to PNG (same routine as uploads).
 	if c.kind != "image" || c.mime != "image/png" {
@@ -84,79 +99,77 @@ func TestFetchImageShown(t *testing.T) {
 	if c.size != int64(len(c.data)) {
 		t.Fatalf("size %d != len(data) %d", c.size, len(c.data))
 	}
-	// The result tells the model the image is displayed (so it stops pasting links).
-	if !strings.Contains(out, "displayed inline") || !strings.Contains(out, "40x30") {
-		t.Fatalf("result missing display notice/dims: %q", out)
+	// The result hands over the id and the next step, and withholds the bytes.
+	if !strings.Contains(out, c.id) || !strings.Contains(out, "attach_file") || !strings.Contains(out, "40x30") {
+		t.Fatalf("result missing id/next step/dims: %q", out)
 	}
 }
 
-// show=false hands an image's metadata to the model instead of pixels —
-// tool results are text — and stores nothing.
-func TestFetchImageHidden(t *testing.T) {
+// save=false hands a non-text body to the model base64-encoded — a text model
+// can't do much with it, but it can pass it on — and stores nothing.
+func TestFetchImageBase64(t *testing.T) {
 	allowWebFetchLoopback(t)
 	jpg := testJPEG(t, 40, 30)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(jpg)
-	}))
-	defer ts.Close()
+	ts := serve(t, "", jpg)
 
 	fs := &fakeFileStore{}
-	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/cat.jpg","show":false}`, mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
+	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/cat.jpg","save":false}`, mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
 	if isErr {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
-	if len(fs.calls) != 0 {
-		t.Fatal("nothing must be stored when show=false")
+	if len(fs.files) != 0 {
+		t.Fatal("nothing must be stored when save=false")
 	}
-	if !strings.Contains(out, "40x30") || !strings.Contains(out, "show=true") {
-		t.Fatalf("result should describe the image and point at show=true: %q", out)
+	header, payload, ok := strings.Cut(out, "\n")
+	if !ok {
+		t.Fatalf("result has no header line: %q", out[:80])
 	}
-	if strings.Contains(out, string(jpg)) {
-		t.Fatal("raw image bytes must not be returned to the model")
+	if !strings.Contains(header, "base64") || !strings.Contains(header, "40x30") {
+		t.Fatalf("header should say what the payload is: %q", header)
+	}
+	got, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("payload is not base64: %v", err)
+	}
+	if !bytes.Equal(got, jpg) {
+		t.Fatalf("decoded %d bytes, want the %d fetched", len(got), len(jpg))
 	}
 }
 
 func TestFetchText(t *testing.T) {
 	allowWebFetchLoopback(t)
 	body := `{"items":[1,2,3]}`
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(body))
-	}))
-	defer ts.Close()
+	ts := serve(t, "application/json", []byte(body))
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 
-	// show=true: stored as a text attachment, content withheld from the model.
+	// save=true: stored as a text attachment, content withheld from the model.
 	fs := &fakeFileStore{}
-	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/data.json","show":true}`, meta)
+	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/data.json","save":true}`, meta)
 	if isErr {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
-	if len(fs.calls) != 1 {
-		t.Fatalf("want 1 store call, got %d", len(fs.calls))
-	}
-	c := fs.calls[0]
+	c := fs.files[0]
 	if c.kind != "text" || c.mime != "application/json" || c.filename != "data.json" {
 		t.Fatalf("wrong attachment: %+v", c)
 	}
 	if string(c.data) != body {
 		t.Fatalf("stored body = %q, want %q", c.data, body)
 	}
-	if !strings.Contains(out, "attached to your reply") || strings.Contains(out, body) {
-		t.Fatalf("result should announce the attachment and hide the content: %q", out)
+	if !strings.Contains(out, c.id) || !strings.Contains(out, "attach_file") || strings.Contains(out, body) {
+		t.Fatalf("result should hand over the id and hide the content: %q", out)
 	}
 
-	// show=false: the body goes to the model verbatim and nothing is stored.
+	// save omitted: the body goes to the model verbatim and nothing is stored.
 	fs2 := &fakeFileStore{}
-	out, isErr = callFetch(t, fs2, `{"url":"`+ts.URL+`/data.json","show":false}`, meta)
+	out, isErr = callFetch(t, fs2, `{"url":"`+ts.URL+`/data.json"}`, meta)
 	if isErr {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
 	if out != body {
 		t.Fatalf("result = %q, want the raw body %q", out, body)
 	}
-	if len(fs2.calls) != 0 {
-		t.Fatal("nothing must be stored when show=false")
+	if len(fs2.files) != 0 {
+		t.Fatal("nothing must be stored without save=true")
 	}
 }
 
@@ -188,12 +201,12 @@ func TestFetchTextExtension(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := &fakeFileStore{}
-			out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+tc.path+`","show":true}`, meta)
+			out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+tc.path+`","save":true}`, meta)
 			if isErr {
 				t.Fatalf("unexpected error: %q", out)
 			}
-			if fs.calls[0].filename != tc.wantFile || fs.calls[0].mime != tc.wantMime {
-				t.Fatalf("got %q/%q, want %q/%q", fs.calls[0].filename, fs.calls[0].mime, tc.wantFile, tc.wantMime)
+			if fs.files[0].filename != tc.wantFile || fs.files[0].mime != tc.wantMime {
+				t.Fatalf("got %q/%q, want %q/%q", fs.files[0].filename, fs.files[0].mime, tc.wantFile, tc.wantMime)
 			}
 		})
 	}
@@ -222,12 +235,9 @@ func TestCapName(t *testing.T) {
 func TestFetchTextTruncated(t *testing.T) {
 	allowWebFetchLoopback(t)
 	big := strings.Repeat("日", maxOutputBytes) // 3 bytes per rune → 3 MiB
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(big))
-	}))
-	defer ts.Close()
+	ts := serve(t, "", []byte(big))
 
-	out, isErr := callFetch(t, &fakeFileStore{}, `{"url":"`+ts.URL+`/big.txt","show":false}`, mcphub.CallMeta{ChatID: "c", MessageID: "m"})
+	out, isErr := callFetch(t, &fakeFileStore{}, `{"url":"`+ts.URL+`/big.txt"}`, mcphub.CallMeta{ChatID: "c", MessageID: "m"})
 	if isErr {
 		t.Fatalf("unexpected tool error: %q", out[:80])
 	}
@@ -242,30 +252,76 @@ func TestFetchTextTruncated(t *testing.T) {
 	}
 }
 
-// Binary that is not an image is refused both ways: it can't be rendered in
-// the chat and it can't be quoted to the model.
+// Binary that is not an image is no longer refused: save=true stores it as a
+// download-only file, save=false base64-encodes it for the model.
 func TestFetchBinary(t *testing.T) {
 	allowWebFetchLoopback(t)
 	pdf := []byte("%PDF-1.4\n\x00\xfe\xff binary")
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/pdf")
-		w.Write(pdf)
-	}))
-	defer ts.Close()
+	ts := serve(t, "application/pdf", pdf)
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 
-	for _, show := range []string{"true", "false"} {
-		fs := &fakeFileStore{}
-		out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/f.pdf","show":`+show+`}`, meta)
-		if !isErr {
-			t.Fatalf("show=%s: want error, got %q", show, out)
-		}
-		if !strings.Contains(out, "application/pdf") {
-			t.Fatalf("show=%s: error should name the served type: %q", show, out)
-		}
-		if len(fs.calls) != 0 {
-			t.Fatalf("show=%s: store must not be called", show)
-		}
+	fs := &fakeFileStore{}
+	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/f.pdf","save":true}`, meta)
+	if isErr {
+		t.Fatalf("unexpected tool error: %q", out)
+	}
+	if c := fs.files[0]; c.kind != "file" || c.mime != "application/pdf" || !bytes.Equal(c.data, pdf) {
+		t.Fatalf("binary not stored verbatim as a file: %+v", c)
+	}
+	if !strings.Contains(out, "downloads when clicked") {
+		t.Fatalf("result should say how the user will see it: %q", out)
+	}
+
+	fs2 := &fakeFileStore{}
+	out, isErr = callFetch(t, fs2, `{"url":"`+ts.URL+`/f.pdf"}`, meta)
+	if isErr {
+		t.Fatalf("unexpected tool error: %q", out)
+	}
+	_, payload, _ := strings.Cut(out, "\n")
+	got, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil || !bytes.Equal(got, pdf) {
+		t.Fatalf("base64 payload wrong (err %v): %q", err, out)
+	}
+	if !strings.Contains(out, "application/pdf") {
+		t.Fatalf("header should name the served type: %q", out)
+	}
+	if len(fs2.files) != 0 {
+		t.Fatal("save=false must store nothing")
+	}
+}
+
+// Truncated base64 is unusable, so a body that doesn't fit the tool-result
+// budget is an error pointing at save=true instead of a broken prefix.
+func TestFetchBinaryTooLargeToEncode(t *testing.T) {
+	allowWebFetchLoopback(t)
+	blob := append([]byte{0x00, 0xfe, 0xff}, bytes.Repeat([]byte{0x41}, maxOutputBytes)...) // base64 > 1 MiB
+	ts := serve(t, "application/octet-stream", blob)
+
+	out, isErr := callFetch(t, &fakeFileStore{}, `{"url":"`+ts.URL+`/big.bin"}`, mcphub.CallMeta{ChatID: "c", MessageID: "m"})
+	if !isErr {
+		t.Fatalf("want an error, got %d bytes of base64", len(out))
+	}
+	if !strings.Contains(out, "save=true") {
+		t.Fatalf("error should point at save=true: %q", out)
+	}
+}
+
+// Bytes that claim to be an image but don't decode are refused rather than
+// stored: a corrupt picture is neither a preview nor a useful download.
+func TestFetchCorruptImage(t *testing.T) {
+	allowWebFetchLoopback(t)
+	ts := serve(t, "image/png", append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x00}, 32)...))
+
+	fs := &fakeFileStore{}
+	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/x.png","save":true}`, mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
+	if !isErr {
+		t.Fatalf("want an error, got %q", out)
+	}
+	if !strings.Contains(out, "corrupt png image") {
+		t.Fatalf("error should name the format: %q", out)
+	}
+	if len(fs.files) != 0 {
+		t.Fatal("store must not be called")
 	}
 }
 
@@ -286,16 +342,16 @@ func TestFetchFilename(t *testing.T) {
 	cases := []struct {
 		name, args, want string
 	}{
-		{"jpg source", `{"url":"` + ts.URL + `/a/photo.jpeg","show":true}`, "photo.png"},
-		{"webp source", `{"url":"` + ts.URL + `/a/sticker.webp","show":true}`, "sticker.png"},
-		{"png kept", `{"url":"` + ts.URL + `/a/diagram.PNG","show":true}`, "diagram.PNG"},
-		{"no extension", `{"url":"` + ts.URL + `/a/img","show":true}`, "img.png"},
-		{"root path", `{"url":"` + ts.URL + `","show":true}`, "image.png"},
-		{"explicit wins", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"my cat","show":true}`, "my cat.png"},
-		{"explicit invalid falls back", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"../evil","show":true}`, "cat.png"},
-		{"query stripped", `{"url":"` + ts.URL + `/a/cat.jpg?sig=xyz&exp=1","show":true}`, "cat.png"},
+		{"jpg source", `{"url":"` + ts.URL + `/a/photo.jpeg","save":true}`, "photo.png"},
+		{"webp source", `{"url":"` + ts.URL + `/a/sticker.webp","save":true}`, "sticker.png"},
+		{"png kept", `{"url":"` + ts.URL + `/a/diagram.PNG","save":true}`, "diagram.PNG"},
+		{"no extension", `{"url":"` + ts.URL + `/a/img","save":true}`, "img.png"},
+		{"root path", `{"url":"` + ts.URL + `","save":true}`, "image.png"},
+		{"explicit wins", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"my cat","save":true}`, "my cat.png"},
+		{"explicit invalid falls back", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"../evil","save":true}`, "cat.png"},
+		{"query stripped", `{"url":"` + ts.URL + `/a/cat.jpg?sig=xyz&exp=1","save":true}`, "cat.png"},
 		// Text keeps the served name, extension and all.
-		{"text keeps name", `{"url":"` + ts.URL + `/a/notes.md","show":true}`, "notes.md"},
+		{"text keeps name", `{"url":"` + ts.URL + `/a/notes.md","save":true}`, "notes.md"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -304,8 +360,8 @@ func TestFetchFilename(t *testing.T) {
 			if isErr {
 				t.Fatalf("unexpected error: %q", out)
 			}
-			if fs.calls[0].filename != tc.want {
-				t.Fatalf("filename = %q, want %q", fs.calls[0].filename, tc.want)
+			if fs.files[0].filename != tc.want {
+				t.Fatalf("filename = %q, want %q", fs.files[0].filename, tc.want)
 			}
 		})
 	}
@@ -315,11 +371,11 @@ func TestFetchFilename(t *testing.T) {
 	// boundary and stay valid UTF-8.
 	longCJK := strings.Repeat("日", 66) + "a"
 	fs := &fakeFileStore{}
-	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/a/x.jpg","filename":"`+longCJK+`","show":true}`, meta)
+	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/a/x.jpg","filename":"`+longCJK+`","save":true}`, meta)
 	if isErr {
 		t.Fatalf("unexpected error: %q", out)
 	}
-	got := fs.calls[0].filename
+	got := fs.files[0].filename
 	if len(got) > 200 {
 		t.Fatalf("filename = %d bytes, want <= 200", len(got))
 	}
@@ -329,15 +385,15 @@ func TestFetchFilename(t *testing.T) {
 	if !utf8.ValidString(got) {
 		t.Fatalf("filename is not valid UTF-8 (split multibyte rune): %q", got)
 	}
+	if id := savedID(t, fs); !strings.Contains(out, id) {
+		t.Fatalf("result should carry the attachment id %q: %q", id, out)
+	}
 }
 
 func TestFetchErrors(t *testing.T) {
 	allowWebFetchLoopback(t)
 	jpg := testJPEG(t, 5, 5)
-	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(jpg)
-	}))
-	defer imgSrv.Close()
+	imgSrv := serve(t, "", jpg)
 	emptySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "0")
 	}))
@@ -348,9 +404,9 @@ func TestFetchErrors(t *testing.T) {
 		name, args, want string
 	}{
 		{"bad json", `{`, "invalid arguments"},
-		{"empty url", `{"url":"","show":true}`, "url is required"},
-		{"bad scheme", `{"url":"ftp://example.com/x.png","show":true}`, "not a valid http(s) URL"},
-		{"empty body", `{"url":"` + emptySrv.URL + `/x","show":false}`, "empty response"},
+		{"empty url", `{"url":"","save":true}`, "url is required"},
+		{"bad scheme", `{"url":"ftp://example.com/x.png","save":true}`, "not a valid http(s) URL"},
+		{"empty body", `{"url":"` + emptySrv.URL + `/x"}`, "empty response"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -362,7 +418,7 @@ func TestFetchErrors(t *testing.T) {
 			if !strings.Contains(out, tc.want) {
 				t.Fatalf("error %q does not contain %q", out, tc.want)
 			}
-			if len(fs.calls) != 0 {
+			if len(fs.files) != 0 {
 				t.Fatal("store must not be called on failure")
 			}
 		})
@@ -370,46 +426,44 @@ func TestFetchErrors(t *testing.T) {
 
 	// No chat context: fine when nothing is stored, refused when it is.
 	fs := &fakeFileStore{}
-	out, isErr := callFetch(t, fs, `{"url":"`+imgSrv.URL+`/x.png","show":true}`, mcphub.CallMeta{})
+	out, isErr := callFetch(t, fs, `{"url":"`+imgSrv.URL+`/x.png","save":true}`, mcphub.CallMeta{})
 	if !isErr || !strings.Contains(out, "no chat context") {
 		t.Fatalf("want chat-context error, got %v %q", isErr, out)
+	}
+	out, isErr = callFetch(t, fs, `{"url":"`+imgSrv.URL+`/x.png"}`, mcphub.CallMeta{})
+	if isErr {
+		t.Fatalf("save=false needs no chat context, got %q", out)
 	}
 	// Server error surfaces with the status.
 	srvErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusForbidden)
 	}))
 	defer srvErr.Close()
-	out, isErr = callFetch(t, fs, `{"url":"`+srvErr.URL+`/x.png","show":true}`, meta)
+	out, isErr = callFetch(t, fs, `{"url":"`+srvErr.URL+`/x.png","save":true}`, meta)
 	if !isErr || !strings.Contains(out, "403") {
 		t.Fatalf("want 403 surfaced, got %v %q", isErr, out)
 	}
 }
 
-func TestFetchUnsupportedFormat(t *testing.T) {
-	allowWebFetchLoopback(t)
-	// Content-negotiating CDNs may answer our Accept header with a format
-	// the pipeline cannot decode (AVIF); the error must name the type.
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/avif")
-		w.Write([]byte{0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0x01, 0x02})
-	}))
-	defer ts.Close()
-	fs := &fakeFileStore{}
-	out, isErr := callFetch(t, fs, `{"url":"`+ts.URL+`/x","show":true}`, mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
-	if !isErr {
-		t.Fatalf("want error, got %q", out)
-	}
-	if !strings.Contains(out, "image/avif") {
-		t.Fatalf("error should name the served type: %q", out)
-	}
-	if len(fs.calls) != 0 {
-		t.Fatal("store must not be called")
+func TestFetchNilStore(t *testing.T) {
+	out, isErr := callFetch(t, nil, `{"url":"http://example.com/x.png","save":true}`, mcphub.CallMeta{ChatID: "c", MessageID: "m"})
+	if !isErr || !strings.Contains(out, "not available") {
+		t.Fatalf("want storage-unavailable error, got isErr=%v %q", isErr, out)
 	}
 }
 
-func TestFetchNilStore(t *testing.T) {
-	out, isErr := callFetch(t, nil, `{"url":"http://example.com/x.png","show":true}`, mcphub.CallMeta{ChatID: "c", MessageID: "m"})
-	if !isErr || !strings.Contains(out, "not available") {
-		t.Fatalf("want storage-unavailable error, got isErr=%v %q", isErr, out)
+// The catalog the engine actually runs: both file tools present, text_file gone.
+func TestBuiltinFileTools(t *testing.T) {
+	names := map[string]bool{}
+	for _, e := range Builtin(&fakeFileStore{}, nil).Tools() {
+		names[e.Display] = true
+	}
+	for _, want := range []string{"create_file", "attach_file", "fetch", "code", "time"} {
+		if !names[want] {
+			t.Fatalf("catalog is missing %q: %v", want, names)
+		}
+	}
+	if names["text_file"] {
+		t.Fatal("text_file should be gone: create_file + attach_file replace it")
 	}
 }

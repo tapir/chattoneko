@@ -26,6 +26,10 @@ import (
 const (
 	KindImage = "image"
 	KindText  = "text"
+	// KindFile is any other binary: stored verbatim, never previewed, served
+	// as a download. Only tool-created files (create_file, fetch) use it —
+	// Process keeps refusing them for user uploads.
+	KindFile = "file"
 )
 
 // ErrUnsupported is returned when the content cannot be accepted (HTTP 415).
@@ -144,8 +148,21 @@ const MaxRawUploadBytes = 64 * 1024 * 1024 // 64 MiB
 // always re-encoded to PNG (JPEG/GIF/WebP sources live only in memory during
 // this call); the per-file cap is enforced on the *converted PNG*, downscaling
 // as needed, so typical large phone photos are accepted and only the compact
-// PNG is stored. Text files are enforced against the cap directly.
+// PNG is stored. Text files are enforced against the cap directly. Anything
+// else is ErrUnsupported.
 func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
+	return process(filename, data, maxBytes, false)
+}
+
+// ProcessAny is Process with the third kind unlocked: bytes that are neither
+// a decodable image nor printable text are kept verbatim as KindFile. Tools
+// take this path (the model can hand over a PDF it fetched); uploads stay on
+// Process so an unopenable file is refused at the door instead of stored.
+func ProcessAny(filename string, data []byte, maxBytes int64) (*Result, error) {
+	return process(filename, data, maxBytes, true)
+}
+
+func process(filename string, data []byte, maxBytes int64, allowBinary bool) (*Result, error) {
 	if int64(len(data)) > MaxRawUploadBytes {
 		return nil, ErrTooLarge
 	}
@@ -194,7 +211,15 @@ func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 		return nil, ErrTooLarge
 	}
 	if !IsText(data) {
-		return nil, ErrUnsupported
+		if !allowBinary {
+			return nil, ErrUnsupported
+		}
+		return &Result{
+			Kind: KindFile,
+			Mime: sniffMime(data),
+			Data: data,
+			Size: int64(len(data)),
+		}, nil
 	}
 	mime := "text/plain"
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(filename)), ".")
@@ -212,7 +237,7 @@ func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 // CleanFilename validates and normalizes an uploaded or tool-provided
 // filename: a plain name of bounded length, no directories, no control
 // characters. Names end up in the DB, in LLM prompts and in download
-// headers, so both call sites (user uploads, text_file) share this
+// headers, so every call site (user uploads, create_file, fetch) shares this
 // one check.
 func CleanFilename(name string) (string, error) {
 	name = strings.TrimSpace(name)
@@ -240,6 +265,17 @@ func CleanFilename(name string) (string, error) {
 		}
 	}
 	return name, nil
+}
+
+// sniffMime labels binary bytes for the metadata the model and the UI see. It
+// is never served as a Content-Type (the attachment handler forces
+// octet-stream for KindFile), so a wrong guess costs a label, not a hole.
+func sniffMime(data []byte) string {
+	ct := http.DetectContentType(data)
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	return ct
 }
 
 // IsText reports whether non-empty data is acceptable as plain text:

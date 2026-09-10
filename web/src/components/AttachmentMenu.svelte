@@ -22,6 +22,7 @@
     if (att) shown = att;
   });
   let image = $derived(shown?.kind === 'image');
+  let text = $derived(shown?.kind === 'text');
 
   // Android back closes the sheet before falling back to history (LIFO
   // overlay registry, same as AttachmentSheet/PanelSheet).
@@ -29,14 +30,15 @@
     if (att) return registerOverlay(() => attachMenu.close());
   });
 
-  // No Copy for a picture: nothing on a phone pastes an image out of the
-  // clipboard, and Share already gets the bytes wherever they're going.
+  // Copy is text-only: a picture has nothing to paste out of a phone
+  // clipboard, and a binary file's bytes aren't text. Both still get Share,
+  // which hands the real bytes to another app.
   let rows = $derived(
     [
       { key: 'share', icon: Share2, label: 'Share', hint: 'Send it to another app', run: shareAttachment },
-      image
-        ? null
-        : { key: 'copy', icon: Copy, label: 'Copy text', hint: 'Copy the file contents', run: copyAttachment },
+      text
+        ? { key: 'copy', icon: Copy, label: 'Copy text', hint: 'Copy the file contents', run: copyAttachment }
+        : null,
     ].filter(Boolean),
   );
 

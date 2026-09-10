@@ -7,7 +7,6 @@ package query
 type Attachment struct {
 	ID          string
 	ChatID      string
-	MessageID   string
 	Filename    string
 	Kind        string
 	Mime        string
@@ -52,6 +51,11 @@ type Message struct {
 	CreatedAt        int64
 	UpdatedAt        int64
 	ContextTokens    int64
+}
+
+type MessageAttachment struct {
+	AttachmentID string
+	MessageID    string
 }
 
 type Model struct {

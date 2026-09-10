@@ -180,8 +180,8 @@ func TestMessagesToolCallsAttachmentsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.ID == "" || meta.MessageID != "" {
-		t.Fatalf("attachment should be orphan: %+v", meta)
+	if meta.ID == "" {
+		t.Fatalf("attachment meta without id: %+v", meta)
 	}
 	if err := s.LinkAttachmentToMessage(ctx, meta.ID, um.ID, chat.ID); err != nil {
 		t.Fatal(err)
@@ -485,58 +485,77 @@ func TestFirstUserMessage(t *testing.T) {
 	}
 }
 
-func TestDeleteDanglingAttachments(t *testing.T) {
+// One attachment, any number of messages: linking is a join-table row, so
+// showing a file again never moves it, and deleting a message cascades its
+// links away while the blob survives for the messages that still show it.
+func TestAttachmentLinksAcrossMessages(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	chat := newChat(t, s)
+
+	first, _ := s.CreateMessage(ctx, NewMessageParams{ChatID: chat.ID, Role: RoleUser, Status: StatusComplete, Content: "look"})
+	second, _ := s.CreateMessage(ctx, NewMessageParams{ChatID: chat.ID, Role: RoleAssistant, Status: StatusComplete, Content: "again"})
+	att, err := s.CreateAttachment(ctx, chat.ID, "cat.png", "image", "image/png", 3, []byte("png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []*Message{first, second} {
+		if err := s.LinkAttachmentToMessage(ctx, att.ID, m.ID, chat.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Idempotent: attaching twice stays one link.
+	if err := s.LinkAttachmentToMessage(ctx, att.ID, second.ID, chat.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []*Message{first, second} {
+		got, err := s.ListAttachmentsByMessage(ctx, m.ID)
+		if err != nil || len(got) != 1 || got[0].ID != att.ID {
+			t.Fatalf("message %s attachments = %+v (err %v), want the one file", m.ID, got, err)
+		}
+	}
+	msgs, err := s.ListMessages(ctx, chat.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs[0].Attachments) != 1 || len(msgs[1].Attachments) != 1 {
+		t.Fatalf("chat load grouped %+v / %+v, want the file on both", msgs[0].Attachments, msgs[1].Attachments)
+	}
+	// A foreign chat's id links nothing.
 	other := newChat(t, s)
-
-	// Message that survives, with a linked attachment.
-	kept, _ := s.CreateMessage(ctx, NewMessageParams{ChatID: chat.ID, Role: RoleUser, Status: StatusComplete, Content: "keep"})
-	keptAtt, err := s.CreateLinkedAttachment(ctx, chat.ID, kept.ID, "keep.txt", "text", "text/plain", 1, []byte("k"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Message that gets truncated away, with a linked attachment (the
-	// tool-created-file case after regenerate/edit-resend).
-	gone, _ := s.CreateMessage(ctx, NewMessageParams{ChatID: chat.ID, Role: RoleAssistant, Status: StatusComplete, Content: "gone"})
-	goneAtt, err := s.CreateLinkedAttachment(ctx, chat.ID, gone.ID, "gone.txt", "text", "text/plain", 1, []byte("g"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// True orphan (upload not yet linked): must NOT be reaped here — the
-	// send flow links it after this cleanup could run.
-	orphan, err := s.CreateAttachment(ctx, chat.ID, "pending.txt", "text", "text/plain", 1, []byte("p"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Same-shape dangling row in ANOTHER chat: out of scope for this call.
-	otherGone, _ := s.CreateMessage(ctx, NewMessageParams{ChatID: other.ID, Role: RoleAssistant, Status: StatusComplete, Content: "x"})
-	otherAtt, err := s.CreateLinkedAttachment(ctx, other.ID, otherGone.ID, "o.txt", "text", "text/plain", 1, []byte("o"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.DeleteMessagesFromSeq(ctx, chat.ID, gone.Seq); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.DeleteMessagesFromSeq(ctx, other.ID, otherGone.Seq); err != nil {
+	if err := s.LinkAttachmentToMessage(ctx, att.ID, second.ID, other.ID); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := s.DeleteDanglingAttachments(ctx, chat.ID); err != nil {
+	// Deleting a message takes its link, not the blob.
+	if err := s.DeleteMessagesFromSeq(ctx, chat.ID, second.Seq); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetAttachment(ctx, goneAtt.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("dangling attachment not deleted: %v", err)
+	if got, err := s.ListAttachmentsByMessage(ctx, second.ID); err != nil || len(got) != 0 {
+		t.Fatalf("deleted message still shows %+v (err %v)", got, err)
 	}
-	if _, err := s.GetAttachment(ctx, keptAtt.ID); err != nil {
-		t.Fatalf("linked attachment wrongly deleted: %v", err)
+	if _, err := s.GetAttachment(ctx, att.ID); err != nil {
+		t.Fatalf("cascade took the blob with it: %v", err)
 	}
-	if _, err := s.GetAttachment(ctx, orphan.ID); err != nil {
-		t.Fatalf("unlinked (pending) attachment wrongly deleted: %v", err)
+
+	// Removing it from the last message deletes the blob.
+	if err := s.DeleteAttachment(ctx, att.ID, first.ID); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := s.GetAttachment(ctx, otherAtt.ID); err != nil {
-		t.Fatalf("other chat's attachment wrongly deleted: %v", err)
+	if _, err := s.GetAttachment(ctx, att.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unreferenced attachment survived: %v", err)
+	}
+
+	// An upload staged but never sent has no link: the empty message id deletes it.
+	staged, err := s.CreateAttachment(ctx, chat.ID, "pending.txt", "text", "text/plain", 1, []byte("p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAttachment(ctx, staged.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetAttachment(ctx, staged.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("staged attachment survived: %v", err)
 	}
 }
 

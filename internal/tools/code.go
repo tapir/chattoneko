@@ -75,7 +75,7 @@ import (
 
 // maxCodeBytes bounds the incoming snippet size. Snippets are meant to be
 // small; this keeps a pathological payload from even reaching the VM.
-const maxCodeBytes = 64 * 1024
+const maxCodeBytes = 1 << 20 // 1 MiB
 
 // chunkName is what Lua error messages report as the source of the snippet
 // ("[string \"code\"]:1: ...") instead of echoing the code itself.
@@ -197,7 +197,7 @@ var Code = Tool{
 		"Both RAISE a Lua error on bad input (malformed JSON, NaN, input over 16 MB) instead of returning nil, " +
 		"so wrap them in pcall when the text may not be valid JSON.\n\n" +
 
-		"LIMITS AND ERRORS. 64 KiB of code, a 30 s wall clock, about 5M checkpoints (loop backedges and calls — a few " +
+		"LIMITS AND ERRORS. 1 MiB of code, a 30 s wall clock, about 5M checkpoints (loop backedges and calls — a few " +
 		"million iterations of a simple loop) and 1 MiB of returned output. " +
 		"Errors arrive in-band as 'Error: [string \"code\"]:LINE: message' and abort the snippet; a syntax error means " +
 		"nothing ran at all. pcall and xpcall catch runtime errors (including the 'stack overflow' of deep recursion) but " +

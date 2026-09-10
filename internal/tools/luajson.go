@@ -40,7 +40,7 @@ const maxJSONDepth = 10_000
 // budget can bound it, and a snippet can hand us a string built by
 // string.rep (up to golua's ~1 GB per-string cap) that would materialize
 // several times its size in tables. Real input is JSON pasted into the
-// snippet, which maxCodeBytes already bounds at 64 KB.
+// snippet, which maxCodeBytes already bounds at 1 MiB.
 const maxJSONBytes = 16 * 1024 * 1024
 
 // openJSON registers the json global. Called after stdlib.Open.

@@ -14,6 +14,7 @@ import (
 	"image/png"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -77,13 +78,46 @@ func scale(img image.Image, w, h int) image.Image {
 }
 
 // textExts hints the mime for accepted text; anything missing is text/plain.
-// Acceptance is content-based (looksText), not extension-based.
+// Acceptance is content-based (IsText), not extension-based.
 var textExts = map[string]string{
 	"md": "text/markdown", "markdown": "text/markdown",
 	"yaml": "text/yaml", "yml": "text/yaml",
 	"json": "application/json", "jsonl": "application/jsonl", "ndjson": "application/jsonl",
 	"xml": "application/xml", "csv": "text/csv", "tsv": "text/tab-separated-values",
 	"html": "text/html", "css": "text/css",
+}
+
+// mimeExts is textExts inverted, so a Content-Type can be turned back into a
+// display extension. Where a mime has several spellings (text/markdown →
+// .md/.markdown) the shortest wins, which keeps the pick stable across runs.
+var mimeExts = func() map[string]string {
+	exts := make([]string, 0, len(textExts))
+	for e := range textExts {
+		exts = append(exts, e)
+	}
+	sort.Strings(exts)
+	m := make(map[string]string, len(exts))
+	for _, e := range exts {
+		mime := textExts[e]
+		if cur, ok := m[mime]; !ok || len(e) < len(cur) {
+			m[mime] = e
+		}
+	}
+	return m
+}()
+
+// ExtForMime returns the display extension (".json", dot included) for a text
+// Content-Type, parameters ignored, or "" when the type is not one Process
+// knows. Callers use it to give an extension-less download a name whose
+// suffix matches the mime Process will derive from it.
+func ExtForMime(ctype string) string {
+	if i := strings.IndexByte(ctype, ';'); i >= 0 {
+		ctype = ctype[:i]
+	}
+	if ext, ok := mimeExts[strings.ToLower(strings.TrimSpace(ctype))]; ok {
+		return "." + ext
+	}
+	return ""
 }
 
 // Result of processing one uploaded file.
@@ -159,7 +193,7 @@ func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 	if maxBytes > 0 && int64(len(data)) > maxBytes {
 		return nil, ErrTooLarge
 	}
-	if !looksText(data) {
+	if !IsText(data) {
 		return nil, ErrUnsupported
 	}
 	mime := "text/plain"
@@ -208,9 +242,9 @@ func CleanFilename(name string) (string, error) {
 	return name, nil
 }
 
-// looksText reports whether non-empty data is acceptable as plain text:
+// IsText reports whether non-empty data is acceptable as plain text:
 // valid UTF-8, no NUL bytes, >=95% printable/whitespace runes.
-func looksText(data []byte) bool {
+func IsText(data []byte) bool {
 	if bytes.IndexByte(data, 0) >= 0 {
 		return false
 	}

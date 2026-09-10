@@ -1,6 +1,6 @@
-// Package webimage fetches images from arbitrary web URLs while looking
-// like a real browser: for https it uses a uTLS ClientHello whose JA3/JA4
-// fingerprint matches current Chrome (impersonate-http, whose profiles track
+// Package webfetch fetches arbitrary web URLs (images, JSON, HTML, any
+// other body) while looking like a real browser: for https it uses a uTLS
+// ClientHello whose JA3/JA4 fingerprint matches current Chrome (impersonate-http, whose profiles track
 // utls's *_Auto templates) plus Chrome's own header values; for plain http
 // there is no handshake to fingerprint, so a stock net/http client carries
 // the same headers. Bot protection (Cloudflare, DataDome, hotlink guards,
@@ -20,7 +20,7 @@
 // plain-http fakes either. The scheme-independent logic (SSRF vetting,
 // headers, redirect hops, size cap, gzip, thumbnail fallback) is covered by
 // the http:// tests; the fingerprint itself is verified in production.
-package webimage
+package webfetch
 
 import (
 	"compress/gzip"
@@ -41,7 +41,7 @@ import (
 )
 
 // ErrTooLarge is returned when the response body exceeds the requested cap.
-var ErrTooLarge = errors.New("image too large")
+var ErrTooLarge = errors.New("response too large")
 
 // fetchTimeout bounds a single fetch. The tools layer additionally wraps
 // every call in its own 30s cap.
@@ -203,32 +203,28 @@ func ssrfCheckRedirect(req *http.Request, via []*http.Request) error {
 	return checkHostPublic(req.Context(), req.URL.Hostname())
 }
 
-// requestHeaders builds the headers of a Chrome image request (the shape a
-// browser sends when loading an <img> from another origin). The base is the
-// library's Chrome profile, so the User-Agent and the sec-ch-ua version
-// strings stay in sync with the fingerprinted ClientHello on library upgrades
-// — no hardcoded version numbers here. The navigation-only headers are
-// dropped and the image-specific ones overridden.
+// requestHeaders builds the headers of a Chrome navigation (the shape a
+// browser sends when a URL is opened in a tab), which is what every kind of
+// body — HTML, JSON, an image — is served to. The base is the library's
+// Chrome profile, so the User-Agent, the sec-ch-ua version strings and the
+// Sec-Fetch-* headers stay in sync with the fingerprinted ClientHello on
+// library upgrades — no hardcoded version numbers here. Only Accept and the
+// encoding are overridden.
 //
 // The Accept list deliberately omits image/avif and image/svg+xml even though
 // real Chrome advertises them: content-negotiating CDNs (imgix / Unsplash's
-// auto=format) honor avif by serving AVIF, which our conversion pipeline
-// cannot decode, and SVG is text we cannot rasterize either.
+// auto=format) honor avif by serving AVIF, which our image pipeline cannot
+// decode. Everything else is covered by the trailing */*.
 func requestHeaders() http.Header {
 	h := impersonate.Chrome.Headers.Clone()
-	h.Del("Upgrade-Insecure-Requests") // navigation-only
-	h.Del("Sec-Fetch-User")            // navigation-only
-	h.Set("Accept", "image/webp,image/apng,image/png,image/jpeg,image/*,*/*;q=0.8")
-	h.Set("Sec-Fetch-Dest", "image")
-	h.Set("Sec-Fetch-Mode", "no-cors")
-	h.Set("Sec-Fetch-Site", "cross-site")
+	h.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,image/png,image/jpeg,*/*;q=0.8")
 	// gzip only: neither transport decompresses a caller-declared encoding,
 	// and br/zstd would need decoders we don't link (see getOnce).
 	h.Set("Accept-Encoding", "gzip")
 	return h
 }
 
-// Fetch downloads rawURL (following redirects like a browser) and returns
+// Fetch GETs rawURL (following redirects like a browser) and returns
 // the body (capped at maxBytes), the final URL after redirects, and the
 // response Content-Type. Errors are phrased for the model/user.
 func Fetch(ctx context.Context, rawURL string, maxBytes int64) ([]byte, *url.URL, string, error) {
@@ -284,14 +280,14 @@ func getOnce(ctx context.Context, c *http.Client, u *url.URL, maxBytes int64) ([
 	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
 		zr, err := gzip.NewReader(body)
 		if err != nil {
-			return nil, nil, "", resp.StatusCode, fmt.Errorf("the gzip-compressed image could not be unpacked: %w", err)
+			return nil, nil, "", resp.StatusCode, fmt.Errorf("the gzip-compressed response could not be unpacked: %w", err)
 		}
 		defer zr.Close()
 		body = zr
 	}
 	data, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
 	if err != nil {
-		return nil, nil, "", resp.StatusCode, fmt.Errorf("reading the image failed: %w", err)
+		return nil, nil, "", resp.StatusCode, fmt.Errorf("reading the response failed: %w", err)
 	}
 	if int64(len(data)) > maxBytes {
 		return nil, nil, "", resp.StatusCode, ErrTooLarge

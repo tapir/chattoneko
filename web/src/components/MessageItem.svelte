@@ -55,15 +55,15 @@
   let toolCalls = $derived(live ? live.toolCalls : item.toolCalls);
   let status = $derived(live ? live.status : msg.status);
   let errorText = $derived(live ? live.error : msg.error);
-  // Tool-created attachments (create_text_file, show_image) on this
+  // Tool-created attachments (create_text_file, fetch) on this
   // assistant message. Deliberately NOT rendered while the message is live:
   // they appear only once the reply is fully rendered (`done` merges
   // live.attachments into the message, which ends `live`), instead of
   // popping in mid-stream above text that is still typing.
   let attachments = $derived(live ? [] : (msg.attachments ?? []));
-  // Image attachments render inline (show_image exists so the user SEES the
-  // picture); everything else keeps the download-chip treatment. User rows are
-  // never live, so the same two lists feed both sides.
+  // Image attachments render inline (fetch with show=true exists so the user
+  // SEES the picture); everything else keeps the download-chip treatment. User
+  // rows are never live, so the same two lists feed both sides.
   let imageFiles = $derived(attachments.filter((a) => a.kind === 'image'));
   let files = $derived(attachments.filter((a) => a.kind !== 'image'));
 
@@ -463,7 +463,7 @@
     {/if}
 
     {#if imageFiles.length}
-      <!-- Pictures the model gathered (show_image) as a gallery: tapping any
+      <!-- Pictures the model gathered (fetch) as a gallery: tapping any
            cell opens the same lightbox as a single image, now with prev/next
            over the whole set. -->
       <ImageGallery items={imageFiles} class="mt-2" />

@@ -327,3 +327,30 @@ func TestCleanFilename(t *testing.T) {
 		t.Fatalf("ZWJ name rejected: %v", err)
 	}
 }
+
+// ExtForMime must agree with the mime Process derives from the extension it
+// hands back, strip parameters, and stay quiet about types it doesn't know.
+func TestExtForMime(t *testing.T) {
+	cases := []struct{ ctype, want string }{
+		{"application/json", ".json"},
+		{"application/json; charset=utf-8", ".json"},
+		{" TEXT/HTML ", ".html"},
+		{"text/markdown", ".md"},       // shortest of md/markdown, stable across runs
+		{"text/yaml", ".yml"},          // shortest of yaml/yml
+		{"application/vnd.custom", ""}, // unknown: no invented suffix
+		{"", ""},
+		{"text/plain", ""},
+	}
+	for _, tc := range cases {
+		if got := ExtForMime(tc.ctype); got != tc.want {
+			t.Errorf("ExtForMime(%q) = %q, want %q", tc.ctype, got, tc.want)
+		}
+	}
+	// Round trip: the extension we suggest must map back to the same mime,
+	// otherwise a fetched file would be named for one type and stored as another.
+	for _, mime := range textExts {
+		if got := ExtForMime(mime); got != "" && textExts[strings.TrimPrefix(got, ".")] != mime {
+			t.Errorf("%q -> %q -> a different mime", mime, got)
+		}
+	}
+}

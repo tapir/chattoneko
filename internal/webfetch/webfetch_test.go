@@ -1,4 +1,4 @@
-package webimage
+package webfetch
 
 import (
 	"bytes"

@@ -105,7 +105,7 @@
     return { baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
   }
 
-  const MODALITIES = ['text', 'image', 'audio', 'video'];
+  const MODALITIES = ['text', 'image', 'audio'];
   const DEFAULT_EFFORTS = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
   const DEFAULT_EFFORT = 'medium';
   const DEFAULT_CONTEXT = 131072;

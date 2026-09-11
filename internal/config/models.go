@@ -10,7 +10,7 @@ import (
 )
 
 // Modalities a model can accept/produce.
-var validModalities = map[string]bool{"text": true, "image": true, "video": true, "audio": true}
+var validModalities = map[string]bool{"text": true, "image": true, "audio": true}
 
 // ModelMeta is the per-model metadata stored in the models table: what the
 // model accepts/produces, how much context it takes, and which reasoning

@@ -5,18 +5,32 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
-	"unicode/utf8"
 
 	"chattoneko/internal/attach"
 	"chattoneko/internal/mcphub"
 	"chattoneko/internal/webfetch"
 )
 
-// maxRawFetchBytes caps the bytes read from the network. It is deliberately
-// far above the tool-result budget: a large text body is handed over truncated
-// WITH ITS TRUE SIZE, which only works if we actually read it.
-const maxRawFetchBytes = attach.MaxRawUploadBytes
+// fetchBody downloads a URL for the two tools that read the network (fetch,
+// create_file): one cap, one set of in-band errors, and a never-empty body on
+// success. The cap is deliberately far above the tool-result budget: a large
+// text body is handed over truncated WITH ITS TRUE SIZE, which only works if
+// we actually read it.
+func fetchBody(ctx context.Context, rawURL string) (data []byte, finalURL *url.URL, contentType string, err error) {
+	data, finalURL, contentType, err = webfetch.Fetch(ctx, rawURL, attach.MaxRawUploadBytes)
+	if err != nil {
+		if errors.Is(err, webfetch.ErrTooLarge) {
+			err = fmt.Errorf("the response is larger than the %s fetch limit", humanSize(attach.MaxRawUploadBytes))
+		}
+		return nil, nil, "", err
+	}
+	if len(data) == 0 {
+		return nil, nil, "", errors.New("the URL returned an empty response")
+	}
+	return data, finalURL, contentType, nil
+}
 
 // The "fetch" tool: reads a URL and hands the body to the model. Text comes
 // back verbatim, capped at the tool-result budget; anything else is an in-band
@@ -25,7 +39,7 @@ const maxRawFetchBytes = attach.MaxRawUploadBytes
 // through the model — so there is no save mode and no base64 here.
 //
 // All user/LLM-facing text is hardcoded here — edit in place to change it.
-var Fetch = Tool{
+var Fetch = tool{
 	Name: "fetch",
 	Description: "Read a web page or an HTTP API and get its text back. A text body arrives " +
 		"verbatim, and one too large for that arrives truncated with the cut announced. " +
@@ -59,15 +73,9 @@ func fetchURL(ctx context.Context, argsJSON string, _ mcphub.CallMeta) (string, 
 		return "", errors.New("url is required")
 	}
 
-	data, _, contentType, err := webfetch.Fetch(ctx, args.URL, maxRawFetchBytes)
+	data, _, contentType, err := fetchBody(ctx, args.URL)
 	if err != nil {
-		if errors.Is(err, webfetch.ErrTooLarge) {
-			return "", fmt.Errorf("the response is larger than the %s fetch limit", humanSize(maxRawFetchBytes))
-		}
 		return "", err
-	}
-	if len(data) == 0 {
-		return "", errors.New("the URL returned an empty response")
 	}
 	// Classified by CONTENT, not by Content-Type or extension: servers lie and
 	// an extension-less API path is the common case.
@@ -85,10 +93,9 @@ func textResult(body string) string {
 	if len(body) <= maxOutputBytes {
 		return body
 	}
-	cut := body[:maxOutputBytes]
-	for len(cut) > 0 && !utf8.ValidString(cut) {
-		cut = cut[:len(cut)-1]
-	}
+	// The body passed IsText, so it is valid UTF-8: ToValidUTF8 drops exactly
+	// the one rune the byte cut may have split.
+	cut := strings.ToValidUTF8(body[:maxOutputBytes], "")
 	return cut + fmt.Sprintf("\n(content truncated at %s — the URL returned %s in total)",
 		humanSize(int64(len(cut))), humanSize(int64(len(body))))
 }

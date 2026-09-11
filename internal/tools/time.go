@@ -10,12 +10,12 @@ import (
 	"chattoneko/internal/mcphub"
 )
 
-// EnvLocationString is the environment variable that optionally supplies a
+// envLocationString is the environment variable that optionally supplies a
 // free-form location string (e.g. "Berlin, Germany"). When set (non-empty
 // after trimming), the time tool appends it to its result so the
 // model can ground place-aware answers; when unset, nothing is appended.
 // Read at call time, like the clock itself.
-const EnvLocationString = "CHATTO_LOCATION_STRING"
+const envLocationString = "CHATTO_LOCATION_STRING"
 
 // The "time" tool: returns the server's current local date, time,
 // and timezone — plus its configured location when CHATTO_LOCATION_STRING is
@@ -23,7 +23,7 @@ const EnvLocationString = "CHATTO_LOCATION_STRING"
 // Friday", "in two hours") and place-aware answers ("near me", "local").
 //
 // All user/LLM-facing text is hardcoded here — edit in place to change it.
-var Time = Tool{
+var Time = tool{
 	Name: "time",
 	Description: "Get the current date, time, timezone, and — when the " +
 		"server has one configured — location. Call this when the answer " +
@@ -42,7 +42,7 @@ const timeLayout = "Monday, 2 January 2006, 15:04:05 MST"
 func reportTime(_ context.Context, _ string, _ mcphub.CallMeta) (string, error) {
 	now := time.Now()
 	out := fmt.Sprintf("%s (%s)", now.Format(timeLayout), now.Format(time.RFC3339))
-	if loc := strings.TrimSpace(os.Getenv(EnvLocationString)); loc != "" {
+	if loc := strings.TrimSpace(os.Getenv(envLocationString)); loc != "" {
 		out += " — " + loc
 	}
 	return out, nil

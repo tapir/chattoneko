@@ -5,7 +5,7 @@
 // them identically to MCP tools.
 //
 // Adding a new integrated tool:
-//  1. Create a file for it here (e.g. timelocation.go) with a `var MyTool = Tool{...}`
+//  1. Create a file for it here (e.g. timelocation.go) with a `var MyTool = tool{...}`
 //     holding all LLM-facing text (name, description, schema) and its
 //     user-facing title hardcoded.
 //  2. Add it to the list in Builtin() (catalog.go).
@@ -25,11 +25,11 @@ import (
 // but a future handler doing I/O must not block the turn loop indefinitely.
 const callTimeout = 30 * time.Second
 
-// Tool is one integrated tool definition. All LLM-facing text is hardcoded
+// tool is one integrated tool definition. All LLM-facing text is hardcoded
 // here in code — edit the tool's own file to change it. DefaultEnabled
 // controls whether the tool starts enabled for chats that have not toggled
 // it explicitly (per-chat overrides live in the chat's persisted tools map).
-type Tool struct {
+type tool struct {
 	Name           string          // LLM-facing name (must be unique across the whole catalog)
 	Description    string          // LLM-facing description
 	Schema         json.RawMessage // JSON schema for the arguments
@@ -38,28 +38,28 @@ type Tool struct {
 	// ("Coding…"). Hardcoded here like the rest of the tool's text; the
 	// model never sees it. Empty falls back to Name in the UI.
 	Title   string
-	Handler Handler
+	Handler handler
 }
 
-// Handler executes one tool call. argsJSON is the raw arguments JSON the
+// handler executes one tool call. argsJSON is the raw arguments JSON the
 // model produced ("" when the model sent none); handlers that take arguments
 // should json.Unmarshal and validate them themselves. meta carries the
 // chat/message coordinates of the call for handlers that persist artifacts
 // (e.g. create_file showing a file on the assistant message that asked for it).
 // The returned string is what the model sees as the tool result.
-type Handler func(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (string, error)
+type handler func(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (string, error)
 
-// Registry is a static catalog of integrated tools. It implements
+// registry is a static catalog of integrated tools. It implements
 // engine.ToolCatalog.
-type Registry struct {
-	tools  []Tool
+type registry struct {
+	tools  []tool
 	byName map[string]int // name → index into tools
 }
 
-// New builds a Registry from the given tool definitions. Duplicate names are
+// newRegistry builds a registry from the given tool definitions. Duplicate names are
 // a programming error and panic at startup so they are caught immediately.
-func New(ts ...Tool) *Registry {
-	r := &Registry{byName: map[string]int{}}
+func newRegistry(ts ...tool) *registry {
+	r := &registry{byName: map[string]int{}}
 	for i := range ts {
 		t := ts[i]
 		if t.Name == "" || t.Handler == nil {
@@ -79,7 +79,7 @@ func New(ts ...Tool) *Registry {
 
 // Tools returns the catalog entries for all integrated tools, in declaration
 // order.
-func (r *Registry) Tools() []mcphub.Entry {
+func (r *registry) Tools() []mcphub.Entry {
 	out := make([]mcphub.Entry, 0, len(r.tools))
 	for _, t := range r.tools {
 		out = append(out, mcphub.Entry{
@@ -97,7 +97,7 @@ func (r *Registry) Tools() []mcphub.Entry {
 // Call invokes the named integrated tool. Handler errors are returned
 // in-band (isError=true) so the model sees the failure as tool output,
 // mirroring how MCP tool errors surface.
-func (r *Registry) Call(ctx context.Context, display, argsJSON string, meta mcphub.CallMeta) (out string, isErr bool, err error) {
+func (r *registry) Call(ctx context.Context, display, argsJSON string, meta mcphub.CallMeta) (out string, isErr bool, err error) {
 	i, ok := r.byName[display]
 	if !ok {
 		return "", false, fmt.Errorf("unknown tool %q", display)

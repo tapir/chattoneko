@@ -42,28 +42,30 @@ var ErrTooLarge = errors.New("file too large")
 const maxImageSide = 2048
 
 // encodePNG renders img as PNG at the largest size whose encoded bytes fit
-// within maxBytes (0 = no limit). A noisy photo can produce a PNG larger than
-// the source upload; when that would blow the per-file cap we downscale and
-// retry, so large phone photos are still accepted and only the compact PNG is
-// kept (matches the "only the converted PNG is stored" invariant).
-func encodePNG(img image.Image, maxBytes int64) ([]byte, error) {
+// within maxBytes (0 = no limit), returning the bytes and the FINAL pixel
+// dimensions (the shrink loop below means the input's bounds may not be the
+// output's). A noisy photo can produce a PNG larger than the source upload;
+// when that would blow the per-file cap we downscale and retry, so large
+// phone photos are still accepted and only the compact PNG is kept (matches
+// the "only the converted PNG is stored" invariant).
+func encodePNG(img image.Image, maxBytes int64) (data []byte, w, h int, err error) {
 	const attempts = 5
 	for i := 0; i < attempts; i++ {
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, img); err != nil {
-			return nil, fmt.Errorf("encode png: %w", err)
+			return nil, 0, 0, fmt.Errorf("encode png: %w", err)
 		}
+		b := img.Bounds()
 		if maxBytes <= 0 || int64(buf.Len()) <= maxBytes {
-			return buf.Bytes(), nil
+			return buf.Bytes(), b.Dx(), b.Dy(), nil
 		}
 		// Too big: shrink to 75% per axis for the next attempt.
-		b := img.Bounds()
 		if b.Dx() <= 1 && b.Dy() <= 1 {
 			break // cannot shrink further
 		}
 		img = scale(img, b.Dx()*3/4, b.Dy()*3/4)
 	}
-	return nil, ErrTooLarge
+	return nil, 0, 0, ErrTooLarge
 }
 
 // scale resamples img to w×h. x/image/draw replaces a hand-rolled
@@ -130,6 +132,11 @@ type Result struct {
 	Mime string // detected mime (image/png for converted images)
 	Data []byte // PNG bytes for images, raw UTF-8 for text
 	Size int64  // stored byte count (== len(Data))
+	// Width and Height are the stored image's final pixel dimensions
+	// (post-downscale; reading them back off Data would need another decode).
+	// Zero for non-images.
+	Width  int
+	Height int
 }
 
 // maxDecodeSide rejects absurdly large source images. It is enforced from the
@@ -192,15 +199,17 @@ func process(filename string, data []byte, maxBytes int64, allowBinary bool) (*R
 		if format == "jpeg" {
 			img = applyOrientation(img, jpegOrientation(data))
 		}
-		pngData, err := encodePNG(img, maxBytes)
+		pngData, w, h, err := encodePNG(img, maxBytes)
 		if err != nil {
 			return nil, err
 		}
 		return &Result{
-			Kind: KindImage,
-			Mime: "image/png",
-			Data: pngData,
-			Size: int64(len(pngData)),
+			Kind:   KindImage,
+			Mime:   "image/png",
+			Data:   pngData,
+			Size:   int64(len(pngData)),
+			Width:  w,
+			Height: h,
 		}, nil
 	} else if ct := http.DetectContentType(data); strings.HasPrefix(ct, "image/") {
 		// Known image magic bytes with an unparseable header.

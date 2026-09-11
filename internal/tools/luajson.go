@@ -19,7 +19,7 @@ import (
 //   - A nesting cap on encode. golua's converter recurses into tables with no
 //     depth limit, so `local t={} t.self=t; json.encode(t)` exhausts the Go
 //     stack. That is a runtime throw, not a panic — recover() cannot catch
-//     it, the Registry's panic recovery is useless, and the whole server
+//     it, the registry's panic recovery is useless, and the whole server
 //     process dies. It also happens inside a single native call, so neither
 //     the checkpoint budget nor the context deadline can interrupt it.
 //   - Exact integer decoding via json.Number. Decoding through float64 loses

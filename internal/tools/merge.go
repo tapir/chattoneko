@@ -9,9 +9,9 @@ import (
 	"chattoneko/internal/mcphub"
 )
 
-// Source is a tool catalog: the contract the engine and the API consume.
-// Both *Registry (integrated tools) and *mcphub.Hub (MCP tools) implement it.
-type Source interface {
+// source is a tool catalog: the contract the engine and the API consume.
+// Both *registry (integrated tools) and *mcphub.hub (MCP tools) implement it.
+type source interface {
 	Tools() []mcphub.Entry
 	Call(ctx context.Context, display, argsJSON string, meta mcphub.CallMeta) (string, bool, error)
 }
@@ -35,12 +35,12 @@ type Source interface {
 // hardcoded; MCP tools: the title their server declared). cfg may be nil.
 type Merged struct {
 	cfg     *config.Store
-	sources []Source
+	sources []source
 }
 
 // Merge combines tool sources into one live catalog with the configured
 // global tool defaults layered over the sources' own defaults.
-func Merge(cfg *config.Store, sources ...Source) *Merged {
+func Merge(cfg *config.Store, sources ...source) *Merged {
 	return &Merged{cfg: cfg, sources: sources}
 }
 

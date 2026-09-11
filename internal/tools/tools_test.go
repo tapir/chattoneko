@@ -11,7 +11,7 @@ import (
 )
 
 func TestRegistryTools(t *testing.T) {
-	r := New(Tool{
+	r := newRegistry(tool{
 		Name:           "alpha",
 		Description:    "first",
 		DefaultEnabled: true,
@@ -39,14 +39,14 @@ func TestRegistryDuplicatePanics(t *testing.T) {
 		}
 	}()
 	h := func(context.Context, string, mcphub.CallMeta) (string, error) { return "", nil }
-	New(Tool{Name: "x", Handler: h}, Tool{Name: "x", Handler: h})
+	newRegistry(tool{Name: "x", Handler: h}, tool{Name: "x", Handler: h})
 }
 
 func TestRegistryCall(t *testing.T) {
-	r := New(Tool{
+	r := newRegistry(tool{
 		Name:    "echo",
 		Handler: func(_ context.Context, args string, _ mcphub.CallMeta) (string, error) { return "got:" + args, nil },
-	}, Tool{
+	}, tool{
 		Name:    "fail",
 		Handler: func(context.Context, string, mcphub.CallMeta) (string, error) { return "", errors.New("boom") },
 	})
@@ -70,7 +70,7 @@ func TestRegistryCall(t *testing.T) {
 // A panicking in-process handler (e.g. a bug in the Lua VM) must surface as
 // an in-band tool error, never take down the turn loop or the process.
 func TestRegistryCallPanicIsolated(t *testing.T) {
-	r := New(Tool{
+	r := newRegistry(tool{
 		Name:    "explode",
 		Handler: func(context.Context, string, mcphub.CallMeta) (string, error) { panic("boom") },
 	})
@@ -102,7 +102,7 @@ func mustParseRFC(t *testing.T, out string) time.Time {
 
 func TestTime(t *testing.T) {
 	t.Run("without location", func(t *testing.T) {
-		t.Setenv(EnvLocationString, "")
+		t.Setenv(envLocationString, "")
 		out, isErr, err := Builtin(nil, nil).Call(context.Background(), "time", "", mcphub.CallMeta{})
 		if err != nil || isErr {
 			t.Fatalf("time: out=%q isErr=%v err=%v", out, isErr, err)
@@ -119,7 +119,7 @@ func TestTime(t *testing.T) {
 
 	t.Run("with location", func(t *testing.T) {
 		const loc = "Berlin, Germany"
-		t.Setenv(EnvLocationString, loc)
+		t.Setenv(envLocationString, loc)
 		out, isErr, err := Builtin(nil, nil).Call(context.Background(), "time", "", mcphub.CallMeta{})
 		if err != nil || isErr {
 			t.Fatalf("time: out=%q isErr=%v err=%v", out, isErr, err)
@@ -136,7 +136,7 @@ func TestTime(t *testing.T) {
 }
 
 func TestMerge(t *testing.T) {
-	mk := func(name, server string) Source {
+	mk := func(name, server string) source {
 		return &stubSource{
 			entries: []mcphub.Entry{{Display: name, Server: server}},
 			out:     "from-" + server,

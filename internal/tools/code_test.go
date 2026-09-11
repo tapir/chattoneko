@@ -197,7 +197,7 @@ func TestCodeDeepRecursionIsCatchable(t *testing.T) {
 
 func TestCodeRuntimeErrorSurfacesInBand(t *testing.T) {
 	out, isErr, err := callCode(t, `{"code":"local t=nil; print(t.x)"}`)
-	// Handler error -> Registry returns it in-band with isError=true, no Go error.
+	// Handler error -> registry returns it in-band with isError=true, no Go error.
 	if err != nil {
 		t.Fatalf("expected in-band error, got Go error: %v", err)
 	}

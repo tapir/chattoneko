@@ -61,8 +61,8 @@ type serverState struct {
 	entries []Entry
 }
 
-// Hub owns one ClientSession per connected MCP server.
-type Hub struct {
+// hub owns one ClientSession per connected MCP server.
+type hub struct {
 	store *config.Store
 
 	mu       sync.RWMutex
@@ -74,28 +74,20 @@ type Hub struct {
 }
 
 // New creates a hub reading its server list from the config store. Call
-// Connect to dial the servers.
-func New(store *config.Store) *Hub {
-	return &Hub{store: store, servers: map[string]*serverState{}}
-}
-
-// Connect dials every configured MCP server CONCURRENTLY (a dead server must
-// not serialize its network timeout into boot time) and builds the tool
-// catalog in config order. Per-server failures are logged and skipped (their
-// tools stay absent).
-func (h *Hub) Connect(ctx context.Context) {
-	h.reloadMu.Lock()
-	defer h.reloadMu.Unlock()
-	h.reconcileLocked(ctx, h.store.Get().MCPServers)
+// Reload to dial the servers.
+func New(store *config.Store) *hub {
+	return &hub{store: store, servers: map[string]*serverState{}}
 }
 
 // Reload re-reads the MCP server list from the config store and reconciles:
-// new servers are connected, removed ones closed, changed ones (any field)
-// reconnected. Safe to call concurrently — reconciliation is serialized.
-// Returns true when the reconciliation changed the tool catalog (servers
-// were added, removed, or reconnected), so callers can notify clients that
-// /api/config is stale.
-func (h *Hub) Reload(ctx context.Context) bool {
+// new servers are connected CONCURRENTLY (a dead server must not serialize
+// its network timeout into boot or reload time), removed ones closed, changed
+// ones (any field) reconnected. Per-server failures are logged and skipped
+// (their tools stay absent). Safe to call concurrently — reconciliation is
+// serialized. Returns true when the reconciliation changed the tool catalog
+// (servers were added, removed, or reconnected), so callers can notify
+// clients that /api/config is stale.
+func (h *hub) Reload(ctx context.Context) bool {
 	h.reloadMu.Lock()
 	defer h.reloadMu.Unlock()
 	return h.reconcileLocked(ctx, h.store.Get().MCPServers)
@@ -105,19 +97,14 @@ func (h *Hub) Reload(ctx context.Context) bool {
 // connections and applies the minimum set of connect/close operations.
 // Callers must hold reloadMu. Returns true when the tool catalog changed
 // (something was closed or a new connection succeeded).
-func (h *Hub) reconcileLocked(ctx context.Context, desired []config.MCPServerConfig) bool {
-	// Snapshot current servers outside the lock.
-	h.mu.Lock()
-	current := make(map[string]*serverState, len(h.servers))
-	for name, st := range h.servers {
-		current[name] = st
-	}
-	h.mu.Unlock()
-
+func (h *hub) reconcileLocked(ctx context.Context, desired []config.MCPServerConfig) bool {
 	// Decide what to close: servers removed from config, or whose config
-	// changed (they will be reconnected below).
+	// changed (they will be reconnected below). reloadMu already serializes
+	// reconciliation and st.cfg is immutable once inserted, so the live map
+	// can be read under RLock — no snapshot copy.
 	var toClose []string
-	for name, st := range current {
+	h.mu.RLock()
+	for name, st := range h.servers {
 		found := false
 		for _, d := range desired {
 			if d.Name == name {
@@ -132,6 +119,7 @@ func (h *Hub) reconcileLocked(ctx context.Context, desired []config.MCPServerCon
 			toClose = append(toClose, name)
 		}
 	}
+	h.mu.RUnlock()
 	if len(toClose) > 0 {
 		// Detach under the lock, close OUTSIDE it: session teardown does
 		// HTTP I/O and must not block every Tools()/Call() reader while it
@@ -205,7 +193,7 @@ func (h *Hub) reconcileLocked(ctx context.Context, desired []config.MCPServerCon
 // server in config order wins and the later entry is dropped — the same
 // policy the merged catalog applies across sources (tools.Merge).
 // Callers must hold h.mu for writing.
-func (h *Hub) rebuildEntriesLocked(order []string) {
+func (h *hub) rebuildEntriesLocked(order []string) {
 	h.entries = nil
 	h.sessions = make(map[string]*mcp.ClientSession)
 	for _, name := range order {
@@ -253,7 +241,7 @@ func Probe(ctx context.Context, sc config.MCPServerConfig) ([]Entry, error) {
 
 // connectOne dials one server and lists its tools; on failure it logs a
 // warning and returns nil session (the server is skipped).
-func (h *Hub) connectOne(ctx context.Context, sc config.MCPServerConfig) (*mcp.ClientSession, []Entry) {
+func (h *hub) connectOne(ctx context.Context, sc config.MCPServerConfig) (*mcp.ClientSession, []Entry) {
 	cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	session, err := dial(cctx, sc)
@@ -327,7 +315,7 @@ func mcpTitle(t *mcp.Tool) string {
 }
 
 // Tools returns the aggregated catalog.
-func (h *Hub) Tools() []Entry {
+func (h *hub) Tools() []Entry {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	out := make([]Entry, len(h.entries))
@@ -339,7 +327,7 @@ func (h *Hub) Tools() []Entry {
 // Returns the result rendered as text (see resultText) and the isError flag
 // from the tool. The CallMeta is part of the shared catalog contract; MCP
 // tools don't use it.
-func (h *Hub) Call(ctx context.Context, display, argsJSON string, _ CallMeta) (string, bool, error) {
+func (h *hub) Call(ctx context.Context, display, argsJSON string, _ CallMeta) (string, bool, error) {
 	h.mu.RLock()
 	session, ok := h.sessions[display]
 	h.mu.RUnlock()
@@ -418,7 +406,7 @@ func (t headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // Close closes all sessions OUTSIDE the lock: teardown I/O must not block
 // catalog readers.
-func (h *Hub) Close() {
+func (h *hub) Close() {
 	h.mu.Lock()
 	closing := h.servers
 	h.servers = map[string]*serverState{}

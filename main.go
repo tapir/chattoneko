@@ -126,7 +126,7 @@ func run() error {
 	boot := cfgStore.Get()
 	prov := provider.NewLive(boot.Provider.BaseURL, boot.Provider.APIKey)
 	hub := mcphub.New(cfgStore)
-	hub.Connect(ctx)
+	hub.Reload(ctx)
 	// Aggregated tool catalog: integrated (built-in, hardcoded) tools first,
 	// then MCP tools; integrated tools win name collisions. The merged catalog
 	// reads both sources live, so MCP servers added through config appear

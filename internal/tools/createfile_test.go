@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -12,7 +14,7 @@ import (
 	"chattoneko/internal/store"
 )
 
-// fakeFileStore is the in-memory FileStore the file-tool tests run against:
+// fakeFileStore is the in-memory fileStore the file-tool tests run against:
 // created files get sequential ids and links are recorded instead of written.
 type fakeFileStore struct {
 	files []fakeFile
@@ -67,9 +69,9 @@ func shownOn(t *testing.T, fs *fakeFileStore, messageID string) fakeFile {
 	return fs.files[0]
 }
 
-func callTool(t *testing.T, fs FileStore, tool, args string, meta mcphub.CallMeta) (string, bool) {
+func callTool(t *testing.T, fs fileStore, name, args string, meta mcphub.CallMeta) (string, bool) {
 	t.Helper()
-	out, isErr, err := Builtin(fs, nil).Call(context.Background(), tool, args, meta)
+	out, isErr, err := Builtin(fs, nil).Call(context.Background(), name, args, meta)
 	if err != nil {
 		t.Fatalf("transport error: %v", err)
 	}
@@ -184,13 +186,6 @@ func TestCreateFileValidation(t *testing.T) {
 	}
 }
 
-func TestCreateFileNilStore(t *testing.T) {
-	out, isErr := callTool(t, nil, "create_file", `{"filename":"a.txt","content":"x"}`, mcphub.CallMeta{ChatID: "c", MessageID: "m"})
-	if !isErr || !strings.Contains(out, "not available") {
-		t.Fatalf("want storage-unavailable error, got isErr=%v %q", isErr, out)
-	}
-}
-
 // A failed link is an error, not a silent invisible file: with no separate
 // showing step there is nothing the model could call to recover.
 func TestCreateFileLinkFailure(t *testing.T) {
@@ -220,8 +215,10 @@ func TestCreateFileFromURLImage(t *testing.T) {
 	if c.kind != "image" || c.mime != "image/png" || c.filename != "cat.png" {
 		t.Fatalf("wrong attachment: %+v", c)
 	}
-	if w, h := pngDimensions(c.data); w != 40 || h != 30 {
-		t.Fatalf("stored PNG is %dx%d, want 40x30", w, h)
+	// Independent decode of the stored bytes: the result's dims must match
+	// what was actually persisted, not just what the tool claimed.
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(c.data)); err != nil || cfg.Width != 40 || cfg.Height != 30 {
+		t.Fatalf("stored PNG is %+v (err %v), want 40x30", cfg, err)
 	}
 	if c.size != int64(len(c.data)) {
 		t.Fatalf("size %d != len(data) %d", c.size, len(c.data))
@@ -296,7 +293,7 @@ func TestCreateFileFromURLFilename(t *testing.T) {
 		{"webp source", `{"url":"` + ts.URL + `/a/sticker.webp"}`, "sticker.png"},
 		{"png kept", `{"url":"` + ts.URL + `/a/diagram.PNG"}`, "diagram.PNG"},
 		{"no extension", `{"url":"` + ts.URL + `/a/img"}`, "img.png"},
-		{"root path", `{"url":"` + ts.URL + `"}`, "image.png"},
+		{"root path", `{"url":"` + ts.URL + `"}`, "file.png"},
 		{"explicit wins", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"my cat"}`, "my cat.png"},
 		{"explicit invalid falls back", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"../evil"}`, "cat.png"},
 		{"query stripped", `{"url":"` + ts.URL + `/a/cat.jpg?sig=xyz&exp=1"}`, "cat.png"},

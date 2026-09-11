@@ -8,11 +8,11 @@ import (
 	"chattoneko/internal/store"
 )
 
-// FileStore is the attachment store create_file works against: it stores the
+// fileStore is the attachment store create_file works against: it stores the
 // file and links it to the assistant message being generated, in one step, so
 // a successful call always means the user can see it. *store.Store implements
 // it; tests can substitute a fake.
-type FileStore interface {
+type fileStore interface {
 	CreateAttachment(ctx context.Context, chatID, filename, kind, mime string, size int64, data []byte) (*store.AttachmentMeta, error)
 	LinkAttachmentToMessage(ctx context.Context, attachmentID, messageID, chatID string) error
 }
@@ -23,8 +23,8 @@ type FileStore interface {
 // dependencies (stores) are constructed here with them, so no package-level
 // wiring state is needed. files is the attachment store create_file uses;
 // limits supplies the live-configured size limits for what it downloads.
-func Builtin(files FileStore, limits *config.Store) *Registry {
-	return New(
+func Builtin(files fileStore, limits *config.Store) *registry {
+	return newRegistry(
 		Time,
 		Code,
 		CreateFile(files, limits),

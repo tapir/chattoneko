@@ -57,7 +57,7 @@ import (
 // LIMITS — a snippet is bounded three ways, none of them hand-rolled:
 //
 //   - wall clock: the VM runs under the handler's context, which
-//     Registry.Call already bounds (30s). golua checks cancellation at loop
+//     registry.Call already bounds (30s). golua checks cancellation at loop
 //     backedges, calls and tail calls, so a runaway loop is aborted —
 //     something a debug count-hook alone cannot do.
 //   - work/memory: luaCheckpointBudget. A deadline bounds CPU but not
@@ -68,7 +68,7 @@ import (
 //     chatty snippet cannot produce a multi-megabyte tool result.
 //
 // Lua errors (including the limit errors, which are catchable by pcall) come
-// back as a Go error, which the Registry surfaces to the model in-band as
+// back as a Go error, which the registry surfaces to the model in-band as
 // "Error: ..." — the host never crashes.
 //
 // All user/LLM-facing text is hardcoded here — edit in place to change it.
@@ -117,7 +117,7 @@ var codeSchema = json.RawMessage(`{
 	"additionalProperties": false
 }`)
 
-var Code = Tool{
+var Code = tool{
 	Name: "code",
 	Description: `Run Lua 5.4 in a sandbox. Results come back ONLY through print(): return values are discarded.
 print() tab-joins its args, a table prints as "table: 0x..." — serialize with json.encode or table.concat.
@@ -208,7 +208,7 @@ func removeGlobal(v *vm.VM, name string) {
 }
 
 // runLua executes code in a fresh sandbox and returns everything it printed.
-// The run is bounded by ctx (Registry.Call gives every integrated tool a 30s
+// The run is bounded by ctx (registry.Call gives every integrated tool a 30s
 // deadline) and by luaCheckpointBudget. A new VM per call keeps executions
 // fully isolated; there is no shared state to reset.
 func runLua(ctx context.Context, code string) (string, error) {

@@ -81,7 +81,7 @@ func serverCfg(name, url string, enabled bool) config.MCPServerConfig {
 
 func TestHubListAndCall(t *testing.T) {
 	hub := New(testStore(t, testConfig(testMCPServer(t))))
-	hub.Connect(context.Background())
+	hub.Reload(context.Background())
 	defer hub.Close()
 
 	tools := hub.Tools()
@@ -158,7 +158,7 @@ func TestHubReload(t *testing.T) {
 	url := testMCPServer(t)
 	st := testStore(t, testConfig(url))
 	hub := New(st)
-	hub.Connect(context.Background())
+	hub.Reload(context.Background())
 	defer hub.Close()
 	if n := len(hub.Tools()); n != 2 {
 		t.Fatalf("initial tools = %d, want 2", n)
@@ -222,7 +222,7 @@ func TestHubCollisionFirstWins(t *testing.T) {
 		MCPServers: []config.MCPServerConfig{serverCfg("a", url, true), serverCfg("b", url, false)},
 	}
 	hub := New(testStore(t, cfg))
-	hub.Connect(context.Background())
+	hub.Reload(context.Background())
 	defer hub.Close()
 
 	// Both servers expose the same tools: the FIRST server in config order

@@ -1,24 +1,19 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/png"
 	"net/url"
 	"path"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 
 	"chattoneko/internal/attach"
 	"chattoneko/internal/config"
 	"chattoneko/internal/mcphub"
-	"chattoneko/internal/webfetch"
 )
 
 // maxFileBytes caps a file the model writes itself. The practical ceiling is
@@ -35,8 +30,8 @@ const maxFileBytes = 5 * 1024 * 1024 // 5 MiB
 // to name another tool.
 //
 // All user/LLM-facing text is hardcoded here — edit in place to change it.
-func CreateFile(files FileStore, limits *config.Store) Tool {
-	return Tool{
+func CreateFile(files fileStore, limits *config.Store) tool {
+	return tool{
 		Name: "create_file",
 		Description: "Give the user a file. It appears in the chat on your reply as soon as this " +
 			"call succeeds: an image shows inline, a text file opens as a preview, anything else " +
@@ -77,10 +72,7 @@ func CreateFile(files FileStore, limits *config.Store) Tool {
 	}
 }
 
-func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, files FileStore, limits *config.Store) (string, error) {
-	if files == nil {
-		return "", errors.New("file storage is not available")
-	}
+func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, files fileStore, limits *config.Store) (string, error) {
 	var args struct {
 		Filename      string `json:"filename"`
 		Content       string `json:"content"`
@@ -110,38 +102,20 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 		if args.Content != "" || args.ContentBase64 != "" {
 			return "", errors.New("pass either url or content/content_base64, not both")
 		}
-		body, finalURL, contentType, err := webfetch.Fetch(ctx, args.URL, attach.MaxRawUploadBytes)
+		body, finalURL, contentType, err := fetchBody(ctx, args.URL)
 		if err != nil {
-			if errors.Is(err, webfetch.ErrTooLarge) {
-				return "", fmt.Errorf("the response is larger than the %s fetch limit", humanSize(attach.MaxRawUploadBytes))
-			}
 			return "", err
 		}
-		if len(body) == 0 {
-			return "", errors.New("the URL returned an empty response")
-		}
 		data = body
-		// Classify the way attach.ProcessAny sniffs, so the name we pick can
-		// never disagree with the kind it stores.
-		_, _, imgErr := image.DecodeConfig(bytes.NewReader(data))
-		fallback := "file"
-		if imgErr == nil {
-			fallback = "image"
-		}
-		name = urlFilename(args.Filename, finalURL, fallback)
-		switch {
-		case imgErr == nil:
-			// Stored bytes are always a re-encoded PNG, so the name must say so.
-			name = ensureExt(name, ".png")
-		case filepath.Ext(name) == "":
+		name = urlFilename(args.Filename, finalURL, "file")
+		if filepath.Ext(name) == "" {
 			// Content from an extension-less URL (an API path, a bare page) still
 			// wants a suffix in the UI: take the one the served Content-Type
 			// implies, from the same table attach derives the stored mime from, so
 			// the two always agree. Types that table doesn't know leave the name
-			// bare.
+			// bare; images get .png forced on below, once ProcessAny says so.
 			name += attach.ExtForMime(contentType)
 		}
-		name = capName(name)
 		// Per-file stored-size cap comes from the live upload limit (same as user
 		// uploads); for images it applies to the converted PNG, with downscaling.
 		limit = int64(config.DefaultUploadMaxFileBytes)
@@ -169,6 +143,12 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 	if err != nil {
 		return "", fmt.Errorf("content rejected: %v", err)
 	}
+	// Stored image bytes are always a re-encoded PNG, so the name must say so;
+	// the verdict comes from ProcessAny itself, never from a second sniff.
+	if res.Kind == attach.KindImage {
+		name = ensureExt(name, ".png")
+	}
+	name = capName(name)
 	m, err := files.CreateAttachment(ctx, meta.ChatID, name, res.Kind, res.Mime, res.Size, res.Data)
 	if err != nil {
 		return "", fmt.Errorf("store file: %v", err)
@@ -179,10 +159,8 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 		return "", fmt.Errorf("the file was stored but could not be shown: %v", err)
 	}
 	dims := ""
-	if res.Kind == attach.KindImage {
-		if w, h := pngDimensions(res.Data); w > 0 && h > 0 {
-			dims = fmt.Sprintf("%dx%d, ", w, h)
-		}
+	if res.Width > 0 && res.Height > 0 {
+		dims = fmt.Sprintf("%dx%d, ", res.Width, res.Height)
 	}
 	return fmt.Sprintf("Created %q%s (%s, %s%s) — it is now shown on your reply, where it %s. "+
 		"Say what it is instead of repeating its content.",
@@ -255,11 +233,7 @@ func capName(name string) string {
 	if len(ext) > 16 { // a "suffix" that long is part of the name, not an extension
 		ext = ""
 	}
-	cut := name[:200-len(ext)]
-	for len(cut) > 0 && !utf8.ValidString(cut) {
-		cut = cut[:len(cut)-1]
-	}
-	return cut + ext
+	return strings.ToValidUTF8(name[:200-len(ext)], "") + ext
 }
 
 // ensureExt rewrites name's extension to ext (appended when missing).
@@ -271,13 +245,4 @@ func ensureExt(name, ext string) string {
 		name = name[:i]
 	}
 	return name + ext
-}
-
-// pngDimensions reads the PNG header for the stored image's dimensions.
-func pngDimensions(data []byte) (int, int) {
-	cfg, err := png.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return 0, 0
-	}
-	return cfg.Width, cfg.Height
 }

@@ -165,14 +165,16 @@ func run() error {
 		prov.Reconfigure(c.Provider.BaseURL, c.Provider.APIKey)
 		warnIfExposed(c, *listen)
 		go func() {
-			// When the reconciliation changed the tool catalog (a server was
-			// added, removed, or reconnected), notify the connected clients
-			// so they refetch /api/config — the settings save response
-			// already went out before this finished, so without this the
-			// tools menu stays stale until a page reload.
-			if hub.Reload(serverCtx) {
-				eng.PublishConfigChanged()
-			}
+			// Reload first, then notify — publishing before the MCP
+			// reconciliation finished would have clients refetch /api/config
+			// and read back the old tool catalog.
+			//
+			// Unconditional: every setting lives in /api/config, not just the
+			// MCP-derived part, and the save response already went out, so this
+			// is the only thing that tells other tabs and devices. Update() is
+			// called only by the save handler — one broadcast per human save.
+			hub.Reload(serverCtx)
+			eng.PublishConfigChanged()
 		}()
 	})
 

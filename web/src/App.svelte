@@ -134,6 +134,12 @@
       import('@capacitor/app').then(({ App }) => {
         capacitorApp = App;
         App.addListener('backButton', onAndroidBack);
+        // Foreground resume: the WebView's `focus` event isn't guaranteed
+        // when Android brings the app back, so hook the native lifecycle too
+        // and reuse the same handler.
+        App.addListener('appStateChange', ({ isActive }) => {
+          if (isActive) app.onFocus();
+        });
       });
   });
 

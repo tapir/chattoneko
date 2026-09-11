@@ -98,6 +98,7 @@
     } else {
       app.newChatModel = value;
       app.newChatEffort = def;
+      app.newChatModelTouched = true; // explicit draft choice: stop following the default
     }
   }
 

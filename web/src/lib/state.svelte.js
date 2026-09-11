@@ -127,6 +127,12 @@ class AppState {
   // draft model + reasoning effort for a not-yet-created chat
   newChatModel = $state("");
   newChatEffort = $state("");
+  // True once the user explicitly picks a model for the current draft, so a
+  // config reload (settings save, MCP catalog rebuild) stops following the
+  // configured default and keeps their choice. Cleared when the draft becomes
+  // a real chat (ensureChat), so the next new chat tracks the default again.
+  // Plain field, not $state: nothing renders from it.
+  newChatModelTouched = false;
 
   // sidebar search (#4): query + results (empty query => show recent chats)
   searchQuery = $state("");
@@ -282,7 +288,10 @@ class AppState {
   async loadConfig() {
     try {
       this.config = await api.config();
-      if (!this.newChatModel)
+      // Follow the configured default unless the user explicitly picked a
+      // model for this draft — so changing "Default chat model" in Settings
+      // shows on the new-chat page live, without a reload.
+      if (!this.newChatModelTouched)
         this.newChatModel = this.config?.models?.default_chat_model ?? "";
       // model_info: [{model_id, context_length}] for the whitelist (#6 top-bar context %)
       this.modelInfo = Array.isArray(this.config?.model_info)
@@ -633,6 +642,10 @@ class AppState {
 
   onFocus() {
     if (!this.authed) return;
+    // Config too: a resumed app never re-runs init() (Android keeps the
+    // WebView process alive), so without this the model picker, tools menu
+    // and upload limits stay stale until the process is killed.
+    this.loadConfig();
     this.loadChats();
     if (this.activeChatId && !this.generating) this.refreshChat();
   }
@@ -668,6 +681,12 @@ class AppState {
     this.generating = false;
     this.attachStream(chat.id);
     location.hash = `#/c/${chat.id}`;
+    // The draft became a real chat: reset the new-chat model/effort so the
+    // NEXT new chat starts from the (possibly updated) configured default and
+    // loadConfig follows default-model changes again.
+    this.newChatModelTouched = false;
+    this.newChatModel = this.config?.models?.default_chat_model ?? "";
+    this.newChatEffort = "";
     return { chatId: chat.id, created: true };
   }
 

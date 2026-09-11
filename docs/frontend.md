@@ -84,7 +84,7 @@ components/
 
 ## State store (lib/state.svelte.js)
 
-A single reactive class instance (`app`) exported module-wide holds everything: auth state, server config, config payload (`/api/config`), chat list + pagination + search, the active chat + messages, drafts, staged attachments, live-generation state, and the SSE streams. Components import it directly and read/write via runes; there is no other state library.
+A single reactive class instance (`app`) exported module-wide holds everything: auth state, server config, config payload (`/api/config`), chat list + pagination + search, the active chat + messages, drafts, staged attachments, live-generation state, and the SSE streams. Components import it directly and read/write via runes; there is no other state library. `/api/config` is refetched on boot, after a local settings save, on the `config_changed` event, and on every window focus / native foreground resume — so a change made on another client lands without a reload. `/api/meta` (`setup_complete`, `auth_enabled`, version) is not: only boot and a local save read it.
 
 ### Boot & auth (`init`)
 
@@ -123,7 +123,7 @@ While a generation runs, `app.live` accumulates stream events for the active ass
 - **Sidebar state:** `handleGlobalEvent` maintains `chatGeneratingIds` (a `SvelteSet`, so add/delete are reactive) — the set of background chats with a running generation, rendered as breathing sidebar titles and reconciled against the chat-list flags on load/focus. The active chat is excluded (its own half owns it). `title` events apply a final auto-generated title to the sidebar entry and the open chat's header. Switching chats reconnects (the subscribed chat is a query parameter); the `generating_snapshot` on reconnect re-syncs the sidebar, so the brief gap costs nothing.
 - **Stall watchdog** (`openStream`): EventSource only fires `onerror` on a CLOSED socket. A half-open one (phone switched networks, NAT mapping expired) looks open forever while the reply and its `done` land in a dead pipe — the thinking pill and the breathing title would spin until a reload. The server pings every 20s as a real `{type: "ping"}` event; 60s with nothing at all closes the EventSource and reconnects (via `kick()`, so `?after=<lastSeq>` replays what was missed, or gets `idle` → `refreshChat` once the grace period is over). Pings never reach the event handlers.
 
-Event vocabulary handled by the store: `idle`, `generation_started`, `delta`, `reasoning_delta` (carries `turn`), `tool_call_started`, `tool_call_delta`, `tool_call_done` (carry `turn`), `turn_complete` (that turn's thinking is done), `tool_result`, `attachment_created`, `status`, `done`, `user_message` (sent from another client), `chat_updated`, `settings_updated` (per-chat settings changed elsewhere — applied without refetch), `messages_reset` (history truncated elsewhere — refetch the chat), `config_changed` (MCP catalog rebuilt — refetch `/api/config`).
+Event vocabulary handled by the store: `idle`, `generation_started`, `delta`, `reasoning_delta` (carries `turn`), `tool_call_started`, `tool_call_delta`, `tool_call_done` (carry `turn`), `turn_complete` (that turn's thinking is done), `tool_result`, `attachment_created`, `status`, `done`, `user_message` (sent from another client), `chat_updated`, `settings_updated` (per-chat settings changed elsewhere — applied without refetch), `messages_reset` (history truncated elsewhere — refetch the chat), `config_changed` (settings saved on any client — refetch `/api/config`).
 
 ## Markdown
 

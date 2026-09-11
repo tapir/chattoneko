@@ -228,8 +228,9 @@ func (e *Engine) PublishTitle(chatID, title string) {
 }
 
 // PublishConfigChanged tells global-stream subscribers that /api/config may
-// now return different data (the MCP tool catalog is rebuilt asynchronously
-// after a config save; this fires when that rebuild changed the catalog).
+// now return different data. Fires after every config save — not only when
+// the async MCP reconciliation changed the catalog — because the default
+// model, system prompt, limits and tool defaults live in that payload too.
 // Clients respond by refetching /api/config.
 func (e *Engine) PublishConfigChanged() {
 	e.deliverGlobal(WireEvent{Type: "config_changed"})

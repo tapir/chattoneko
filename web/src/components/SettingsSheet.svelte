@@ -109,7 +109,7 @@
   const DEFAULT_EFFORTS = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
   const DEFAULT_EFFORT = 'medium';
   const DEFAULT_CONTEXT = 131072;
-  // Entry.Server of an integrated tool (the backend's tools.serverLabel).
+  // Entry.Server of an integrated tool (the backend's mcphub.BuiltinServer).
   const BUILTIN_SERVER = 'builtin';
 
   function snapshot() {
@@ -853,7 +853,7 @@
                 <Input id="set-upload" type="number" min="0" class="h-9 text-sm" bind:value={uploadMaxBytes} />
               </div>
               <div class="space-y-1.5">
-                <Label for="set-tool-iter" class={labelCls}>Max tool iterations</Label>
+                <Label for="set-tool-iter" class={labelCls}>Max MCP tool calls per response</Label>
                 <Input id="set-tool-iter" type="number" min="0" class="h-9 text-sm" bind:value={maxToolIter} />
               </div>
               <div class="space-y-1.5">

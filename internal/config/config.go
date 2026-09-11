@@ -97,7 +97,14 @@ type MCPServerConfig struct {
 // LimitsConfig holds resource limits.
 type LimitsConfig struct {
 	UploadMaxFileBytes int64 `json:"upload_max_file_bytes"`
-	MaxToolIterations  int   `json:"max_tool_iterations"`
+	// MaxToolIterations is one response's budget of MCP tool calls. Integrated
+	// tools are unlimited; every MCP call is charged whether it succeeded or
+	// failed, so a broken MCP server cannot buy itself an endless retry loop.
+	// Calls past the budget are refused with an error result and the model
+	// finishes in text — this limit never cuts a generation short.
+	// ponytail: the name still says "iterations" from when it counted rounds;
+	// renaming the key would orphan stored settings, so only the meaning moved.
+	MaxToolIterations int `json:"max_tool_iterations"`
 	// MCPCallTimeoutSeconds bounds a single MCP tool call (a hung MCP server
 	// must not block the turn loop forever).
 	MCPCallTimeoutSeconds int `json:"mcp_call_timeout_seconds"`

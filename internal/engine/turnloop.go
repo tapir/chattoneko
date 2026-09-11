@@ -20,6 +20,19 @@ const defaultGracePeriod = 5 * time.Second
 // mid-generation (Engine.flushInterval overrides it in tests).
 const defaultFlushInterval = 500 * time.Millisecond
 
+// overBudgetText is the synthetic result for an MCP tool call the response's
+// budget refused. Telling the model to finish in text is what makes the budget
+// a soft limit: the generation always gets a final round.
+const overBudgetText = "Error: this response has used up its MCP tool call limit; this call was not executed. Continue without MCP tools and answer with what you already have."
+
+// maxPostCapRounds is the runaway backstop for a model that keeps requesting
+// MCP tools after its budget is gone and after being told to answer without
+// them. Such a round executes nothing and only burns tokens, so a few ignored
+// instructions end the generation cleanly (every call has a result).
+// ponytail: a sane model never reaches this; the alternative is an unbounded
+// spend loop.
+const maxPostCapRounds = 3
+
 // cancelOutcome maps a canceled generation to (status, error text): a user
 // stop keeps "stopped" with no error; any other cancellation (server
 // shutdown) is a failed generation with a clear reason.
@@ -34,9 +47,11 @@ func cancelOutcome(ag *activeGen) (string, string) {
 }
 
 // runGeneration is the turn loop for one generation. It publishes events to
-// the chat hub, persists incrementally, executes the tool loop bounded by
-// limits.max_tool_iterations, and finalizes with the tool-call history
-// invariant on EVERY exit path (B2).
+// the chat hub, persists incrementally, executes tool calls up to the
+// per-response MCP budget (limits.max_tool_iterations), and finalizes with the
+// tool-call history invariant on EVERY exit path (B2). Running out of budget
+// never ends the generation — over-budget MCP calls are refused with an error
+// result so the model can finish in text.
 func (e *Engine) runGeneration(ag *activeGen) {
 	h := e.hubFor(ag.chatID)
 	ctx := ag.ctx
@@ -194,6 +209,12 @@ func (e *Engine) runGeneration(ag *activeGen) {
 	// across turns (it used to restart at 0 every turn, which scrambled the
 	// order of a multi-turn message on reload).
 	callPos := int64(0)
+	// Remaining MCP calls this response may make. Read once, so the budget is
+	// stable even if settings change mid-run.
+	budget := e.cfg.Get().Limits.MaxToolIterations
+	// Rounds since a round handed back nothing but budget refusals; see
+	// maxPostCapRounds.
+	overCap := 0
 	for {
 		// Cancellation check between iterations.
 		select {
@@ -333,14 +354,20 @@ func (e *Engine) runGeneration(ag *activeGen) {
 				}
 				callPos++
 			}
-			e.executeTools(ctx, h, chat, ag, calls)
+			used, refused := e.executeTools(ctx, h, chat, ag, calls, budget)
+			budget -= used
 
-			// The cap counts tool rounds; this one is turn+1. Every call above
-			// already has a real result, so finalize complete (invariant holds —
-			// nothing dangling).
-			if turn+1 >= e.cfg.Get().Limits.MaxToolIterations {
-				finish(store.StatusComplete, "")
-				return
+			// Nothing ran and the round was pure refusals, so the model was told
+			// to answer without MCP tools and asked again. Keep going so it gets
+			// that chance; only the backstop ends a model that ignores it. Either
+			// way every call has a result, so finalize stays clean.
+			if used == 0 && refused > 0 {
+				if overCap++; overCap >= maxPostCapRounds {
+					finish(store.StatusComplete, "")
+					return
+				}
+			} else {
+				overCap = 0
 			}
 			turn++
 			continue
@@ -377,12 +404,22 @@ func isTruncationFinish(reason string) bool {
 }
 
 // executeTools runs each tool call and persists + publishes the results.
+// budget is the response's remaining MCP-call allowance; used is how much of
+// it this batch spent and refused how many calls it turned away. Calls past
+// the budget get overBudgetText instead of running, which is what lets the
+// loop hand control back to the model. Integrated tools are not budgeted.
 // A canceled generation aborts the remaining calls; the invariant finalize
 // covers any left dangling with synthetic results. Events publish to the
 // generation's own hub (never re-resolved: after a chat deletion the old
 // hub is dropped and hubFor would create a fresh one nobody subscribes to).
-func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat, ag *activeGen, calls []provider.ToolCall) {
+func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat, ag *activeGen, calls []provider.ToolCall, budget int) (used, refused int) {
 	enabled := e.enabledTools(chat)
+	// Only MCP tools are budgeted. A name absent from the catalog reads as
+	// integrated, which is harmless: Call fails on it and failures are free.
+	mcp := map[string]bool{}
+	for _, t := range e.catalog.Tools() {
+		mcp[t.Display] = t.Server != mcphub.BuiltinServer
+	}
 	meta := mcphub.CallMeta{ChatID: chat.ID, MessageID: ag.messageID}
 	// Tool side effects happen under the cancellable ctx, but persisting a
 	// result that EXISTS must survive a user stop / server shutdown landing
@@ -396,10 +433,15 @@ func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat,
 		}
 		var result string
 		isError := false
-		if !enabled[c.Name] {
+		switch {
+		case !enabled[c.Name]:
 			result = "Error: tool '" + c.Name + "' is disabled by the user."
 			isError = true
-		} else {
+		case mcp[c.Name] && budget <= 0:
+			result = overBudgetText
+			isError = true
+			refused++
+		default:
 			r, toolErr, err := e.catalog.Call(ctx, c.Name, c.Arguments, meta)
 			if err != nil {
 				result = "Error: " + err.Error()
@@ -407,6 +449,12 @@ func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat,
 			} else {
 				result = r
 				isError = toolErr
+			}
+			// Every MCP call spends budget, success or failure: a free retry is
+			// an endless loop against a server that always errors.
+			if mcp[c.Name] {
+				budget--
+				used++
 			}
 			if isError {
 				slog.Warn("engine: tool call failed", "tool", c.Name, "chat", chat.ID, "error", result)
@@ -428,6 +476,7 @@ func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat,
 		h.mu.Unlock()
 		e.publishNewAttachments(persistCtx, h, ag)
 	}
+	return used, refused
 }
 
 // publishNewAttachments publishes an attachment_created event for every
@@ -457,9 +506,10 @@ func interruptText(status string) string {
 	switch status {
 	case store.StatusStopped:
 		return "Error: generation stopped by user before this tool call could run."
-	case store.StatusFailed:
-		return "Error: generation was interrupted before this tool call could run."
 	default:
-		return "Error: tool iteration limit reached; this tool call was not executed."
+		// Failed, or any other terminal status. The budget is deliberately NOT
+		// a termination cause: an over-budget call is refused inside
+		// executeTools and the generation keeps going.
+		return "Error: generation was interrupted before this tool call could run."
 	}
 }

@@ -23,7 +23,7 @@ func TestRegistryTools(t *testing.T) {
 		t.Fatalf("want 1 entry, got %d", len(entries))
 	}
 	e := entries[0]
-	if e.Display != "alpha" || e.Description != "first" || e.Server != serverLabel || !e.DefaultEnabled || e.Title != "Alphing…" {
+	if e.Display != "alpha" || e.Description != "first" || e.Server != mcphub.BuiltinServer || !e.DefaultEnabled || e.Title != "Alphing…" {
 		t.Fatalf("unexpected entry: %+v", e)
 	}
 	// A tool without a schema gets the empty-object default.

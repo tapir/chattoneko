@@ -30,6 +30,13 @@ type CallMeta struct {
 	MessageID string // assistant message owning the tool call
 }
 
+// BuiltinServer is the Entry.Server value integrated tools (internal/tools)
+// carry in place of a config server name. The UI shows it as the tool's
+// origin, and the engine reads it to tell integrated tools from MCP ones —
+// only MCP calls are charged against the per-response tool-call budget. It
+// lives here for the same reason CallMeta does: shared tool vocabulary.
+const BuiltinServer = "builtin"
+
 // Entry is one tool in the aggregated catalog.
 type Entry struct {
 	Display        string          `json:"name"`            // LLM-facing name (unique); JSON key "name" per API contract

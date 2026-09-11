@@ -5,6 +5,7 @@ import (
 	"errors"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,7 @@ func (f *scriptedProvider) StreamChat(_ context.Context, _ []provider.Message, _
 type fakeMCP struct {
 	tools   []mcphub.Entry
 	results map[string]string
+	fail    map[string]bool // names whose Call reports a tool error
 	calls   []string
 }
 
@@ -49,13 +51,20 @@ func (f *fakeMCP) Tools() []mcphub.Entry { return f.tools }
 
 func (f *fakeMCP) Call(_ context.Context, name, _ string, _ mcphub.CallMeta) (string, bool, error) {
 	f.calls = append(f.calls, name)
+	if f.fail[name] {
+		return "boom", true, nil
+	}
 	return f.results[name], false, nil
 }
 
 // ---- harness ----
 
-func testEngine(t *testing.T, prov provider.Provider, m ToolCatalog) (*Engine, *store.Store, context.CancelFunc) {
+func testEngine(t *testing.T, prov provider.Provider, m ToolCatalog, limits ...config.LimitsConfig) (*Engine, *store.Store, context.CancelFunc) {
 	t.Helper()
+	lim := config.LimitsConfig{MaxToolIterations: 10}
+	if len(limits) > 0 {
+		lim = limits[0]
+	}
 	// A temp FILE per test keeps each test's database fully isolated.
 	sqlDB, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
@@ -67,7 +76,7 @@ func testEngine(t *testing.T, prov provider.Provider, m ToolCatalog) (*Engine, *
 	st := store.NewStore(sqlDB)
 	cfgs, err := config.TestStore(context.Background(), sqlDB, config.Config{
 		Models: config.ModelsConfig{DefaultChatModel: "m"},
-		Limits: config.LimitsConfig{MaxToolIterations: 10},
+		Limits: lim,
 	})
 	if err != nil {
 		t.Fatalf("config store: %v", err)
@@ -183,6 +192,14 @@ func TestTruncationFinishMarksFailed(t *testing.T) {
 	}
 }
 
+// toolRound scripts one provider round in which the model calls "echo".
+func toolRound(callID string) []provider.StreamEvent {
+	return []provider.StreamEvent{
+		{Kind: provider.EventToolCallDone, CallID: callID, Name: "echo", Args: `{"text":"x"}`},
+		{Kind: provider.EventDone, Finish: "tool_calls"},
+	}
+}
+
 func TestToolLoopExecutesAndReplaysHistory(t *testing.T) {
 	prov := &scriptedProvider{
 		scripts: [][]provider.StreamEvent{
@@ -230,6 +247,171 @@ func TestToolLoopExecutesAndReplaysHistory(t *testing.T) {
 	}
 	if len(mcpFake.calls) != 1 || mcpFake.calls[0] != "echo" {
 		t.Fatalf("mcp calls: %v", mcpFake.calls)
+	}
+}
+
+// The budget counts individual tool calls in one response. Running out does
+// NOT stop the generation: the over-budget call is refused with an error
+// result and the model still gets a round to answer in text.
+func TestToolCallBudgetRefusesOverBudgetCalls(t *testing.T) {
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{
+		toolRound("c1"), toolRound("c2"), toolRound("c3"),
+		{{Kind: provider.EventTextDelta, Text: "final"}, {Kind: provider.EventDone, Finish: "stop"}},
+	}}
+	mcpFake := &fakeMCP{
+		tools:   []mcphub.Entry{{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, prov, mcpFake, config.LimitsConfig{MaxToolIterations: 2})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "budgeted generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	if len(mcpFake.calls) != 2 {
+		t.Fatalf("want exactly 2 executed calls, got %v", mcpFake.calls)
+	}
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	// user, assistant(all 3 calls + final text), one result per call
+	if len(msgs) != 5 {
+		t.Fatalf("want 5 messages, got %d", len(msgs))
+	}
+	if msgs[2].Content != "echo-result" || msgs[3].Content != "echo-result" {
+		t.Fatalf("first two calls should have run: %q %q", msgs[2].Content, msgs[3].Content)
+	}
+	if msgs[4].Content != overBudgetText {
+		t.Fatalf("third call should be refused: %q", msgs[4].Content)
+	}
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Content != "final" {
+		t.Fatalf("model never got its final round: %q", m.Content)
+	}
+}
+
+// A model that keeps calling tools after being refused cannot spin forever:
+// the backstop ends the generation cleanly, with a result for every call.
+func TestToolCallBudgetBackstopEndsStubbornLoop(t *testing.T) {
+	scripts := make([][]provider.StreamEvent, maxPostCapRounds+2)
+	for i := range scripts {
+		scripts[i] = toolRound("c" + string(rune('a'+i)))
+	}
+	prov := &scriptedProvider{scripts: scripts}
+	mcpFake := &fakeMCP{
+		tools:   []mcphub.Entry{{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, prov, mcpFake, config.LimitsConfig{MaxToolIterations: 1})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "backstop finalize", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status != store.StatusGenerating
+	})
+
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Status != store.StatusComplete {
+		t.Fatalf("backstop should finish cleanly, got %q (%s)", m.Status, m.Error)
+	}
+	if len(mcpFake.calls) != 1 {
+		t.Fatalf("want 1 executed call, got %v", mcpFake.calls)
+	}
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	// user, assistant, 1 real result + maxPostCapRounds refusals
+	if want := 3 + maxPostCapRounds; len(msgs) != want {
+		t.Fatalf("want %d messages, got %d", want, len(msgs))
+	}
+}
+
+// The budget charges every MCP call, success or failure, and never touches
+// integrated tools: a server that always errors still drains the allowance,
+// while local tools stay unlimited.
+func TestToolCallBudgetChargesEveryMCPCall(t *testing.T) {
+	id := 0
+	round := func(names ...string) []provider.StreamEvent {
+		evs := make([]provider.StreamEvent, 0, len(names)+1)
+		for _, name := range names {
+			id++
+			evs = append(evs, provider.StreamEvent{
+				Kind: provider.EventToolCallDone, CallID: "call-" + strconv.Itoa(id), Name: name, Args: `{}`,
+			})
+		}
+		return append(evs, provider.StreamEvent{Kind: provider.EventDone, Finish: "tool_calls"})
+	}
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{
+		round("calc", "flaky"), // integrated is free; the failing MCP call is not
+		round("echo"),          // budget already spent: refused
+		round("calc"),          // integrated still runs with an empty budget
+		{{Kind: provider.EventTextDelta, Text: "final"}, {Kind: provider.EventDone, Finish: "stop"}},
+	}}
+	catalog := &fakeMCP{
+		tools: []mcphub.Entry{
+			{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true},
+			{Display: "flaky", Description: "d", Server: "s", DefaultEnabled: true},
+			{Display: "calc", Description: "d", Server: mcphub.BuiltinServer, DefaultEnabled: true},
+		},
+		results: map[string]string{"echo": "echo-result", "calc": "calc-ok"},
+		fail:    map[string]bool{"flaky": true},
+	}
+	eng, st, _ := testEngine(t, prov, catalog, config.LimitsConfig{MaxToolIterations: 1})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	// The refused echo is absent: a call the budget turns away never runs.
+	want := []string{"calc", "flaky", "calc"}
+	if !slices.Equal(catalog.calls, want) {
+		t.Fatalf("executed calls = %v, want %v (the refused echo must not run)", catalog.calls, want)
+	}
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	// user, assistant, one result per call (4)
+	if len(msgs) != 6 {
+		t.Fatalf("want 6 messages, got %d", len(msgs))
+	}
+	// Results land in call order: calc, flaky, echo(refused), calc.
+	if msgs[3].Content != "boom" {
+		t.Fatalf("the failing MCP call should have run: %q", msgs[3].Content)
+	}
+	if msgs[4].Content != overBudgetText {
+		t.Fatalf("echo should be refused once flaky spent the budget: %q", msgs[4].Content)
+	}
+	if msgs[5].Content != "calc-ok" {
+		t.Fatalf("integrated tool should ignore the empty budget: %q", msgs[5].Content)
+	}
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Content != "final" {
+		t.Fatalf("model never got its final round: %q", m.Content)
 	}
 }
 

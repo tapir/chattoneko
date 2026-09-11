@@ -21,10 +21,6 @@ import (
 	"chattoneko/internal/mcphub"
 )
 
-// serverLabel is the Entry.Server value for integrated tools. The UI shows
-// it as the tool's origin; it has no functional effect.
-const serverLabel = "builtin"
-
 // callTimeout bounds one integrated tool call: integrated tools are local,
 // but a future handler doing I/O must not block the turn loop indefinitely.
 const callTimeout = 30 * time.Second
@@ -89,7 +85,7 @@ func (r *Registry) Tools() []mcphub.Entry {
 		out = append(out, mcphub.Entry{
 			Display:        t.Name,
 			Description:    t.Description,
-			Server:         serverLabel,
+			Server:         mcphub.BuiltinServer,
 			Schema:         t.Schema,
 			DefaultEnabled: t.DefaultEnabled,
 			Title:          t.Title,

@@ -54,8 +54,10 @@ const (
 )
 
 // DefaultReasoningEfforts is the default set of selectable reasoning-effort
-// levels; the default effort is the 2nd element.
-var DefaultReasoningEfforts = []string{"low", "medium", "high"}
+// levels, highest first. DefaultReasoningEffort is the preselected one.
+var DefaultReasoningEfforts = []string{"max", "xhigh", "high", "medium", "low", "minimal", "none"}
+
+const DefaultReasoningEffort = "medium"
 
 // defaultSystemPrompt is the seed system prompt.
 //

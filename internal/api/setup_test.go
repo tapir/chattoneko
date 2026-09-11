@@ -296,7 +296,7 @@ func TestSetupModelsFetchAndDefaults(t *testing.T) {
 	if u.ContextWindow != 131072 || out.Source["or/unknown"] != "defaults" {
 		t.Errorf("or/unknown = %+v (source %q)", u, out.Source["or/unknown"])
 	}
-	if !slices.Equal(u.ReasoningEfforts, []string{"low", "medium", "high"}) || u.ReasoningDefault != "medium" {
+	if !slices.Equal(u.ReasoningEfforts, []string{"max", "xhigh", "high", "medium", "low", "minimal", "none"}) || u.ReasoningDefault != "medium" {
 		t.Errorf("or/unknown reasoning = %v / %q", u.ReasoningEfforts, u.ReasoningDefault)
 	}
 	if !slices.Equal(u.InputModality, []string{"text"}) || !slices.Equal(u.OutputModality, []string{"text"}) {

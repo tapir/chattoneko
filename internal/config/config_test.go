@@ -284,7 +284,7 @@ func TestModelMetasDefaultsAndRoundTrip(t *testing.T) {
 	if strings.Join(m.InputModality, ",") != "text" || strings.Join(m.OutputModality, ",") != "text" {
 		t.Errorf("modalities = %v / %v", m.InputModality, m.OutputModality)
 	}
-	if strings.Join(m.ReasoningEfforts, ",") != "low,medium,high" || m.ReasoningDefault != "medium" {
+	if strings.Join(m.ReasoningEfforts, ",") != "max,xhigh,high,medium,low,minimal,none" || m.ReasoningDefault != "medium" {
 		t.Errorf("reasoning = %v / %q", m.ReasoningEfforts, m.ReasoningDefault)
 	}
 

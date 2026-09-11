@@ -25,8 +25,8 @@ type ModelMeta struct {
 }
 
 // DefaultModelMeta returns the spec defaults for one model: text-only
-// modalities, 128K context, efforts [low, medium, high] with the 2nd
-// element ("medium") as the default.
+// modalities, 128K context, the default effort levels with "medium"
+// preselected.
 func DefaultModelMeta(id string) ModelMeta {
 	return ModelMeta{
 		ModelID:          id,
@@ -34,7 +34,7 @@ func DefaultModelMeta(id string) ModelMeta {
 		OutputModality:   []string{"text"},
 		ContextLength:    DefaultContextLength,
 		ReasoningEfforts: append([]string(nil), DefaultReasoningEfforts...),
-		ReasoningDefault: DefaultReasoningEfforts[1],
+		ReasoningDefault: DefaultReasoningEffort,
 	}
 }
 

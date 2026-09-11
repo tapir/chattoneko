@@ -106,7 +106,8 @@
   }
 
   const MODALITIES = ['text', 'image', 'audio', 'video'];
-  const DEFAULT_EFFORTS = ['low', 'medium', 'high'];
+  const DEFAULT_EFFORTS = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
+  const DEFAULT_EFFORT = 'medium';
   const DEFAULT_CONTEXT = 131072;
   // Entry.Server of an integrated tool (the backend's tools.serverLabel).
   const BUILTIN_SERVER = 'builtin';
@@ -150,7 +151,7 @@
         outputModality: [...(m.output_modality ?? ['text'])],
         reasoningEfforts: [...(m.reasoning_efforts ?? DEFAULT_EFFORTS)],
         effortOptions: [...(m.reasoning_efforts ?? DEFAULT_EFFORTS)],
-        reasoningDefault: m.reasoning_default ?? DEFAULT_EFFORTS[1],
+        reasoningDefault: m.reasoning_default ?? DEFAULT_EFFORT,
       };
     });
     mcpServers = (c.mcp_servers ?? []).map(normalizeServer);
@@ -216,7 +217,7 @@
         outputModality: ['text'],
         reasoningEfforts: [...DEFAULT_EFFORTS],
         effortOptions: [...DEFAULT_EFFORTS],
-        reasoningDefault: DEFAULT_EFFORTS[1],
+        reasoningDefault: DEFAULT_EFFORT,
       },
       ...modelCards,
     ];
@@ -300,7 +301,7 @@
           card.reasoningDefault = m.reasoning_default ?? card.reasoningDefault;
         } else {
           card.reasoningEfforts = [...DEFAULT_EFFORTS];
-          card.reasoningDefault = DEFAULT_EFFORTS[1];
+          card.reasoningDefault = DEFAULT_EFFORT;
         }
         if (!card.reasoningEfforts.includes(card.reasoningDefault)) {
           card.reasoningDefault = card.reasoningEfforts[0] ?? '';

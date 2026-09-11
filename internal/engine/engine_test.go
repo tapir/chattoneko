@@ -2,8 +2,8 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -339,6 +339,106 @@ func TestToolCallBudgetBackstopEndsStubbornLoop(t *testing.T) {
 	// user, assistant, 1 real result + maxPostCapRounds refusals
 	if want := 3 + maxPostCapRounds; len(msgs) != want {
 		t.Fatalf("want %d messages, got %d", want, len(msgs))
+	}
+}
+
+// A model that keeps calling a tool this chat does not have cannot spin
+// forever either. Nothing budgets these — integrated tools are unbudgeted and
+// a name in no catalog never reaches one — so counting refusals is the only
+// thing that ends the round. This is the shape a toggled-off tool, an MCP
+// server that went away, or a hallucinated name takes.
+func TestUnavailableToolBackstopEndsStubbornLoop(t *testing.T) {
+	scripts := make([][]provider.StreamEvent, maxPostCapRounds+2)
+	for i := range scripts {
+		scripts[i] = toolRound("c" + string(rune('a'+i)))
+	}
+	prov := &scriptedProvider{scripts: scripts}
+	// No MCP server at all, so "echo" is in nobody's catalog.
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "backstop finalize", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status != store.StatusGenerating
+	})
+
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Status != store.StatusComplete {
+		t.Fatalf("backstop should finish cleanly, got %q (%s)", m.Status, m.Error)
+	}
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	// user, assistant, maxPostCapRounds refusals — nothing ever ran.
+	if want := 2 + maxPostCapRounds; len(msgs) != want {
+		t.Fatalf("want %d messages, got %d", want, len(msgs))
+	}
+	for _, msg := range msgs[2:] {
+		if !strings.Contains(msg.Content, "not available") || !strings.Contains(msg.Content, "Do not call it again") {
+			t.Fatalf("refusal should name the problem and stop the model: %q", msg.Content)
+		}
+	}
+}
+
+// A tool referenced only by history is still declared, so the provider accepts
+// the old call ids — but as a placeholder, never with its real definition: a
+// disabled tool that still looks callable is an invitation the model takes.
+func TestHistoryOnlyToolIsPlaceholder(t *testing.T) {
+	ctx := context.Background()
+	mcpFake := &fakeMCP{
+		tools: []mcphub.Entry{{
+			Display: "echo", Description: "echoes text back", Server: "s",
+			Schema:         json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}}}`),
+			DefaultEnabled: true,
+		}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, &scriptedProvider{}, mcpFake)
+	chatID := newTestChat(t, st)
+
+	// A call in the history, then the tool turned off for this chat.
+	am, err := st.CreateMessage(ctx, store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleAssistant, Status: store.StatusComplete, Content: "earlier",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateToolCall(ctx, am.ID, "call_1", "echo", `{"text":"x"}`, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateChatSettings(ctx, chatID, "m", store.GenParams{}, map[string]bool{"echo": false}); err != nil {
+		t.Fatal(err)
+	}
+
+	chat, err := st.GetChat(ctx, chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defs, err := eng.effectiveTools(ctx, chat)
+	if err != nil {
+		t.Fatalf("effectiveTools: %v", err)
+	}
+	var got *provider.Tool
+	for i := range defs {
+		if defs[i].Name == "echo" {
+			got = &defs[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("history-referenced tool must still be declared, or the provider rejects the old call ids")
+	}
+	if got.Description != "(tool unavailable)" {
+		t.Fatalf("disabled tool re-advertised with its real description: %q", got.Description)
+	}
+	if string(got.Schema) != `{"type":"object"}` {
+		t.Fatalf("schema = %s, want the empty placeholder", got.Schema)
 	}
 }
 
@@ -941,132 +1041,75 @@ func TestHubEpochChangesAcrossRecreation(t *testing.T) {
 }
 
 // TestToolCreatedAttachment runs the tool loop against the REAL integrated
-// catalog and the real store, covering the two-step file flow: create_file
-// stores a file and hands its id to the model WITHOUT putting it on screen,
-// and attach_file is what links it to the assistant message and publishes
-// attachment_created into the replay buffer.
+// catalog and the real store: create_file stores the file AND links it to the
+// assistant message in the same call, publishing attachment_created into the
+// replay buffer — a successful call always means the user can see the file.
 func TestToolCreatedAttachment(t *testing.T) {
-	t.Run("create_file stores without showing", func(t *testing.T) {
-		prov := &scriptedProvider{
-			scripts: [][]provider.StreamEvent{
-				{
-					{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "create_file",
-						Args: `{"filename":"lorem.txt","content":"lorem ipsum"}`},
-					{Kind: provider.EventDone, Finish: "tool_calls"},
-				},
-				{
-					{Kind: provider.EventTextDelta, Text: "Created it — say the word and I'll show it."},
-					{Kind: provider.EventDone, Finish: "stop"},
-				},
-			},
-		}
-		eng, st, _ := testEngine(t, prov, &fakeMCP{})
-		eng.catalog = tools.Builtin(st, nil)
-		chatID := newTestChat(t, st)
-		if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
-			ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "make lorem.txt",
-		}); err != nil {
-			t.Fatal(err)
-		}
-		ch, unsub := eng.Subscribe(chatID, -1)
-		defer unsub()
-
-		am, err := eng.startGeneration(context.Background(), chatID)
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		waitFor(t, "generation complete", 5*time.Second, func() bool {
-			m, err := st.GetMessage(context.Background(), am.ID)
-			return err == nil && m.Status == store.StatusComplete
-		})
-
-		// Stored in the chat, correct content, but on no message.
-		var toolResult string
-		msgs, _ := st.ListMessages(context.Background(), chatID)
-		for _, m := range msgs {
-			if m.Role == store.RoleTool {
-				toolResult = m.Content
-			}
-			for _, a := range m.Attachments {
-				t.Fatalf("file was shown on message %s without attach_file: %+v", m.ID, a)
-			}
-		}
-		id := attachmentIDIn(toolResult)
-		if id == "" {
-			t.Fatalf("tool result carries no attachment id: %q", toolResult)
-		}
-		att, err := st.GetAttachment(context.Background(), id)
-		if err != nil || att.Filename != "lorem.txt" || att.Kind != "text" || att.ChatID != chatID {
-			t.Fatalf("attachment meta wrong: %+v err=%v", att, err)
-		}
-		if string(att.Data) != "lorem ipsum" {
-			t.Fatalf("attachment blob wrong: %q", att.Data)
-		}
-		if !strings.Contains(toolResult, "attach_file") {
-			t.Fatalf("tool result should name the next step: %q", toolResult)
-		}
-		// Nothing was shown, so nothing was announced.
-		if sawAttachmentEvent(ch) {
-			t.Fatal("attachment_created published for a file no message shows")
-		}
-	})
-
-	t.Run("attach_file shows it", func(t *testing.T) {
-		prov := &scriptedProvider{}
-		eng, st, _ := testEngine(t, prov, &fakeMCP{})
-		eng.catalog = tools.Builtin(st, nil)
-		chatID := newTestChat(t, st)
-		// A file created earlier in the chat (by create_file or fetch save=true)
-		// and not shown yet.
-		created, err := st.CreateAttachment(context.Background(), chatID, "lorem.txt", "text", "text/plain", 11, []byte("lorem ipsum"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		prov.scripts = [][]provider.StreamEvent{
+	prov := &scriptedProvider{
+		scripts: [][]provider.StreamEvent{
 			{
-				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "attach_file",
-					Args: `{"ids":["` + created.ID + `"]}`},
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "create_file",
+					Args: `{"filename":"lorem.txt","content":"lorem ipsum"}`},
 				{Kind: provider.EventDone, Finish: "tool_calls"},
 			},
 			{
 				{Kind: provider.EventTextDelta, Text: "Here is your file."},
 				{Kind: provider.EventDone, Finish: "stop"},
 			},
-		}
-		if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
-			ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "show it again",
-		}); err != nil {
-			t.Fatal(err)
-		}
-		ch, unsub := eng.Subscribe(chatID, -1)
-		defer unsub()
-
-		am, err := eng.startGeneration(context.Background(), chatID)
-		if err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		waitFor(t, "generation complete", 5*time.Second, func() bool {
-			m, err := st.GetMessage(context.Background(), am.ID)
-			return err == nil && m.Status == store.StatusComplete
-		})
-
-		metas, err := st.ListAttachmentsByMessage(context.Background(), am.ID)
-		if err != nil || len(metas) != 1 || metas[0].ID != created.ID {
-			t.Fatalf("want the created file on the assistant message, got %+v (err=%v)", metas, err)
-		}
-		if !sawAttachmentEvent(ch) {
-			t.Fatal("attachment_created never published")
-		}
-	})
-}
-
-// attachmentIDIn pulls the id out of a tool result the way the model does.
-func attachmentIDIn(result string) string {
-	m := regexp.MustCompile(`attachment id ([0-9a-fA-F-]{36})`).FindStringSubmatch(result)
-	if m == nil {
-		return ""
+		},
 	}
-	return m[1]
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	eng.catalog = tools.Builtin(st, nil)
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "make lorem.txt",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ch, unsub := eng.Subscribe(chatID, -1)
+	defer unsub()
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	// Stored in the chat AND on the assistant message that created it.
+	metas, err := st.ListAttachmentsByMessage(context.Background(), am.ID)
+	if err != nil || len(metas) != 1 || metas[0].Filename != "lorem.txt" {
+		t.Fatalf("want lorem.txt on the assistant message, got %+v (err=%v)", metas, err)
+	}
+	att, err := st.GetAttachment(context.Background(), metas[0].ID)
+	if err != nil || att.Kind != "text" || att.ChatID != chatID {
+		t.Fatalf("attachment meta wrong: %+v err=%v", att, err)
+	}
+	if string(att.Data) != "lorem ipsum" {
+		t.Fatalf("attachment blob wrong: %q", att.Data)
+	}
+
+	// The result says the file is on screen and names no other tool: nothing
+	// is left for the model to do, so nothing can point at a tool this chat
+	// might have turned off.
+	var toolResult string
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	for _, m := range msgs {
+		if m.Role == store.RoleTool {
+			toolResult = m.Content
+		}
+	}
+	if !strings.Contains(toolResult, "shown on your reply") {
+		t.Fatalf("tool result should say the file is visible: %q", toolResult)
+	}
+	if strings.Contains(toolResult, "attach_file") {
+		t.Fatalf("tool result must not name another tool: %q", toolResult)
+	}
+	if !sawAttachmentEvent(ch) {
+		t.Fatal("attachment_created never published")
+	}
 }
 
 // sawAttachmentEvent drains a subscribed chat stream (the replay buffer holds

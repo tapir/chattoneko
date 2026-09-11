@@ -645,7 +645,7 @@ func (s *Store) DistinctToolNamesInChat(ctx context.Context, chatID string) ([]s
 
 // CreateAttachment stores an attachment. It shows on no message until
 // LinkAttachmentToMessage says so — uploads are linked when the user sends,
-// tool-created files when the model calls attach_file.
+// tool-created files by the same create_file call that stored them.
 func (s *Store) CreateAttachment(ctx context.Context, chatID, filename, kind, mime string, size int64, data []byte) (*AttachmentMeta, error) {
 	meta := AttachmentMeta{
 		ID:        uuid.NewString(),
@@ -679,25 +679,6 @@ func (s *Store) GetAttachment(ctx context.Context, id string) (*Attachment, erro
 		return nil, notFound(err)
 	}
 	return &Attachment{AttachmentMeta: attachmentMeta(row), Data: row.Data, Description: row.Description}, nil
-}
-
-// GetAttachmentMeta fetches metadata only — what a tool needs to check an id
-// without pulling the blob into memory.
-func (s *Store) GetAttachmentMeta(ctx context.Context, id string) (*AttachmentMeta, error) {
-	row, err := s.q.GetAttachmentMeta(ctx, id)
-	if err != nil {
-		return nil, notFound(err)
-	}
-	return &AttachmentMeta{
-		ID:             row.ID,
-		ChatID:         row.ChatID,
-		Filename:       row.Filename,
-		Kind:           row.Kind,
-		Mime:           row.Mime,
-		Size:           row.Size,
-		CreatedAt:      row.CreatedAt,
-		HasDescription: row.HasDescription,
-	}, nil
 }
 
 // ListAttachmentsByMessage returns attachment metas of a message.

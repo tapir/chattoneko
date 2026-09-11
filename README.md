@@ -88,13 +88,12 @@ The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `
 
 ## Tools
 
-Five integrated tools, each toggleable per chat and globally in settings:
+Four integrated tools, each toggleable per chat and globally in settings:
 
 - `time` — the server's current date, time and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow", "next Friday" or "near me".
 - `code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8 and JSON encode/decode. No file, network, environment or debug access, capped by time, by work, and by output size. The tool description doubles as a Lua 5.1 → 5.4 migration guide for the model (what was renamed or removed, integer/float semantics, patterns vs regex, table borders).
-- `create_file` — writes a complete file: text as text, or binary as base64 (a PNG it drew, a PDF, a zip). The file is stored and the model gets its id back.
-- `attach_file` — shows stored files on the reply, by id. Images appear inline, text files open as a preview, anything else downloads when you click it. Because storing and showing are separate steps, the model can create a few files and attach only the ones that turned out to matter — and it can show a file again later, including one you uploaded yourself.
-- `fetch` — fetches any URL. With `save=true` the result is stored as a file and the model gets its id, which it can then hand to `attach_file` to show you: an image inline, a text file (JSON, HTML, markdown, CSV, source code) as a preview, anything else as a download. With `save=false` (the default) nothing is stored and the content goes to the model instead — text as text, binary base64-encoded — which is what you want when the data is just a step, e.g. a JSON API response it then crunches with `code`.
+- `create_file` — gives you a file, and shows it on the reply in the same step: an image appears inline, a text file opens as a preview, anything else downloads when you click it. The model either writes the file (text as text, binary as base64) or passes a URL and we download it, which keeps the bytes out of the model's context.
+- `fetch` — reads a URL and returns its text to the model: a page, a JSON API, anything textual, truncated and labelled when it is very large. A body that isn't text is an error rather than base64 the model can't read — handing you a file from a URL is `create_file`'s job.
 
 Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart. Each server card carries a **Fetch** button top right, next to the delete icon, that dials it and lists its tools right there with their own on/off defaults, so the global **Tool defaults** list stays purely the integrated tools above. Every MCP tool row also has an optional **title** box: the friendly label the chat shows while that tool runs (`web_exa_search` → "Searching web…") instead of the raw name. Leave it empty to keep the tool's own title, or the name when it has none — integrated tools have theirs built in.
 

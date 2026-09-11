@@ -1118,9 +1118,9 @@ class AppState {
         break;
       }
       case "attachment_created": {
-        // A tool put a file on the generating assistant message
-        // (attach_file, after create_file or fetch save=true) — show the
-        // attachment chip once the reply lands.
+        // A tool put a file on the generating assistant message (create_file,
+        // which stores and shows in one call) — show the attachment chip once
+        // the reply lands.
         const att = ev.attachment;
         if (
           att &&

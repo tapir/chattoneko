@@ -25,13 +25,24 @@ const defaultFlushInterval = 500 * time.Millisecond
 // a soft limit: the generation always gets a final round.
 const overBudgetText = "Error: this response has used up its MCP tool call limit; this call was not executed. Continue without MCP tools and answer with what you already have."
 
-// maxPostCapRounds is the runaway backstop for a model that keeps requesting
-// MCP tools after its budget is gone and after being told to answer without
-// them. Such a round executes nothing and only burns tokens, so a few ignored
-// instructions end the generation cleanly (every call has a result).
+// maxPostCapRounds is the runaway backstop for a round that executes nothing:
+// every call in it was refused, either for being past the response's MCP
+// budget or for naming a tool this chat does not have (toggled off, an MCP
+// server that went away, a name the model invented). Such a round only burns
+// tokens, so a few ignored instructions end the generation cleanly (every call
+// has a result).
 // ponytail: a sane model never reaches this; the alternative is an unbounded
 // spend loop.
 const maxPostCapRounds = 3
+
+// unavailableText is the synthetic result for a call to a tool this chat does
+// not have. Like overBudgetText it tells the model to finish without it —
+// counting these as refusals is what keeps a model that insists from looping
+// forever, which no budget covers because integrated tools are unbudgeted.
+func unavailableText(name string) string {
+	return "Error: the tool '" + name + "' is not available in this chat, so this call was not executed. " +
+		"Do not call it again — continue without it and answer with what you already have."
+}
 
 // cancelOutcome maps a canceled generation to (status, error text): a user
 // stop keeps "stopped" with no error; any other cancellation (server
@@ -357,11 +368,11 @@ func (e *Engine) runGeneration(ag *activeGen) {
 			used, refused := e.executeTools(ctx, h, chat, ag, calls, budget)
 			budget -= used
 
-			// Nothing ran and the round was pure refusals, so the model was told
-			// to answer without MCP tools and asked again. Keep going so it gets
-			// that chance; only the backstop ends a model that ignores it. Either
+			// A round of nothing but refusals — past the MCP budget, or tools this
+			// chat does not have — ran no work at all, so the model gets a few
+			// chances to answer without them and then the generation ends. Either
 			// way every call has a result, so finalize stays clean.
-			if used == 0 && refused > 0 {
+			if refused > 0 && refused == len(calls) {
 				if overCap++; overCap >= maxPostCapRounds {
 					finish(store.StatusComplete, "")
 					return
@@ -405,9 +416,10 @@ func isTruncationFinish(reason string) bool {
 
 // executeTools runs each tool call and persists + publishes the results.
 // budget is the response's remaining MCP-call allowance; used is how much of
-// it this batch spent and refused how many calls it turned away. Calls past
-// the budget get overBudgetText instead of running, which is what lets the
-// loop hand control back to the model. Integrated tools are not budgeted.
+// it this batch spent and refused how many calls it turned away (over budget,
+// or a tool this chat does not have). Refusals never run, which is what lets
+// the loop hand control back to the model — and, when a round is nothing but
+// refusals, end the generation. Integrated tools are not budgeted.
 // A canceled generation aborts the remaining calls; the invariant finalize
 // covers any left dangling with synthetic results. Events publish to the
 // generation's own hub (never re-resolved: after a chat deletion the old
@@ -435,8 +447,9 @@ func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat,
 		isError := false
 		switch {
 		case !enabled[c.Name]:
-			result = "Error: tool '" + c.Name + "' is disabled by the user."
+			result = unavailableText(c.Name)
 			isError = true
+			refused++
 		case mcp[c.Name] && budget <= 0:
 			result = overBudgetText
 			isError = true

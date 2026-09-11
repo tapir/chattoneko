@@ -8,14 +8,12 @@ import (
 	"chattoneko/internal/store"
 )
 
-// FileStore is the attachment store the file tools work against: create_file
-// and fetch(save=true) write a file, attach_file puts one on screen. Files are
-// stored unlinked and only become visible when attach_file links them to the
-// assistant message, so nothing here needs to know about messages except the
-// link itself. *store.Store implements it; tests can substitute a fake.
+// FileStore is the attachment store create_file works against: it stores the
+// file and links it to the assistant message being generated, in one step, so
+// a successful call always means the user can see it. *store.Store implements
+// it; tests can substitute a fake.
 type FileStore interface {
 	CreateAttachment(ctx context.Context, chatID, filename, kind, mime string, size int64, data []byte) (*store.AttachmentMeta, error)
-	GetAttachmentMeta(ctx context.Context, id string) (*store.AttachmentMeta, error)
 	LinkAttachmentToMessage(ctx context.Context, attachmentID, messageID, chatID string) error
 }
 
@@ -23,16 +21,14 @@ type FileStore interface {
 // integrated tools to this list — each tool's definition (name, description,
 // schema, default toggle, handler) lives in its own file; tools that need
 // dependencies (stores) are constructed here with them, so no package-level
-// wiring state is needed. files is the attachment store used by the file
-// tools (create_file, attach_file, fetch); limits supplies the
-// live-configured size limits.
+// wiring state is needed. files is the attachment store create_file uses;
+// limits supplies the live-configured size limits for what it downloads.
 func Builtin(files FileStore, limits *config.Store) *Registry {
 	return New(
 		Time,
 		Code,
-		CreateFile(files),
-		AttachFile(files),
-		Fetch(files, limits),
+		CreateFile(files, limits),
+		Fetch,
 	)
 }
 

@@ -45,7 +45,7 @@ type Tool struct {
 // model produced ("" when the model sent none); handlers that take arguments
 // should json.Unmarshal and validate them themselves. meta carries the
 // chat/message coordinates of the call for handlers that persist artifacts
-// (e.g. attach_file putting a file on the assistant message that asked for it).
+// (e.g. create_file showing a file on the assistant message that asked for it).
 // The returned string is what the model sees as the tool result.
 type Handler func(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (string, error)
 

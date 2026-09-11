@@ -180,12 +180,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 -- name: GetAttachment :one
 SELECT * FROM attachments WHERE id = ?;
 
--- Metadata without the blob - what a tool needs to validate an id.
--- name: GetAttachmentMeta :one
-SELECT id, chat_id, filename, kind, mime, size, created_at,
-       CAST((description != '') AS BOOLEAN) AS has_description
-FROM attachments WHERE id = ?;
-
 -- name: ListAttachmentsByMessage :many
 SELECT a.* FROM attachments a
 JOIN message_attachments ma ON ma.attachment_id = a.id

@@ -328,40 +328,6 @@ func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, err
 	return i, err
 }
 
-const getAttachmentMeta = `-- name: GetAttachmentMeta :one
-SELECT id, chat_id, filename, kind, mime, size, created_at,
-       CAST((description != '') AS BOOLEAN) AS has_description
-FROM attachments WHERE id = ?
-`
-
-type GetAttachmentMetaRow struct {
-	ID             string
-	ChatID         string
-	Filename       string
-	Kind           string
-	Mime           string
-	Size           int64
-	CreatedAt      int64
-	HasDescription bool
-}
-
-// Metadata without the blob - what a tool needs to validate an id.
-func (q *Queries) GetAttachmentMeta(ctx context.Context, id string) (GetAttachmentMetaRow, error) {
-	row := q.db.QueryRowContext(ctx, getAttachmentMeta, id)
-	var i GetAttachmentMetaRow
-	err := row.Scan(
-		&i.ID,
-		&i.ChatID,
-		&i.Filename,
-		&i.Kind,
-		&i.Mime,
-		&i.Size,
-		&i.CreatedAt,
-		&i.HasDescription,
-	)
-	return i, err
-}
-
 const getChat = `-- name: GetChat :one
 SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at FROM chats WHERE id = ?
 `

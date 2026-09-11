@@ -56,7 +56,7 @@
   let toolCalls = $derived(live ? live.toolCalls : item.toolCalls);
   let status = $derived(live ? live.status : msg.status);
   let errorText = $derived(live ? live.error : msg.error);
-  // Tool-created attachments (create_file + attach_file, fetch save=true) on
+  // Tool-created attachments (create_file, which stores and shows in one call) on
   // this assistant message. Deliberately NOT rendered while the message is
   // live: they appear only once the reply is fully rendered (`done` merges
   // live.attachments into the message, which ends `live`), instead of

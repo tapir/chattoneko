@@ -214,8 +214,12 @@ func (e *Engine) SystemPrompt() string {
 
 // effectiveTools returns the tool definitions to send to the provider:
 // enabled tools ∪ tools referenced anywhere in the chat's history (H3 —
-// omitting a disabled tool whose calls exist in history would make
-// chat_completions reject the request with orphan tool_call ids).
+// omitting a tool whose calls exist in history would make chat_completions
+// reject the request with orphan tool_call ids). History-only tools get a
+// bare placeholder rather than their real definition: they are declared so the
+// provider accepts the old call ids, and re-advertising a disabled or removed
+// tool with its full description reads to the model as an invitation to call
+// it.
 func (e *Engine) effectiveTools(ctx context.Context, chat *store.Chat) ([]provider.Tool, error) {
 	catalog := e.catalog.Tools()
 	byDisplay := map[string]int{}
@@ -244,18 +248,11 @@ func (e *Engine) effectiveTools(ctx context.Context, chat *store.Chat) ([]provid
 			continue
 		}
 		included[name] = true
-		if i, ok := byDisplay[name]; ok {
-			t := catalog[i]
-			defs = append(defs, provider.Tool{Name: t.Display, Description: t.Description, Schema: t.Schema})
-		} else {
-			// Tool no longer in catalog: minimal placeholder definition so the
-			// provider accepts the historical call ids.
-			defs = append(defs, provider.Tool{
-				Name:        name,
-				Description: "(tool unavailable)",
-				Schema:      json.RawMessage(`{"type":"object"}`),
-			})
-		}
+		defs = append(defs, provider.Tool{
+			Name:        name,
+			Description: "(tool unavailable)",
+			Schema:      json.RawMessage(`{"type":"object"}`),
+		})
 	}
 	return defs, nil
 }

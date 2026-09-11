@@ -853,7 +853,7 @@
                 <Input id="set-upload" type="number" min="0" class="h-9 text-sm" bind:value={uploadMaxBytes} />
               </div>
               <div class="space-y-1.5">
-                <Label for="set-tool-iter" class={labelCls}>Max MCP tool calls per response</Label>
+                <Label for="set-tool-iter" class={labelCls}>Max MCP calls (per resp)</Label>
                 <Input id="set-tool-iter" type="number" min="0" class="h-9 text-sm" bind:value={maxToolIter} />
               </div>
               <div class="space-y-1.5">

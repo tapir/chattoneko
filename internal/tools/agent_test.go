@@ -310,7 +310,7 @@ func TestAgentRefusals(t *testing.T) {
 	fs := &fakeFileStore{}
 	seedAttachment(fs, "img", agentChat, "photo.png", "image", "image/png", []byte("png"))
 	seedAttachment(fs, "notes", agentChat, "notes.md", "text", "text/markdown", []byte("hello"))
-	seedAttachment(fs, "voice", agentChat, "memo.ogg", "file", "audio/ogg", []byte("ogg"))
+	seedAttachment(fs, "voice", agentChat, "memo.ogg", "file", "audio/ogg", []byte("ogg")) // a mime off today's allow-list
 	seedAttachment(fs, "foreign", "other-chat", "photo.png", "image", "image/png", []byte("png"))
 
 	for _, tc := range []struct {
@@ -324,7 +324,7 @@ func TestAgentRefusals(t *testing.T) {
 		{"another chat's id", `{"id":"foreign","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no attachment with id"},
 		{"no question", `{"id":"img"}`, mcphub.CallMeta{ChatID: agentChat}, all, "required"},
 		{"text file", `{"id":"notes","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "already part of this conversation"},
-		{"unroutable audio", `{"id":"voice","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "wav and mp3 only"},
+		{"unroutable audio", `{"id":"voice","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "mp3/wav only"},
 		{"no model designated", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "no model is designated for images"},
 		{"only some designated", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, visionOnly, ""},
 	} {

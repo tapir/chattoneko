@@ -95,14 +95,47 @@ var textExts = map[string]string{
 
 // binaryExts is the allow-list of binary user uploads — audio and PDF —
 // mapped to the mime they are stored under. The extension decides because
-// content sniffing cannot: bare MP3 frames, Opus-in-Ogg and FLAC all sniff as
-// application/octet-stream. That is safe here — the bytes are never
-// interpreted: stored verbatim, served as an octet-stream download, and
-// handed to the model only as a database reference (SerializeRef).
+// content sniffing cannot: bare MP3 frames sniff as application/octet-stream.
+// That is safe here — the bytes are never interpreted: stored verbatim, served
+// as an octet-stream download, and handed to the model only as a database
+// reference (SerializeRef).
+//
+// This is the ONLY audio list in the app: AudioFormat reads it back for the
+// agent tool's input_audio format, so uploads and specialist calls cannot
+// drift apart. Both are what that part documents ("Currently supports wav and
+// mp3") — the wide ffmpeg-ish list belongs to the transcription endpoint.
 var binaryExts = map[string]string{
-	"wav": "audio/wav", "mp3": "audio/mpeg", "ogg": "audio/ogg",
-	"opus": "audio/opus", "flac": "audio/flac",
+	"wav": "audio/wav", "mp3": "audio/mpeg",
 	"pdf": "application/pdf",
+}
+
+// audioExts returns the audio half of binaryExts, sorted by extension. The
+// extensions double as the input_audio format names.
+func audioExts() []string {
+	exts := make([]string, 0, len(binaryExts))
+	for e, m := range binaryExts {
+		if strings.HasPrefix(m, "audio/") {
+			exts = append(exts, e)
+		}
+	}
+	sort.Strings(exts)
+	return exts
+}
+
+// AudioFormats names the accepted audio formats ("mp3/wav") for user- and
+// model-facing messages, derived from the allow-list so it cannot go stale.
+func AudioFormats() string { return strings.Join(audioExts(), "/") }
+
+// AudioFormat returns the input_audio format name for a stored audio mime, or
+// "" when the mime is off the allow-list — a recording stored before an
+// extension was dropped, which no documented audio input takes.
+func AudioFormat(mime string) string {
+	for _, e := range audioExts() {
+		if binaryExts[e] == mime {
+			return e
+		}
+	}
+	return ""
 }
 
 // mimeExts is textExts inverted, so a Content-Type can be turned back into a
@@ -238,7 +271,7 @@ func process(filename string, data []byte, maxBytes int64, allowBinary bool) (*R
 		mime, allowed := binaryExts[ext]
 		if !allowed {
 			if !allowBinary {
-				return nil, fmt.Errorf("%w: only images, text, audio (wav/mp3/ogg/opus/flac) and pdf", ErrUnsupported)
+				return nil, fmt.Errorf("%w: only images, text, audio (%s) and pdf", ErrUnsupported, AudioFormats())
 			}
 			mime = sniffMime(data)
 		}

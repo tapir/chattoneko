@@ -175,8 +175,7 @@ func TestProcessRejectsBinary(t *testing.T) {
 func TestProcessBinaryAllowList(t *testing.T) {
 	bin := []byte("ID3\x04not really a frame\x00\x01")
 	wantMime := map[string]string{
-		"song.mp3": "audio/mpeg", "track.opus": "audio/opus", "clip.wav": "audio/wav",
-		"a.ogg": "audio/ogg", "b.flac": "audio/flac", "doc.pdf": "application/pdf",
+		"song.mp3": "audio/mpeg", "clip.wav": "audio/wav", "doc.pdf": "application/pdf",
 	}
 	for name, mime := range wantMime {
 		res, err := Process(name, bin, 1<<20)
@@ -187,10 +186,23 @@ func TestProcessBinaryAllowList(t *testing.T) {
 			t.Fatalf("%s: kind=%q mime=%q size=%d", name, res.Kind, res.Mime, res.Size)
 		}
 	}
-	for _, name := range []string{"evil.zip", "evil.exe", "evil"} {
+	for _, name := range []string{"evil.zip", "evil.exe", "evil", "a.ogg", "b.flac", "c.opus"} {
 		if _, err := Process(name, bin, 1<<20); !errors.Is(err, ErrUnsupported) {
 			t.Fatalf("%s: want ErrUnsupported, got %v", name, err)
 		}
+	}
+	// One list: every allowed audio extension is the format name its mime
+	// reports, and a dropped one reports none.
+	for ext, mime := range binaryExts {
+		if !strings.HasPrefix(mime, "audio/") {
+			continue
+		}
+		if got := AudioFormat(mime); got != ext {
+			t.Fatalf("AudioFormat(%q) = %q, want %q", mime, got, ext)
+		}
+	}
+	if got := AudioFormat("audio/ogg"); got != "" {
+		t.Fatalf("AudioFormat(audio/ogg) = %q, want empty", got)
 	}
 	if res, err := ProcessAny("evil.zip", bin, 1<<20); err != nil || res.Kind != KindFile {
 		t.Fatalf("ProcessAny zip: %+v %v", res, err)
@@ -219,7 +231,7 @@ func TestType(t *testing.T) {
 		{KindText, "text/markdown", "text"},
 		{KindText, "application/json", "text"}, // the kind decides, not the mime
 		{KindFile, "audio/mpeg", "audio"},
-		{KindFile, "audio/opus", "audio"},
+		{KindFile, "audio/opus", "audio"}, // a pre-drop upload: still audio, so the agent refuses it in-band
 		{KindFile, "application/pdf", "document"},
 		{KindFile, "application/zip", "file"},
 		{KindFile, "application/octet-stream", "file"},

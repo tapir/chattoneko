@@ -256,10 +256,13 @@ func contentPart(att *store.Attachment, kind string) (openai.ChatCompletionConte
 			Filename: openai.String(att.Filename),
 		}), nil
 	case "audio":
-		format := audioFormat(att.Mime)
+		// The format name comes from the upload allow-list itself (attach), so
+		// the specialist is offered exactly what a user could have uploaded.
+		format := attach.AudioFormat(att.Mime)
 		if format == "" {
 			return openai.ChatCompletionContentPartUnionParam{}, fmt.Errorf(
-				"%q is stored as %s, which no audio input takes (wav and mp3 only)", att.Filename, att.Mime)
+				"%q is stored as %s, which no audio input takes (%s only)",
+				att.Filename, att.Mime, attach.AudioFormats())
 		}
 		return openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
 			Data:   b64,
@@ -268,21 +271,4 @@ func contentPart(att *store.Attachment, kind string) (openai.ChatCompletionConte
 	}
 	// specialistFor already refused every other type.
 	return openai.ChatCompletionContentPartUnionParam{}, fmt.Errorf("no wire representation for a %q file", kind)
-}
-
-// audioFormat names the stored audio for the input_audio part. OpenAI's spec
-// takes only "wav" and "mp3"; the upload allow-list also admits ogg, opus and
-// flac, which no input_audio endpoint is documented to accept, so those are
-// refused rather than sent under a format the provider would misread.
-//
-// ponytail: uploads are meant to be converted to wav before storing; once that
-// lands every stored recording is wav and this collapses to a constant.
-func audioFormat(mime string) string {
-	switch mime {
-	case "audio/wav":
-		return "wav"
-	case "audio/mpeg":
-		return "mp3"
-	}
-	return ""
 }

@@ -1,11 +1,10 @@
 <script>
   import { app } from '../lib/state.svelte.js';
   import { onMount } from 'svelte';
-  import { EyeOff, Paperclip, SendHorizontal, Square, X } from '@lucide/svelte';
+  import { Paperclip, SendHorizontal, Square, X } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Select from '$lib/components/ui/select';
-  import * as Tooltip from '$lib/components/ui/tooltip';
   import ModelPickerSheet from './ModelPickerSheet.svelte';
   import AttachmentSheet from './AttachmentSheet.svelte';
   import { isNative } from '../lib/server.js';
@@ -60,25 +59,6 @@
     if (chosen && opts.includes(chosen)) return chosen;
     return app.defaultEffortFor(currentModel);
   });
-
-  // Touch devices have no hover, so the image caveat can't surface as a
-  // tooltip there — tapping the icon expands the full text inline instead
-  // (a toast proved unstable under touch: it renders near the finger and
-  // sonner's swipe-dismiss kills it).
-  const canHover = matchMedia('(hover: hover)').matches;
-  let hintOpen = $state(false);
-
-  // Image hint: warn when staged images target a chat model whose metadata
-  // lacks image input.
-  let currentInputModality = $derived(
-    app.modelInfo.find((m) => m.model_id === currentModel)?.input_modality ?? [],
-  );
-  let hasStagedImages = $derived(pending.some((a) => a.kind === 'image'));
-  let imageHint = $derived(
-    hasStagedImages && !currentInputModality.includes('image')
-      ? "This model can't see images."
-      : '',
-  );
 
   // Switching model snaps to that model's configured default effort — the
   // previous model's level is not a choice worth carrying over.
@@ -249,28 +229,7 @@
               </button>
             </span>
           {/each}
-          {#if imageHint}
-            <!-- Compact caveat affordance: hover shows the full text as a
-                 tooltip (desktop); on touch the tooltip is disabled and a
-                 tap toggles the text inline below the chips instead. -->
-            <Tooltip.Root disabled={!canHover}>
-              <Tooltip.Trigger
-                class="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-destructive transition-colors hover:bg-destructive/10"
-                aria-label={imageHint}
-                aria-expanded={!canHover ? hintOpen : undefined}
-                onclick={() => {
-                  if (!canHover) hintOpen = !hintOpen;
-                }}
-              >
-                <EyeOff class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-              </Tooltip.Trigger>
-              <Tooltip.Content side="top" class="max-w-64">{imageHint}</Tooltip.Content>
-            </Tooltip.Root>
-          {/if}
         </div>
-        {#if imageHint && hintOpen}
-          <p class="px-3 pt-1.5 text-xs text-muted-foreground">{imageHint}</p>
-        {/if}
       {/if}
 
       <div class="flex items-end gap-1.5 p-2.5">
@@ -278,7 +237,7 @@
           variant="ghost"
           size="icon"
           class="size-9 shrink-0 rounded-full"
-          title="Attach files (images: jpg/png/gif/webp, text/code files)"
+          title="Attach files (images, text/code, audio, pdf)"
           onclick={onAttachButton}
           disabled={attachBusy}
         >

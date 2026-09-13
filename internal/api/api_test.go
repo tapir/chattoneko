@@ -840,6 +840,20 @@ func TestUploadValidation(t *testing.T) {
 	if rec.Code != 415 {
 		t.Fatalf("binary upload: %d", rec.Code)
 	}
+	// Allow-listed binary (audio, PDF) → 200, stored verbatim as kind=file.
+	rec = upload(map[string][]byte{"song.mp3": {0x00, 0x01, 0x02}})
+	if rec.Code != 200 {
+		t.Fatalf("mp3 upload: %d %s", rec.Code, rec.Body)
+	}
+	var kind, mime string
+	if err := ts.db.QueryRow(
+		"SELECT kind, mime FROM attachments WHERE chat_id = ? AND filename = 'song.mp3'", chatID,
+	).Scan(&kind, &mime); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "file" || mime != "audio/mpeg" {
+		t.Fatalf("mp3 stored as kind=%q mime=%q, want file/audio/mpeg", kind, mime)
+	}
 	// Too many files → 400.
 	files := map[string][]byte{}
 	for i := 0; i < maxUploadFiles+1; i++ {
@@ -866,8 +880,8 @@ func TestUploadValidation(t *testing.T) {
 	if err := ts.db.QueryRow("SELECT COUNT(*) FROM attachments WHERE chat_id = ?", chatID).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 { // only the first (valid, single-file) upload may remain
-		t.Fatalf("attachments left behind = %d, want 1 (failed batch must roll back)", n)
+	if n != 2 { // only the two valid single-file uploads may remain
+		t.Fatalf("attachments left behind = %d, want 2 (failed batch must roll back)", n)
 	}
 }
 

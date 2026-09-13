@@ -211,6 +211,9 @@ func (e *Engine) runGeneration(ag *activeGen) {
 		stepFailed("load chat: " + err.Error())
 		return
 	}
+	// Read once per generation: the model cannot change mid-run, and the
+	// metadata lookup is a DB read we don't want inside the tool loop.
+	vision := e.modelAcceptsImages(ctx, params.Model)
 
 	// turn is the 0-based index of the provider round trip being streamed: it
 	// keys this generation's reasoning parts, is stamped on the turn's wire
@@ -241,7 +244,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 			stepFailed("load history: " + err.Error())
 			return
 		}
-		providerMsgs, err := e.buildProviderMessages(ctx, chat, msgs, ag.attCache)
+		providerMsgs, err := e.buildProviderMessages(ctx, chat, msgs, ag.attCache, vision)
 		if err != nil {
 			stepFailed("build request: " + err.Error())
 			return

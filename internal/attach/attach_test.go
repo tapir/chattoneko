@@ -168,6 +168,51 @@ func TestProcessRejectsBinary(t *testing.T) {
 	}
 }
 
+// TestProcessBinaryAllowList: audio and PDF reach user uploads by extension
+// (their bytes sniff as octet-stream, so content cannot decide), while any
+// other binary is still refused at the door — except for the tools, which go
+// through ProcessAny.
+func TestProcessBinaryAllowList(t *testing.T) {
+	bin := []byte("ID3\x04not really a frame\x00\x01")
+	wantMime := map[string]string{
+		"song.mp3": "audio/mpeg", "track.opus": "audio/opus", "clip.wav": "audio/wav",
+		"a.ogg": "audio/ogg", "b.flac": "audio/flac", "doc.pdf": "application/pdf",
+	}
+	for name, mime := range wantMime {
+		res, err := Process(name, bin, 1<<20)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if res.Kind != KindFile || res.Mime != mime || res.Size != int64(len(bin)) {
+			t.Fatalf("%s: kind=%q mime=%q size=%d", name, res.Kind, res.Mime, res.Size)
+		}
+	}
+	for _, name := range []string{"evil.zip", "evil.exe", "evil"} {
+		if _, err := Process(name, bin, 1<<20); !errors.Is(err, ErrUnsupported) {
+			t.Fatalf("%s: want ErrUnsupported, got %v", name, err)
+		}
+	}
+	if res, err := ProcessAny("evil.zip", bin, 1<<20); err != nil || res.Kind != KindFile {
+		t.Fatalf("ProcessAny zip: %+v %v", res, err)
+	}
+}
+
+func TestSerializeRef(t *testing.T) {
+	out := SerializeRef("we<\"ird.pdf", "att-9", "application/pdf", 42)
+	for _, want := range []string{"att-9", "application/pdf", "42 bytes"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in %s", want, out)
+		}
+	}
+	if strings.Contains(out, "we<\"ird.pdf") {
+		t.Fatalf("filename not escaped: %s", out)
+	}
+	// The closing tag repeats the id, same envelope as SerializeText.
+	if !strings.HasSuffix(out, "</file id=\"att-9\">") {
+		t.Fatalf("bad envelope: %s", out)
+	}
+}
+
 func TestProcessTooLarge(t *testing.T) {
 	payload := []byte("hello world")
 	if _, err := Process("x.txt", payload, 4); err == nil {

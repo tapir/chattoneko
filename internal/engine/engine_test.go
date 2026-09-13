@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"chattoneko/internal/attach"
 	"chattoneko/internal/config"
 	"chattoneko/internal/db"
 	"chattoneko/internal/mcphub"
@@ -1186,5 +1187,91 @@ func TestPublishConfigChangedReachesGlobal(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("config_changed never reached the global stream")
+	}
+}
+
+// TestBuildMessagesUnreadableAttachments: an attachment the model cannot
+// consume — a binary file always, an image on a model without image input —
+// still has to reach the prompt, as a reference naming its stored id rather
+// than vanishing from the conversation.
+func TestBuildMessagesUnreadableAttachments(t *testing.T) {
+	eng, st, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
+	ctx := context.Background()
+	chatID := newTestChat(t, st)
+	msg, err := st.CreateMessage(ctx, store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "here",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := st.CreateAttachment(ctx, chatID, "pic.png", attach.KindImage, "image/png", 3, []byte("PNG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdf, err := st.CreateAttachment(ctx, chatID, "doc.pdf", attach.KindFile, "application/pdf", 3, []byte{1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{img.ID, pdf.ID} {
+		if err := st.LinkAttachmentToMessage(ctx, id, msg.ID, chatID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chat, err := st.GetChat(ctx, chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.ListMessages(ctx, chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := func(vision bool) provider.Message {
+		t.Helper()
+		out, err := eng.buildProviderMessages(ctx, chat, msgs, nil, vision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out) == 0 || out[len(out)-1].Role != "user" {
+			t.Fatalf("want the user message last, got %+v", out)
+		}
+		return out[len(out)-1]
+	}
+
+	v := build(true)
+	if len(v.Images) != 1 || string(v.Images[0].Data) != "PNG" {
+		t.Fatalf("vision model should get the image bytes, got %+v", v.Images)
+	}
+	if strings.Contains(v.Content, img.ID) {
+		t.Fatalf("natively sent image should not also be referenced: %s", v.Content)
+	}
+	if !strings.Contains(v.Content, pdf.ID) {
+		t.Fatalf("pdf reference missing: %s", v.Content)
+	}
+
+	b := build(false)
+	if len(b.Images) != 0 {
+		t.Fatalf("text-only model should get no image parts, got %+v", b.Images)
+	}
+	if !strings.Contains(b.Content, img.ID) || !strings.Contains(b.Content, pdf.ID) {
+		t.Fatalf("both attachments should be referenced: %s", b.Content)
+	}
+}
+
+// TestModelAcceptsImages: the modality lookup the vision decision rests on.
+// Unfetched metadata is text-only by default, so a missing row must not claim
+// image input.
+func TestModelAcceptsImages(t *testing.T) {
+	eng, _, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
+	ctx := context.Background()
+	if eng.modelAcceptsImages(ctx, "no-such-row") {
+		t.Fatal("unset metadata must not claim image input")
+	}
+	if err := eng.cfg.UpsertModelMetas(ctx, []config.ModelMeta{
+		{ModelID: "vision", InputModality: []string{"text", "image"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !eng.modelAcceptsImages(ctx, "vision") {
+		t.Fatal("stored image input not seen")
 	}
 }

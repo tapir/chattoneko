@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -43,10 +44,12 @@ func (e *Engine) chatParams(ctx context.Context, chatID string) (*store.Chat, pr
 // for a one-shot build) instead of re-reading every blob on every tool-loop
 // iteration.
 //
-// Image attachments always go out as PNG data URLs; whether the model can
-// actually see them is between the user and the provider (the Composer
-// warns when the picked model's metadata lacks image input).
-func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, msgs []*store.Message, attCache map[string]*store.Attachment) ([]provider.Message, error) {
+// vision says whether the current model's metadata lists image input: an
+// image goes out as a PNG data URL when it does, and as a stored-file
+// reference when it doesn't. Binary attachments (audio, PDF, tool files) have
+// no wire representation at all and always take the reference path, so the
+// model at least learns the file exists and what its id is.
+func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, msgs []*store.Message, attCache map[string]*store.Attachment, vision bool) ([]provider.Message, error) {
 	out := make([]provider.Message, 0, len(msgs)+1)
 	if sp := e.SystemPrompt(); sp != "" {
 		out = append(out, provider.Message{Role: "system", Content: sp})
@@ -68,11 +71,12 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 						attCache[a.ID] = att
 					}
 				}
-				switch att.Kind {
-				case attach.KindImage:
-					images = append(images, provider.Image{Data: att.Data})
-				case attach.KindText:
+				if att.Kind == attach.KindText {
 					content += "\n\n" + attach.SerializeText(att.Filename, att.ID, string(att.Data))
+				} else if att.Kind == attach.KindImage && vision {
+					images = append(images, provider.Image{Data: att.Data})
+				} else {
+					content += "\n\n" + attach.SerializeRef(att.Filename, att.ID, att.Mime, att.Size)
 				}
 			}
 			out = append(out, provider.Message{Role: "user", Content: content, Images: images})
@@ -102,6 +106,20 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 		}
 	}
 	return out, nil
+}
+
+// modelAcceptsImages reports whether the model's stored metadata lists image
+// input. Metadata never fetched from the provider defaults to text-only
+// (config.DefaultModelMeta), and a failed lookup is treated the same way: the
+// fallback costs the model a picture (it still gets the attachment's id) and
+// never sends image parts to an endpoint that rejects them.
+func (e *Engine) modelAcceptsImages(ctx context.Context, model string) bool {
+	metas, err := e.cfg.ModelMetas(ctx, []string{model})
+	if err != nil || len(metas) == 0 {
+		slog.Warn("engine: load model metadata", "model", model, "error", err)
+		return false
+	}
+	return slices.Contains(metas[0].InputModality, "image")
 }
 
 // enabledTools computes the per-chat effective tool set: config defaults

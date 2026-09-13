@@ -30,6 +30,9 @@ const CHAT_PAGE = 30;
 // is judged by content in lib/text-sniff.js, so there is no text-extension
 // list to keep in sync.
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp"];
+// Binary uploads the server accepts (internal/attach binaryExts): stored
+// verbatim and shown to the model as a database reference, never inline.
+const BINARY_EXTS = ["wav", "mp3", "ogg", "opus", "flac", "pdf"];
 const extOf = (name) =>
   name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
 // Fallbacks if /api/config limits haven't loaded yet.
@@ -860,9 +863,12 @@ class AppState {
     // and writing pendingAttachments in the same tick is what keeps two
     // overlapping calls (paste, then drop) from clobbering each other.
     const readable = await Promise.all(
-      files.map((f) =>
-        IMAGE_EXTS.includes(extOf(f.name || "")) ? true : looksText(f).catch(() => false),
-      ),
+      files.map((f) => {
+        const ext = extOf(f.name || "");
+        return IMAGE_EXTS.includes(ext) || BINARY_EXTS.includes(ext)
+          ? true
+          : looksText(f).catch(() => false);
+      }),
     );
     const key = this.activeChatId ?? "";
     const list = this.pendingAttachments[key] ?? [];
@@ -879,7 +885,9 @@ class AppState {
         break;
       }
       const name = file.name || "file";
-      const isImage = IMAGE_EXTS.includes(extOf(name));
+      const ext = extOf(name);
+      const isImage = IMAGE_EXTS.includes(ext);
+      const isBinary = BINARY_EXTS.includes(ext);
       if (!readable[i]) {
         this.toast("error", `${name}: unsupported file type`);
         continue;
@@ -889,8 +897,8 @@ class AppState {
         continue;
       }
       // Images are downscaled into the stored cap server-side, so the raw
-      // bytes cap is the meaningful client check for them; text files hit
-      // the stored cap directly.
+      // bytes cap is the meaningful client check for them; text and binary
+      // files are stored as-is and hit the stored cap directly.
       const tooLarge = isImage
         ? file.size > maxRawImageBytes
         : maxTextBytes > 0 && file.size > maxTextBytes;
@@ -903,7 +911,7 @@ class AppState {
         file,
         filename: name,
         size: file.size,
-        kind: isImage ? "image" : "text",
+        kind: isImage ? "image" : isBinary ? "file" : "text",
         previewUrl: isImage ? URL.createObjectURL(file) : "",
       });
     }

@@ -1,6 +1,6 @@
 // Package attach processes file uploads: content sniffing, image -> PNG
-// conversion (GIF first frame, WebP via x/image/webp), text validation, and
-// filename sanitization.
+// conversion (GIF first frame, WebP via x/image/webp), text validation, the
+// binary upload allow-list (audio, PDF), and filename sanitization.
 package attach
 
 import (
@@ -27,8 +27,8 @@ const (
 	KindImage = "image"
 	KindText  = "text"
 	// KindFile is any other binary: stored verbatim, never previewed, served
-	// as a download. Only tool-created files (create_file, fetch) use it —
-	// Process keeps refusing them for user uploads.
+	// as a download. Tool-created files (create_file, fetch) of any type use
+	// it, and user uploads reach it through the binaryExts allow-list.
 	KindFile = "file"
 )
 
@@ -93,6 +93,18 @@ var textExts = map[string]string{
 	"html": "text/html", "css": "text/css",
 }
 
+// binaryExts is the allow-list of binary user uploads — audio and PDF —
+// mapped to the mime they are stored under. The extension decides because
+// content sniffing cannot: bare MP3 frames, Opus-in-Ogg and FLAC all sniff as
+// application/octet-stream. That is safe here — the bytes are never
+// interpreted: stored verbatim, served as an octet-stream download, and
+// handed to the model only as a database reference (SerializeRef).
+var binaryExts = map[string]string{
+	"wav": "audio/wav", "mp3": "audio/mpeg", "ogg": "audio/ogg",
+	"opus": "audio/opus", "flac": "audio/flac",
+	"pdf": "application/pdf",
+}
+
 // mimeExts is textExts inverted, so a Content-Type can be turned back into a
 // display extension. Where a mime has several spellings (text/markdown →
 // .md/.markdown) the shortest wins, which keeps the pick stable across runs.
@@ -155,16 +167,18 @@ const MaxRawUploadBytes = 64 * 1024 * 1024 // 64 MiB
 // always re-encoded to PNG (JPEG/GIF/WebP sources live only in memory during
 // this call); the per-file cap is enforced on the *converted PNG*, downscaling
 // as needed, so typical large phone photos are accepted and only the compact
-// PNG is stored. Text files are enforced against the cap directly. Anything
-// else is ErrUnsupported.
+// PNG is stored. Text and binary files are enforced against the cap directly.
+// Binary files are accepted only when their extension is on the binaryExts
+// allow-list (audio, PDF); anything else is ErrUnsupported.
 func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 	return process(filename, data, maxBytes, false)
 }
 
-// ProcessAny is Process with the third kind unlocked: bytes that are neither
-// a decodable image nor printable text are kept verbatim as KindFile. Tools
-// take this path (the model can hand over a PDF it fetched); uploads stay on
-// Process so an unopenable file is refused at the door instead of stored.
+// ProcessAny is Process with the binary allow-list lifted: bytes that are
+// neither a decodable image nor printable text are kept verbatim as KindFile
+// whatever their extension. Tools take this path (the model can hand over a
+// zip it fetched); uploads stay on Process so an executable is refused at the
+// door instead of stored.
 func ProcessAny(filename string, data []byte, maxBytes int64) (*Result, error) {
 	return process(filename, data, maxBytes, true)
 }
@@ -220,12 +234,17 @@ func process(filename string, data []byte, maxBytes int64, allowBinary bool) (*R
 		return nil, ErrTooLarge
 	}
 	if !IsText(data) {
-		if !allowBinary {
-			return nil, ErrUnsupported
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(filename)), ".")
+		mime, allowed := binaryExts[ext]
+		if !allowed {
+			if !allowBinary {
+				return nil, fmt.Errorf("%w: only images, text, audio (wav/mp3/ogg/opus/flac) and pdf", ErrUnsupported)
+			}
+			mime = sniffMime(data)
 		}
 		return &Result{
 			Kind: KindFile,
-			Mime: sniffMime(data),
+			Mime: mime,
 			Data: data,
 			Size: int64(len(data)),
 		}, nil
@@ -335,5 +354,18 @@ func downscale(img image.Image, maxSide int) image.Image {
 func SerializeText(filename, id, content string) string {
 	return fmt.Sprintf("<file name=\"%s\" id=%q>\n%s\n</file id=%q>",
 		html.EscapeString(filename), id, content, id)
+}
+
+// SerializeRef is SerializeText for a file the model cannot read: the same
+// envelope, but the body points at the stored bytes instead of carrying them.
+// Used for binary attachments (audio, PDF) and for images on a model whose
+// metadata has no image input, so the id survives in the prompt for a later
+// tool call to pick up.
+func SerializeRef(filename, id, mime string, size int64) string {
+	body := fmt.Sprintf(
+		"Content not included: the current model cannot read %s. The file's %d bytes are stored in the database under attachment id %s.",
+		mime, size, id)
+	return fmt.Sprintf("<file name=\"%s\" id=%q>\n%s\n</file id=%q>",
+		html.EscapeString(filename), id, body, id)
 }
 

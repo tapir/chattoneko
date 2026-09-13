@@ -342,9 +342,35 @@ func downscale(img image.Image, maxSide int) image.Image {
 	return scale(img, w*maxSide/h, maxSide)
 }
 
+// Type names an attachment for the <file> block the model reads. The kind is
+// already the answer for images and text; inside the binary kind the stored
+// mime picks "audio" or "document" (PDF), and anything else binary — a zip the
+// tools fetched — stays "file".
+func Type(kind, mime string) string {
+	switch kind {
+	case KindImage:
+		return "image"
+	case KindText:
+		return "text"
+	}
+	switch {
+	case strings.HasPrefix(mime, "audio/"):
+		return "audio"
+	case mime == "application/pdf":
+		return "document"
+	}
+	return KindFile
+}
+
+// fileTag opens one <file> block. The filename is HTML-escaped (which covers
+// its quotes too); id and type are Go-quoted.
+func fileTag(filename, id, typ string) string {
+	return fmt.Sprintf("<file name=\"%s\" id=%q type=%q>", html.EscapeString(filename), id, typ)
+}
+
 // SerializeText formats a text attachment for injection into a user message:
 //
-//	<file name="notes.md" id="a1b2c3d4">
+//	<file name="notes.md" id="a1b2c3d4" type="text">
 //	...content...
 //	</file id="a1b2c3d4">
 //
@@ -352,8 +378,7 @@ func downscale(img image.Image, maxSide int) image.Image {
 // attachment's unguessable random id (M2), so a stray or hostile "</file>"
 // inside the file content cannot terminate the block early.
 func SerializeText(filename, id, content string) string {
-	return fmt.Sprintf("<file name=\"%s\" id=%q>\n%s\n</file id=%q>",
-		html.EscapeString(filename), id, content, id)
+	return fmt.Sprintf("%s\n%s\n</file id=%q>", fileTag(filename, id, KindText), content, id)
 }
 
 // SerializeRef is SerializeText for a file the model cannot read: the same
@@ -361,11 +386,10 @@ func SerializeText(filename, id, content string) string {
 // Used for binary attachments (audio, PDF) and for images on a model whose
 // metadata has no image input, so the id survives in the prompt for a later
 // tool call to pick up.
-func SerializeRef(filename, id, mime string, size int64) string {
+func SerializeRef(filename, id, kind, mime string, size int64) string {
 	body := fmt.Sprintf(
 		"Content not included: the current model cannot read %s. The file's %d bytes are stored in the database under attachment id %s.",
 		mime, size, id)
-	return fmt.Sprintf("<file name=\"%s\" id=%q>\n%s\n</file id=%q>",
-		html.EscapeString(filename), id, body, id)
+	return fmt.Sprintf("%s\n%s\n</file id=%q>", fileTag(filename, id, Type(kind, mime)), body, id)
 }
 

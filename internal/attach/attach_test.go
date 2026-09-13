@@ -198,8 +198,8 @@ func TestProcessBinaryAllowList(t *testing.T) {
 }
 
 func TestSerializeRef(t *testing.T) {
-	out := SerializeRef("we<\"ird.pdf", "att-9", "application/pdf", 42)
-	for _, want := range []string{"att-9", "application/pdf", "42 bytes"} {
+	out := SerializeRef("we<\"ird.pdf", "att-9", KindFile, "application/pdf", 42)
+	for _, want := range []string{"att-9", "application/pdf", "42 bytes", `type="document"`} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in %s", want, out)
 		}
@@ -210,6 +210,24 @@ func TestSerializeRef(t *testing.T) {
 	// The closing tag repeats the id, same envelope as SerializeText.
 	if !strings.HasSuffix(out, "</file id=\"att-9\">") {
 		t.Fatalf("bad envelope: %s", out)
+	}
+}
+
+func TestType(t *testing.T) {
+	cases := []struct{ kind, mime, want string }{
+		{KindImage, "image/png", "image"},
+		{KindText, "text/markdown", "text"},
+		{KindText, "application/json", "text"}, // the kind decides, not the mime
+		{KindFile, "audio/mpeg", "audio"},
+		{KindFile, "audio/opus", "audio"},
+		{KindFile, "application/pdf", "document"},
+		{KindFile, "application/zip", "file"},
+		{KindFile, "application/octet-stream", "file"},
+	}
+	for _, tc := range cases {
+		if got := Type(tc.kind, tc.mime); got != tc.want {
+			t.Errorf("Type(%q, %q) = %q, want %q", tc.kind, tc.mime, got, tc.want)
+		}
 	}
 }
 
@@ -245,7 +263,7 @@ func TestDownscale(t *testing.T) {
 
 func TestSerializeText(t *testing.T) {
 	out := SerializeText("we<\"ird.md", "att-123", "body text")
-	if !strings.HasPrefix(out, "<file name=") {
+	if !strings.HasPrefix(out, `<file name=`) || !strings.Contains(out, `type="text"`) {
 		t.Fatalf("bad serialization: %q", out)
 	}
 	// The closer repeats the boundary id so a bare "</file>" inside file

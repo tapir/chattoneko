@@ -1244,7 +1244,7 @@ func TestBuildMessagesUnreadableAttachments(t *testing.T) {
 	if strings.Contains(v.Content, img.ID) {
 		t.Fatalf("natively sent image should not also be referenced: %s", v.Content)
 	}
-	if !strings.Contains(v.Content, pdf.ID) {
+	if !strings.Contains(v.Content, pdf.ID) || !strings.Contains(v.Content, `type="document"`) {
 		t.Fatalf("pdf reference missing: %s", v.Content)
 	}
 
@@ -1252,8 +1252,11 @@ func TestBuildMessagesUnreadableAttachments(t *testing.T) {
 	if len(b.Images) != 0 {
 		t.Fatalf("text-only model should get no image parts, got %+v", b.Images)
 	}
-	if !strings.Contains(b.Content, img.ID) || !strings.Contains(b.Content, pdf.ID) {
-		t.Fatalf("both attachments should be referenced: %s", b.Content)
+	if !strings.Contains(b.Content, img.ID) || !strings.Contains(b.Content, `type="image"`) {
+		t.Fatalf("image reference missing: %s", b.Content)
+	}
+	if !strings.Contains(b.Content, pdf.ID) {
+		t.Fatalf("pdf reference missing: %s", b.Content)
 	}
 }
 

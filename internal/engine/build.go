@@ -76,7 +76,7 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 				} else if att.Kind == attach.KindImage && vision {
 					images = append(images, provider.Image{Data: att.Data})
 				} else {
-					content += "\n\n" + attach.SerializeRef(att.Filename, att.ID, att.Mime, att.Size)
+					content += "\n\n" + attach.SerializeRef(att.Filename, att.ID, att.Kind, att.Mime, att.Size)
 				}
 			}
 			out = append(out, provider.Message{Role: "user", Content: content, Images: images})

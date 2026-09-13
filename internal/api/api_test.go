@@ -110,7 +110,7 @@ func newTestServer(t *testing.T, prov provider.Provider, authEnabled bool) *test
 	}
 	serverCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	eng := engine.New(serverCtx, st, prov, emptyMCP{}, cfg, nil)
+	eng := engine.New(serverCtx, st, prov, emptyMCP{}, cfg)
 	hub := mcphub.New(cfg)
 	a := auth.New(cfg)
 	srv := New(cfg, st, a, eng, hub, testStatic, testVersion)

@@ -16,7 +16,7 @@
   import { attachMenu } from '../lib/attachmenu.svelte.js';
   import { longPress } from '../lib/longpress.js';
   import { downloadAttachment } from '../lib/attach-actions.js';
-  import { Eye, FileText, Info, Paperclip, Pencil, RotateCcw, Workflow, X } from '@lucide/svelte';
+  import { FileText, Info, Paperclip, Pencil, RotateCcw, Workflow, X } from '@lucide/svelte';
   import CollapsibleStatus from './CollapsibleStatus.svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
   import Scramble from './Scramble.svelte';
@@ -25,7 +25,6 @@
   import GenerationError from './GenerationError.svelte';
   import IconButton from './IconButton.svelte';
   import CopyButton from './CopyButton.svelte';
-  import Spinner from './Spinner.svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Popover from '$lib/components/ui/popover';
 
@@ -243,26 +242,6 @@
     }
   }
 
-  // ---- vision-model image descriptions ----
-  // When the chat model can't see images, the server substitutes a vision
-  // model's text description. The user still sees the image itself, but can
-  // peek at what the model actually received via a badge on the attachment
-  // (lazy-fetched on first open, then cached).
-  let descCache = $state({}); // attachment id -> description text ('' on error)
-  let descBusy = $state({}); // attachment id -> in-flight
-  async function loadDescription(att) {
-    if (descCache[att.id] != null || descBusy[att.id]) return;
-    descBusy[att.id] = true;
-    try {
-      descCache[att.id] = await api.attachmentDescription(att.id);
-    } catch {
-      descCache[att.id] = '';
-    } finally {
-      delete descBusy[att.id];
-      descBusy = { ...descBusy };
-    }
-  }
-
   // ---- turn timeline ----
   // One response is a sequence of provider turns: each thinks, maybe calls
   // tools, and the last writes the answer. Rendering them in that order keeps
@@ -306,36 +285,6 @@
   // the single GenerationError component (same style for every cause).
   let generationError = $derived(status === 'failed' || status === 'stopped');
 </script>
-
-<!-- Per-image overlay for the gallery: the "what the model saw" badge shown
-     when a vision model described this upload for a text-only chat model.
-     Rendered as a SIBLING of each thumbnail button (ImageGallery never puts
-     overlays inside it), so opening the popover doesn't also open the viewer.
-     The badge positions itself; the gallery only supplies the relative cell. -->
-{#snippet descBadge(att)}
-  {#if att.has_description}
-    <Popover.Root onOpenChange={(o) => o && loadDescription(att)}>
-      <Popover.Trigger
-        class="absolute bottom-1.5 right-1.5 flex size-6 items-center justify-center rounded-full bg-background/90 text-muted-foreground shadow-sm ring-1 ring-border/40 backdrop-blur transition-colors hover:text-foreground"
-        title="What the model saw"
-        aria-label="View the text description sent to the model"
-      >
-        <Eye class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-      </Popover.Trigger>
-      <Popover.Content align="end" class="w-72 p-3">
-        <h4 class="mb-1.5 text-sm font-semibold">Image description</h4>
-        <p class="mb-2 text-xs text-muted-foreground">This model can't see images — here's the description it received instead.</p>
-        {#if descBusy[att.id]}
-          <div class="flex items-center gap-2 text-xs text-muted-foreground"><Spinner class="size-3" label="Loading" /> Loading description…</div>
-        {:else if descCache[att.id]}
-          <pre class="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-xs">{descCache[att.id]}</pre>
-        {:else}
-          <p class="text-xs text-muted-foreground">No description available.</p>
-        {/if}
-      </Popover.Content>
-    </Popover.Root>
-  {/if}
-{/snippet}
 
 <!-- The turn timeline, rendered bare or inside the "Processing…" fold below. -->
 {#snippet timeline()}
@@ -384,13 +333,10 @@
             </div>
           {:else}
             <div class="mb-2 flex flex-col gap-1.5">
-              <!-- Uploaded pictures get the same gallery as assistant replies;
-                   the description badge rides along as a per-cell overlay. -->
               <ImageGallery
                 items={imageFiles}
                 singleClass="max-h-40"
                 widthClass="w-64 sm:w-80"
-                overlay={descBadge}
               />
               {#if files.length}
                 <div class="flex flex-wrap gap-1.5">

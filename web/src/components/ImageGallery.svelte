@@ -10,10 +10,6 @@
   // stays scannable when a tool gathers a dozen pictures, and tapping the
   // tile opens the lightbox AT that image, where the rest are one swipe /
   // arrow-key away (viewer.open(att, items) hands the whole set over).
-  //
-  // `overlay` is an optional snippet rendered as a sibling of each cell's
-  // button (never inside it), so controls like the "what the model saw"
-  // badge can capture their own clicks without also opening the viewer.
   import { viewer } from '../lib/viewer.svelte.js';
   import { attachMenu } from '../lib/attachmenu.svelte.js';
   import { longPress } from '../lib/longpress.js';
@@ -34,7 +30,6 @@
     // right-aligned user bubble): a fr-track grid inside a fit-content
     // block collapses to min-content otherwise. Ignored for a lone image.
     widthClass = '',
-    overlay = null, // optional {#snippet overlay(att)}
     class: cls = '',
   } = $props();
 
@@ -58,9 +53,8 @@
 {#if count > 0}
   <div class={cn('@container', count > 1 && widthClass, cls)}>
     {#if count === 1}
-      <!-- Shrink-wrapped, not a grid cell: the badge overlay positions
-           against the picture itself. -->
-      <div class="relative inline-block">
+      <!-- Shrink-wrapped around the picture, not a grid cell. -->
+      <div class="inline-block">
         <button
           type="button"
           class="block cursor-zoom-in {PRESS}"
@@ -75,7 +69,6 @@
             loading="lazy"
           />
         </button>
-        {#if overlay}{@render overlay(items[0])}{/if}
       </div>
     {:else}
       <div class={cn('grid gap-1.5', gridClass)}>
@@ -100,7 +93,6 @@
                 </span>
               {/if}
             </button>
-            {#if overlay}{@render overlay(att)}{/if}
           </div>
         {/each}
       </div>

@@ -24,13 +24,6 @@ type ToolCatalog interface {
 	Call(ctx context.Context, display, argsJSON string, meta mcphub.CallMeta) (string, bool, error)
 }
 
-// ImageDescriber produces text descriptions of image attachments for chat
-// models that lack image input (see build.go). nil disables the feature:
-// images are always sent as-is.
-type ImageDescriber interface {
-	DescribeImage(ctx context.Context, png []byte, filename string) (string, error)
-}
-
 // Engine runs generations. Its context is the server context: generations
 // survive HTTP client disconnects and end only via stop, chat deletion, or
 // server shutdown (B6).
@@ -39,7 +32,6 @@ type Engine struct {
 	prov      provider.Provider
 	catalog   ToolCatalog
 	cfg       *config.Store
-	vision    ImageDescriber
 	serverCtx context.Context
 
 	mu   sync.Mutex
@@ -63,15 +55,13 @@ type Engine struct {
 	graceInterval time.Duration
 }
 
-// New creates the engine. vision may be nil (no image descriptions: images
-// are always sent to the chat model as-is).
-func New(serverCtx context.Context, st *store.Store, prov provider.Provider, catalog ToolCatalog, cfg *config.Store, vision ImageDescriber) *Engine {
+// New creates the engine.
+func New(serverCtx context.Context, st *store.Store, prov provider.Provider, catalog ToolCatalog, cfg *config.Store) *Engine {
 	return &Engine{
 		store:         st,
 		prov:          prov,
 		catalog:       catalog,
 		cfg:           cfg,
-		vision:        vision,
 		serverCtx:     serverCtx,
 		hubs:          map[string]*chatHub{},
 		gsubs:         map[int]chan WireEvent{},

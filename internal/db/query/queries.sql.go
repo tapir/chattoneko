@@ -308,7 +308,7 @@ func (q *Queries) FirstUserMessage(ctx context.Context, chatID string) (Message,
 }
 
 const getAttachment = `-- name: GetAttachment :one
-SELECT id, chat_id, filename, kind, mime, size, data, description, created_at FROM attachments WHERE id = ?
+SELECT id, chat_id, filename, kind, mime, size, data, created_at FROM attachments WHERE id = ?
 `
 
 func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, error) {
@@ -322,7 +322,6 @@ func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, err
 		&i.Mime,
 		&i.Size,
 		&i.Data,
-		&i.Description,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -432,23 +431,21 @@ func (q *Queries) LinkAttachmentToMessage(ctx context.Context, arg LinkAttachmen
 }
 
 const listAttachmentMetasForChat = `-- name: ListAttachmentMetasForChat :many
-SELECT a.id, a.chat_id, ma.message_id, a.filename, a.kind, a.mime, a.size, a.created_at,
-       CAST((a.description != '') AS BOOLEAN) AS has_description
+SELECT a.id, a.chat_id, ma.message_id, a.filename, a.kind, a.mime, a.size, a.created_at
 FROM attachments a
 JOIN message_attachments ma ON ma.attachment_id = a.id
 WHERE a.chat_id = ? ORDER BY a.created_at ASC
 `
 
 type ListAttachmentMetasForChatRow struct {
-	ID             string
-	ChatID         string
-	MessageID      string
-	Filename       string
-	Kind           string
-	Mime           string
-	Size           int64
-	CreatedAt      int64
-	HasDescription bool
+	ID        string
+	ChatID    string
+	MessageID string
+	Filename  string
+	Kind      string
+	Mime      string
+	Size      int64
+	CreatedAt int64
 }
 
 // Attachment metas for a whole chat (no blob data) - used to attach metas
@@ -472,7 +469,6 @@ func (q *Queries) ListAttachmentMetasForChat(ctx context.Context, chatID string)
 			&i.Mime,
 			&i.Size,
 			&i.CreatedAt,
-			&i.HasDescription,
 		); err != nil {
 			return nil, err
 		}
@@ -488,7 +484,7 @@ func (q *Queries) ListAttachmentMetasForChat(ctx context.Context, chatID string)
 }
 
 const listAttachmentsByMessage = `-- name: ListAttachmentsByMessage :many
-SELECT a.id, a.chat_id, a.filename, a.kind, a.mime, a.size, a.data, a.description, a.created_at FROM attachments a
+SELECT a.id, a.chat_id, a.filename, a.kind, a.mime, a.size, a.data, a.created_at FROM attachments a
 JOIN message_attachments ma ON ma.attachment_id = a.id
 WHERE ma.message_id = ? ORDER BY a.created_at ASC
 `
@@ -510,7 +506,6 @@ func (q *Queries) ListAttachmentsByMessage(ctx context.Context, messageID string
 			&i.Mime,
 			&i.Size,
 			&i.Data,
-			&i.Description,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -963,20 +958,6 @@ func (q *Queries) SearchChats(ctx context.Context, arg SearchChatsParams) ([]Cha
 		return nil, err
 	}
 	return items, nil
-}
-
-const setAttachmentDescription = `-- name: SetAttachmentDescription :exec
-UPDATE attachments SET description = ? WHERE id = ?
-`
-
-type SetAttachmentDescriptionParams struct {
-	Description string
-	ID          string
-}
-
-func (q *Queries) SetAttachmentDescription(ctx context.Context, arg SetAttachmentDescriptionParams) error {
-	_, err := q.db.ExecContext(ctx, setAttachmentDescription, arg.Description, arg.ID)
-	return err
 }
 
 const setGeneratedTitle = `-- name: SetGeneratedTitle :execrows

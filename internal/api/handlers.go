@@ -1076,19 +1076,3 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", time.UnixMilli(att.CreatedAt), bytes.NewReader(att.Data))
 }
 
-// handleGetAttachmentDescription serves the cached vision-model description
-// of an image attachment (the text the chat model is shown in place of the
-// image). 404 when the attachment doesn't exist or was never described.
-func (s *Server) handleGetAttachmentDescription(w http.ResponseWriter, r *http.Request) {
-	att, ok := s.attachmentByID(w, r.Context(), r.PathValue("id"))
-	if !ok {
-		return
-	}
-	if att.Kind != attach.KindImage || att.Description == "" {
-		writeError(w, http.StatusNotFound, "no description for this attachment")
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	http.ServeContent(w, r, "", time.UnixMilli(att.CreatedAt), bytes.NewReader([]byte(att.Description)))
-}

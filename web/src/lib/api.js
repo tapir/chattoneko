@@ -215,11 +215,6 @@ export const api = {
   // so the body is always safe to render as inert text.
   attachmentText: (id) =>
     request("GET", `/attachments/${id}`, undefined, { text: true }),
-  // Vision-model description of an image attachment (the text the chat model
-  // is shown in place of the image). 404 when the attachment was never
-  // described.
-  attachmentDescription: (id) =>
-    request("GET", `/attachments/${id}/description`, undefined, { text: true }),
 
   // Probe a candidate server URL (native setup flow): GET /api/meta without
   // any auth. 5s timeout — the browser default on unreachable hosts can wait

@@ -39,7 +39,6 @@ import (
 	"chattoneko/internal/store"
 	"chattoneko/internal/titlegen"
 	"chattoneko/internal/tools"
-	"chattoneko/internal/vision"
 )
 
 //go:embed web/dist
@@ -137,7 +136,7 @@ func run() error {
 	// Engine (server-scoped context: generations survive client disconnects).
 	serverCtx, serverCancel := context.WithCancel(context.Background())
 	defer serverCancel()
-	eng := engine.New(serverCtx, st, prov, catalog, cfgStore, vision.New(cfgStore))
+	eng := engine.New(serverCtx, st, prov, catalog, cfgStore)
 	if err := eng.RecoverCrashed(ctx); err != nil {
 		slog.Warn("crash recovery", "error", err)
 	}

@@ -62,8 +62,7 @@ CREATE TABLE attachments (
   mime TEXT NOT NULL,
   size INTEGER NOT NULL,                     -- original file size
   data BLOB NOT NULL,                        -- image: re-encoded PNG; text: raw UTF-8 bytes
-  description TEXT NOT NULL DEFAULT '',      -- vision-model description of the image; '' until
-                                             -- generated lazily, then cached forever
+  description TEXT NOT NULL DEFAULT '',      -- dropped by 005
   created_at INTEGER NOT NULL
 );
 CREATE INDEX idx_attachments_message ON attachments(message_id);

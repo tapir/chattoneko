@@ -78,9 +78,9 @@ type ModelsConfig struct {
 	// DefaultTaskModel is the model id used by background tasks (title
 	// generation). It talks to the same provider as chat.
 	DefaultTaskModel string `json:"default_task_model"`
-	// DefaultVisionModel is the model id used to describe images for chat
-	// models that lack image input. Optional: when empty, images are sent
-	// to the chat model as-is. It talks to the same provider as chat.
+	// DefaultVisionModel designates a model with image input, reserved for
+	// upcoming vision-backed features. Optional; talks to the same provider
+	// as chat.
 	DefaultVisionModel string `json:"default_vision_model"`
 }
 

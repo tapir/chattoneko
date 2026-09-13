@@ -68,22 +68,17 @@
   const canHover = matchMedia('(hover: hover)').matches;
   let hintOpen = $state(false);
 
-  // Vision-model hint: warn when staged images target a chat model that
-  // can't see them — the server substitutes a vision-model description in
-  // that case (no images travel to the chat model).
+  // Image hint: warn when staged images target a chat model whose metadata
+  // lacks image input.
   let currentInputModality = $derived(
     app.modelInfo.find((m) => m.model_id === currentModel)?.input_modality ?? [],
   );
   let hasStagedImages = $derived(pending.some((a) => a.kind === 'image'));
-  let imageHint = $derived.by(() => {
-    if (!hasStagedImages) return '';
-    // Models without stored metadata default to text-only server-side.
-    if (currentInputModality.includes('image')) return '';
-    const visionModel = app.config?.models?.default_vision_model ?? '';
-    return visionModel
-      ? `This model can't see images — they'll be described by ${visionModel}.`
-      : "This model can't see images, and no vision model is configured.";
-  });
+  let imageHint = $derived(
+    hasStagedImages && !currentInputModality.includes('image')
+      ? "This model can't see images."
+      : '',
+  );
 
   // Switching model snaps to that model's configured default effort — the
   // previous model's level is not a choice worth carrying over.

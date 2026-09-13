@@ -189,14 +189,10 @@ WHERE ma.message_id = ? ORDER BY a.created_at ASC;
 -- to messages in one query instead of one query per message. One row per
 -- (message, attachment) link.
 -- name: ListAttachmentMetasForChat :many
-SELECT a.id, a.chat_id, ma.message_id, a.filename, a.kind, a.mime, a.size, a.created_at,
-       CAST((a.description != '') AS BOOLEAN) AS has_description
+SELECT a.id, a.chat_id, ma.message_id, a.filename, a.kind, a.mime, a.size, a.created_at
 FROM attachments a
 JOIN message_attachments ma ON ma.attachment_id = a.id
 WHERE a.chat_id = ? ORDER BY a.created_at ASC;
-
--- name: SetAttachmentDescription :exec
-UPDATE attachments SET description = ? WHERE id = ?;
 
 -- Idempotent (showing the same file twice stays one link) and chat-scoped, so
 -- an id from another chat links nothing.

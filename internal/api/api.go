@@ -72,7 +72,6 @@ func (s *Server) Handler() http.Handler {
 	gated("DELETE /api/chats/{id}/generation", s.handleStopGeneration)
 	gated("POST /api/chats/{id}/attachments", s.handleUpload)
 	gated("GET /api/attachments/{id}", s.handleGetAttachment)
-	gated("GET /api/attachments/{id}/description", s.handleGetAttachmentDescription)
 
 	// Static SPA with fallback for client-side routes.
 	mux.Handle("/", spaHandler{static: http.FileServerFS(s.staticFS), fs: s.staticFS})

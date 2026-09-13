@@ -68,19 +68,12 @@ type AttachmentMeta struct {
 	Mime      string `json:"mime"`
 	Size      int64  `json:"size"`
 	CreatedAt int64  `json:"created_at"`
-	// HasDescription reports whether a vision-model description is stored
-	// for this image attachment (fetchable via the description endpoint).
-	HasDescription bool `json:"has_description,omitempty"`
 }
 
 // Attachment includes the blob data.
 type Attachment struct {
 	AttachmentMeta
 	Data []byte `json:"-"`
-	// Description is the vision-model text description of an image
-	// attachment ('' until generated). Cache of what the chat model is
-	// shown in place of the image; not part of the API JSON.
-	Description string `json:"-"`
 }
 
 // Message is a chat message with its tool calls and attachments loaded.
@@ -246,27 +239,25 @@ func reasoningJSON(parts []string) string {
 
 func attachmentMetaRow(a query.ListAttachmentMetasForChatRow) AttachmentMeta {
 	return AttachmentMeta{
-		ID:             a.ID,
-		ChatID:         a.ChatID,
-		Filename:       a.Filename,
-		Kind:           a.Kind,
-		Mime:           a.Mime,
-		Size:           a.Size,
-		CreatedAt:      a.CreatedAt,
-		HasDescription: a.HasDescription,
+		ID:        a.ID,
+		ChatID:    a.ChatID,
+		Filename:  a.Filename,
+		Kind:      a.Kind,
+		Mime:      a.Mime,
+		Size:      a.Size,
+		CreatedAt: a.CreatedAt,
 	}
 }
 
 func attachmentMeta(a query.Attachment) AttachmentMeta {
 	return AttachmentMeta{
-		ID:             a.ID,
-		ChatID:         a.ChatID,
-		Filename:       a.Filename,
-		Kind:           a.Kind,
-		Mime:           a.Mime,
-		Size:           a.Size,
-		CreatedAt:      a.CreatedAt,
-		HasDescription: a.Description != "",
+		ID:        a.ID,
+		ChatID:    a.ChatID,
+		Filename:  a.Filename,
+		Kind:      a.Kind,
+		Mime:      a.Mime,
+		Size:      a.Size,
+		CreatedAt: a.CreatedAt,
 	}
 }
 
@@ -678,7 +669,7 @@ func (s *Store) GetAttachment(ctx context.Context, id string) (*Attachment, erro
 	if err != nil {
 		return nil, notFound(err)
 	}
-	return &Attachment{AttachmentMeta: attachmentMeta(row), Data: row.Data, Description: row.Description}, nil
+	return &Attachment{AttachmentMeta: attachmentMeta(row), Data: row.Data}, nil
 }
 
 // ListAttachmentsByMessage returns attachment metas of a message.
@@ -701,16 +692,6 @@ func (s *Store) LinkAttachmentToMessage(ctx context.Context, attachmentID, messa
 		AttachmentID: attachmentID,
 		MessageID:    messageID,
 		ChatID:       chatID,
-	})
-}
-
-// SetAttachmentDescription stores the vision-model description of an image
-// attachment (” clears it). Write-once in practice: once set, the
-// description is reused for every generation that needs it.
-func (s *Store) SetAttachmentDescription(ctx context.Context, attachmentID, description string) error {
-	return s.q.SetAttachmentDescription(ctx, query.SetAttachmentDescriptionParams{
-		Description: description,
-		ID:          attachmentID,
 	})
 }
 

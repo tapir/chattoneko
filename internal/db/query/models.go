@@ -5,15 +5,14 @@
 package query
 
 type Attachment struct {
-	ID          string
-	ChatID      string
-	Filename    string
-	Kind        string
-	Mime        string
-	Size        int64
-	Data        []byte
-	Description string
-	CreatedAt   int64
+	ID        string
+	ChatID    string
+	Filename  string
+	Kind      string
+	Mime      string
+	Size      int64
+	Data      []byte
+	CreatedAt int64
 }
 
 type Chat struct {

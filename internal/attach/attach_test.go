@@ -216,26 +216,6 @@ func TestSerializeText(t *testing.T) {
 	}
 }
 
-func TestSerializeImageDescription(t *testing.T) {
-	out := SerializeImageDescription("cat.png", "att-42", "a fluffy orange cat")
-	// Same <file> envelope as text attachments, keeping the image's own
-	// filename so the model associates the block with the attachment.
-	if !strings.HasPrefix(out, `<file name="cat.png" id="att-42">`) {
-		t.Fatalf("bad envelope: %q", out)
-	}
-	if !strings.HasSuffix(out, `</file id="att-42">`) {
-		t.Fatalf("closer missing boundary id: %q", out)
-	}
-	// The header marks the block as an image description rather than file
-	// content, and the description follows verbatim.
-	if !strings.Contains(out, "[Detailed text description of the image file \"cat.png\"") {
-		t.Fatalf("description header missing: %q", out)
-	}
-	if !strings.Contains(out, "\na fluffy orange cat") {
-		t.Fatalf("description text missing: %q", out)
-	}
-}
-
 // fakePNGHeader builds a minimal structurally-valid PNG (signature + IHDR
 // only, no pixel data) claiming the given dimensions.
 func fakePNGHeader(t testing.TB, w, h uint32) []byte {

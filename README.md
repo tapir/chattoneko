@@ -14,7 +14,6 @@ It is extremely small. Everything is one static Go binary with the web UI embedd
 - Replies stream in as they are written, and can be stopped at any time.
 - Models that reason out loud show their thinking in collapsible blocks, one per step of a tool-using reply, each next to the tool calls it produced.
 - Send images and text files as attachments.
-- Vision for text-only models: a separate vision model describes the image for them.
 - Tools the model can call, plus any MCP server you add.
 - The model can hand you files back as download links, and show images inline.
 - Chats are saved and titled automatically; search, rename, delete.
@@ -96,12 +95,6 @@ Four integrated tools, each toggleable per chat and globally in settings:
 - `fetch` — reads a URL and returns its text to the model: a page, a JSON API, anything textual, truncated and labelled when it is very large. A body that isn't text is an error rather than base64 the model can't read — handing you a file from a URL is `create_file`'s job.
 
 Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart. Each server card carries a **Fetch** button top right, next to the delete icon, that dials it and lists its tools right there with their own on/off defaults, so the global **Tool defaults** list stays purely the integrated tools above. Every MCP tool row also has an optional **title** box: the friendly label the chat shows while that tool runs (`web_exa_search` → "Searching web…") instead of the raw name. Leave it empty to keep the tool's own title, or the name when it has none — integrated tools have theirs built in.
-
-## Vision
-
-Not every model can see. If your chat model's input modalities do not include images, set a separate vision model in settings. When an image arrives in such a chat, ChattoNeko asks the vision model for a detailed description, caches it on the attachment, and injects that description into the conversation. You still see the image; the text-only model gets an accurate account of it, once, and reuses it on every later regeneration.
-
-With no vision model configured, images are passed to the chat model as-is, which works only if it accepts them.
 
 ## FAQ
 

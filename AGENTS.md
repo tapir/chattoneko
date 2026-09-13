@@ -8,7 +8,7 @@ Layout: `main.go` + `internal/` (Go backend), `web/` (Svelte 5 + Vite + Tailwind
 
 Details live in `docs/`, not here. Read the relevant one before changing that area:
 
-- [docs/backend.md](docs/backend.md) — Go packages, DB/sqlc, config, provider streaming, engine turn loop, SSE hubs, tools/MCP, vision, attach, auth.
+- [docs/backend.md](docs/backend.md) — Go packages, DB/sqlc, config, provider streaming, engine turn loop, SSE hubs, tools/MCP, attach, auth.
 - [docs/frontend.md](docs/frontend.md) — Svelte runes, component tree, state stores, markdown pipeline, local shadcn-style UI kit and its editing rules.
 - [docs/mobile.md](docs/mobile.md) — Capacitor setup, native bridge, build/sync, icons, emulator targets.
 

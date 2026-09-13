@@ -1,5 +1,5 @@
 // Package llm builds the non-streaming OpenAI-compatible clients the
-// background services use (vision descriptions, title generation). One
+// background services use (title generation). One
 // client is cached per live (endpoint, key, model, effort) tuple, so
 // provider/model/effort changes take effect without a restart while the
 // underlying http.Client — and its connection pool — survives between calls.

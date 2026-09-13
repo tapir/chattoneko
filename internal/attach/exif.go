@@ -5,7 +5,7 @@
 // standard-library JPEG decoder ignores EXIF entirely, and this package
 // re-encodes every image to PNG (which carries no EXIF), so an uncorrected
 // photo would arrive rotated 90/180/270° everywhere downstream (message
-// rendering, vision model). Fix: read the tag from the raw upload and bake
+// rendering). Fix: read the tag from the raw upload and bake
 // the rotation into the pixels before downscale + re-encode.
 package attach
 

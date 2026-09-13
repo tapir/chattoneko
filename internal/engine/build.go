@@ -4,21 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"chattoneko/internal/attach"
 	"chattoneko/internal/provider"
 	"chattoneko/internal/store"
-	"chattoneko/internal/vision"
 )
-
-// describeTimeout bounds one vision-model description call; a slow provider
-// stalls at most one image, then the image is sent as-is.
-const describeTimeout = 60 * time.Second
 
 // chatParams loads the chat and derives provider.GenParams from its persisted
 // per-chat settings. The loaded chat is returned alongside so callers don't
@@ -50,17 +43,14 @@ func (e *Engine) chatParams(ctx context.Context, chatID string) (*store.Chat, pr
 // for a one-shot build) instead of re-reading every blob on every tool-loop
 // iteration.
 //
-// Image attachments go out as PNG data URLs when the chat model accepts
-// images. When it doesn't, each image is replaced by a vision-model text
-// description (generated once and cached on the attachment row); when no
-// vision model is configured or the call fails, the raw image is sent
-// anyway as the fallback.
+// Image attachments always go out as PNG data URLs; whether the model can
+// actually see them is between the user and the provider (the Composer
+// warns when the picked model's metadata lacks image input).
 func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, msgs []*store.Message, attCache map[string]*store.Attachment) ([]provider.Message, error) {
 	out := make([]provider.Message, 0, len(msgs)+1)
 	if sp := e.SystemPrompt(); sp != "" {
 		out = append(out, provider.Message{Role: "system", Content: sp})
 	}
-	seesImages := e.modelSeesImages(ctx, chat.Model)
 	for _, m := range msgs {
 		switch m.Role {
 		case store.RoleUser:
@@ -80,15 +70,6 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 				}
 				switch att.Kind {
 				case attach.KindImage:
-					if !seesImages {
-						if desc := e.imageDescription(ctx, att); desc != "" {
-							content += "\n\n" + attach.SerializeImageDescription(att.Filename, att.ID, desc)
-							continue
-						}
-						// No description available (no vision model
-						// configured or the call failed): fall back to
-						// sending the image itself.
-					}
 					images = append(images, provider.Image{Data: att.Data})
 				case attach.KindText:
 					content += "\n\n" + attach.SerializeText(att.Filename, att.ID, string(att.Data))
@@ -121,67 +102,6 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 		}
 	}
 	return out, nil
-}
-
-// modelSeesImages reports whether the model's input modality includes
-// images. Unknown models and metadata read failures fall back to the stored
-// default (text-only), i.e. images get described.
-func (e *Engine) modelSeesImages(ctx context.Context, model string) bool {
-	if model == "" {
-		return false
-	}
-	metas, err := e.cfg.ModelMetas(ctx, []string{model})
-	if err != nil {
-		slog.Warn("engine: load model metadata, treating model as text-only", "model", model, "error", err)
-		return false
-	}
-	for _, m := range metas[0].InputModality {
-		if m == "image" {
-			return true
-		}
-	}
-	return false
-}
-
-// imageDescription returns the cached vision-model description of att,
-// generating and persisting it first when missing. ” means "no description
-// available" (no describer configured, unconfigured provider/model, failed
-// or empty call) and callers fall back to sending the raw image. The cached
-// attachment object is updated in place so tool-loop iterations and later
-// messages in the same build reuse it without re-reading the row.
-func (e *Engine) imageDescription(ctx context.Context, att *store.Attachment) string {
-	if att.Description != "" {
-		return att.Description
-	}
-	if e.vision == nil {
-		return ""
-	}
-	dctx, cancel := context.WithTimeout(ctx, describeTimeout)
-	desc, err := e.vision.DescribeImage(dctx, att.Data, att.Filename)
-	cancel()
-	switch {
-	case errors.Is(err, vision.ErrNotConfigured):
-		return ""
-	case errors.Is(err, context.Canceled):
-		// Generation was stopped mid-description; the image build is
-		// about to be abandoned anyway — no need to warn or fall back.
-		return ""
-	case err != nil:
-		slog.Warn("engine: image description failed, sending image as-is",
-			"attachment", att.ID, "filename", att.Filename, "error", err)
-		return ""
-	}
-	desc = strings.TrimSpace(desc)
-	if desc == "" {
-		return ""
-	}
-	if err := e.store.SetAttachmentDescription(ctx, att.ID, desc); err != nil {
-		slog.Warn("engine: persist image description", "attachment", att.ID, "error", err)
-		// Still usable for this generation even if persistence failed.
-	}
-	att.Description = desc
-	att.HasDescription = true
-	return desc
 }
 
 // enabledTools computes the per-chat effective tool set: config defaults

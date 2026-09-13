@@ -83,7 +83,7 @@ func testEngine(t *testing.T, prov provider.Provider, m ToolCatalog, limits ...c
 	}
 	serverCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() { cancel(); _ = sqlDB.Close() })
-	return New(serverCtx, st, prov, m, cfgs, nil), st, cancel
+	return New(serverCtx, st, prov, m, cfgs), st, cancel
 }
 
 func newTestChat(t *testing.T, st *store.Store) string {

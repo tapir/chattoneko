@@ -614,7 +614,7 @@
                       </button>
                       <button
                         type="button"
-                        title="Vision model (describes images for models without image input)"
+                        title="Vision model (reserved for upcoming image features)"
                         aria-label="Vision model"
                         aria-pressed={defaultVisionModel === card.id}
                         class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors {defaultVisionModel === card.id

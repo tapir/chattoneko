@@ -12,16 +12,26 @@
   import { Input } from '$lib/components/ui/input';
 
   let { tool, checked, onToggle, titleValue = '', onTitle = null } = $props();
+
+  // Tap the name/description to unclamp and read the full description.
+  let expanded = $state(false);
 </script>
 
 <div class="flex items-center gap-3 rounded-md p-2 transition-colors hover:bg-accent/50">
   <div class="flex shrink-0 items-center">
     <Switch checked={checked} aria-label="{tool.name} enabled" onCheckedChange={onToggle} />
   </div>
-  <div class="min-w-0 flex-1">
+  <button
+    type="button"
+    class="min-w-0 flex-1 text-left"
+    aria-expanded={expanded}
+    onclick={() => (expanded = !expanded)}
+  >
     <div class="truncate text-sm leading-5 font-medium">{tool.name}</div>
-    <div class="line-clamp-2 text-xs text-muted-foreground">{tool.description || tool.server}</div>
-  </div>
+    <div class="{expanded ? '' : 'line-clamp-2'} text-xs text-muted-foreground">
+      {tool.description || tool.server}
+    </div>
+  </button>
   {#if onTitle}
     <div class="w-36 shrink-0">
       <Input

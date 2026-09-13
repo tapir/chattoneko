@@ -37,7 +37,10 @@ type tool struct {
 	// Title is the USER-facing label the chat UI shows instead of Name
 	// ("Coding…"). Hardcoded here like the rest of the tool's text; the
 	// model never sees it. Empty falls back to Name in the UI.
-	Title   string
+	Title string
+	// Timeout bounds one call, overriding callTimeout. Only a handler doing
+	// remote I/O needs it (agent waits on another model); 0 keeps the default.
+	Timeout time.Duration
 	Handler handler
 }
 
@@ -102,7 +105,11 @@ func (r *registry) Call(ctx context.Context, display, argsJSON string, meta mcph
 	if !ok {
 		return "", false, fmt.Errorf("unknown tool %q", display)
 	}
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	timeout := callTimeout
+	if t := r.tools[i].Timeout; t > 0 {
+		timeout = t
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// An in-process handler (including third-party VM code like the Lua
 	// sandbox) must not be able to kill the generation — or the whole

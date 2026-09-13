@@ -8,27 +8,30 @@ import (
 	"chattoneko/internal/store"
 )
 
-// fileStore is the attachment store create_file works against: it stores the
-// file and links it to the assistant message being generated, in one step, so
-// a successful call always means the user can see it. *store.Store implements
-// it; tests can substitute a fake.
+// fileStore is the attachment store the file and agent tools work against:
+// create_file stores a file and links it to the assistant message being
+// generated in one step, so a successful call always means the user can see
+// it; agent reads one back by id. *store.Store implements it; tests can
+// substitute a fake.
 type fileStore interface {
 	CreateAttachment(ctx context.Context, chatID, filename, kind, mime string, size int64, data []byte) (*store.AttachmentMeta, error)
 	LinkAttachmentToMessage(ctx context.Context, attachmentID, messageID, chatID string) error
+	GetAttachment(ctx context.Context, id string) (*store.Attachment, error)
 }
 
 // Builtin returns the hardcoded catalog of integrated tools. Add new
 // integrated tools to this list — each tool's definition (name, description,
 // schema, default toggle, handler) lives in its own file; tools that need
 // dependencies (stores) are constructed here with them, so no package-level
-// wiring state is needed. files is the attachment store create_file uses;
-// limits supplies the live-configured size limits for what it downloads.
-func Builtin(files fileStore, limits *config.Store) *registry {
+// wiring state is needed. cfgs is the live config store: create_file reads the
+// size limits from it, agent the designated specialist models.
+func Builtin(files fileStore, cfgs *config.Store) *registry {
 	return newRegistry(
 		Time,
 		Code,
-		CreateFile(files, limits),
+		CreateFile(files, cfgs),
 		Fetch,
+		Agent(files, cfgs),
 	)
 }
 

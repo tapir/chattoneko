@@ -13,7 +13,7 @@ It is extremely small. Everything is one static Go binary with the web UI embedd
 - Chat with any model through an OpenAI-compatible (chat completions) API. Keep a list of favorites and switch per chat.
 - Replies stream in as they are written, and can be stopped at any time.
 - Models that reason out loud show their thinking in collapsible blocks, one per step of a tool-using reply, each next to the tool calls it produced.
-- Send images, text files, audio and PDFs as attachments. A file the picked model can't read is kept anyway and mentioned in the message by its stored id, so switching models never loses it.
+- Send images, text files, audio and PDFs as attachments. A file the picked model can't read is kept anyway and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that CAN read it (the `agent` tool), once you flag one in settings.
 - Tools the model can call, plus any MCP server you add.
 - The model can hand you files back as download links, and show images inline.
 - Chats are saved and titled automatically; search, rename, delete.
@@ -63,7 +63,7 @@ Both artifacts carry a version, shown in the sidebar's footer: `VERSION` (defaul
 
 There is no config file. On first start the database is seeded with defaults and the server comes up. All configuration happens after your first visit to the page: enter your provider's base URL and API key, pick your models, done. Settings are stored in the database and apply live, no restart needed.
 
-If your provider is OpenRouter, a lot of this is automated. ChattoNeko reads the provider's `/models` endpoint, and OpenRouter reports everything it uses: context length, input and output modalities, supported reasoning efforts and the default effort. Pick a model and its capabilities are filled in for you, which is also how the app knows whether a model can see images. Other OpenAI-compatible providers report less; missing values fall back to sensible defaults and can be edited by hand.
+If your provider is OpenRouter, a lot of this is automated. ChattoNeko reads the provider's `/models` endpoint, and OpenRouter reports everything it uses: context length, input and output modalities, supported reasoning efforts and the default effort. Pick a model and its capabilities are filled in for you, which is also how the app knows whether a model can see images or read PDFs (OpenRouter calls that input `file`). Other OpenAI-compatible providers report less; missing values fall back to sensible defaults and can be edited by hand.
 
 ### Environment variables
 
@@ -87,12 +87,13 @@ The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `
 
 ## Tools
 
-Four integrated tools, each toggleable per chat and globally in settings:
+Five integrated tools, each toggleable per chat and globally in settings:
 
 - `time` — the server's current date, time and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow", "next Friday" or "near me".
 - `code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8 and JSON encode/decode. No file, network, environment or debug access, capped by time, by work, and by output size. The tool description doubles as a Lua 5.1 → 5.4 migration guide for the model (what was renamed or removed, integer/float semantics, patterns vs regex, table borders).
 - `create_file` — gives you a file, and shows it on the reply in the same step: an image appears inline, a text file opens as a preview, anything else downloads when you click it. The model either writes the file (text as text, binary as base64) or passes a URL and we download it, which keeps the bytes out of the model's context.
 - `fetch` — reads a URL and returns its text to the model: a page, a JSON API, anything textual, truncated and labelled when it is very large. A body that isn't text is an error rather than base64 the model can't read — handing you a file from a URL is `create_file`'s job.
+- `agent` — asks a specialist model about an attachment the chat model can't read itself, and brings the answer back. You flag the specialists in settings: a **Vision** model for images, a **Document** model for PDFs, an **Audio** model for recordings. The tool is only offered to a chat model that is actually missing something, and its description lists exactly the file types that model can't take — a model that sees images, reads PDFs and hears audio never sees the tool at all. Each exchange is one question and one answer: the specialist gets the file and the question, never your conversation.
 
 Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart. Each server card carries a **Fetch** button top right, next to the delete icon, that dials it and lists its tools right there with their own on/off defaults, so the global **Tool defaults** list stays purely the integrated tools above. Every MCP tool row also has an optional **title** box: the friendly label the chat shows while that tool runs (`web_exa_search` → "Searching web…") instead of the raw name. Leave it empty to keep the tool's own title, or the name when it has none — integrated tools have theirs built in.
 

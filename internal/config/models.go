@@ -9,8 +9,10 @@ import (
 	"time"
 )
 
-// Modalities a model can accept/produce.
-var validModalities = map[string]bool{"text": true, "image": true, "audio": true}
+// Modalities a model can accept/produce. "document" is PDF input: it is its
+// own modality because plenty of models take images but not PDFs (and the
+// other way round), so image says nothing about it.
+var validModalities = map[string]bool{"text": true, "image": true, "document": true, "audio": true}
 
 // ModelMeta is the per-model metadata stored in the models table: what the
 // model accepts/produces, how much context it takes, and which reasoning

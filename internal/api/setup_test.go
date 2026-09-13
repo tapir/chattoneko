@@ -222,7 +222,7 @@ func modelsSrv(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"data":[
 			{"id":"or/vision","context_length":200000,
-			 "architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},
+			 "architecture":{"input_modalities":["text","image","file"],"output_modalities":["text"]},
 			 "reasoning":{"supported_efforts":["low","medium"],"default_effort":"low"}},
 			{"id":"or/plain","object":"model"}
 		]}`)
@@ -280,7 +280,8 @@ func TestSetupModelsFetchAndDefaults(t *testing.T) {
 	if v.ContextWindow != 200000 || out.Source["or/vision"] != "provider" {
 		t.Errorf("or/vision = %+v (source %q)", v, out.Source["or/vision"])
 	}
-	if !slices.Equal(v.InputModality, []string{"text", "image"}) {
+	// OpenRouter's "file" is our "document" (PDF input).
+	if !slices.Equal(v.InputModality, []string{"text", "image", "document"}) {
 		t.Errorf("or/vision input = %v", v.InputModality)
 	}
 	if !slices.Equal(v.ReasoningEfforts, []string{"low", "medium"}) || v.ReasoningDefault != "low" {

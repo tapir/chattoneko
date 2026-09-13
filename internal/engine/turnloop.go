@@ -212,8 +212,11 @@ func (e *Engine) runGeneration(ag *activeGen) {
 		return
 	}
 	// Read once per generation: the model cannot change mid-run, and the
-	// metadata lookup is a DB read we don't want inside the tool loop.
-	vision := e.modelAcceptsImages(ctx, params.Model)
+	// metadata lookup is a DB read we don't want inside the tool loop. The
+	// modalities decide both how attachments reach the prompt and what the
+	// agent tool has left to offer.
+	mods := e.inputModalities(ctx, params.Model)
+	vision := slices.Contains(mods, "image")
 
 	// turn is the 0-based index of the provider round trip being streamed: it
 	// keys this generation's reasoning parts, is stamped on the turn's wire
@@ -249,7 +252,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 			stepFailed("build request: " + err.Error())
 			return
 		}
-		tools, err := e.effectiveTools(ctx, chat)
+		tools, err := e.effectiveTools(ctx, chat, mods)
 		if err != nil {
 			stepFailed("tools: " + err.Error())
 			return

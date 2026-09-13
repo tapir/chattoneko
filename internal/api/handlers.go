@@ -426,10 +426,10 @@ func textInputModels(whitelist []string, metas []config.ModelMeta) []string {
 func metaFromFetched(id string, f provider.FetchedModel) config.ModelMeta {
 	m := config.DefaultModelMeta(id)
 	if len(f.InputModalities) > 0 {
-		m.InputModality = append([]string(nil), f.InputModalities...)
+		m.InputModality = fetchedModalities(f.InputModalities)
 	}
 	if len(f.OutputModalities) > 0 {
-		m.OutputModality = append([]string(nil), f.OutputModalities...)
+		m.OutputModality = fetchedModalities(f.OutputModalities)
 	}
 	if f.ContextLength > 0 {
 		m.ContextLength = f.ContextLength
@@ -440,6 +440,20 @@ func metaFromFetched(id string, f provider.FetchedModel) config.ModelMeta {
 	}
 	config.SanitizeMeta(&m)
 	return m
+}
+
+// fetchedModalities copies provider-reported modalities into our vocabulary:
+// OpenRouter calls PDF input "file", we call it "document" (the same word the
+// attachment <file type=...> blocks and the document-model role use).
+// Anything else passes through for SanitizeMeta to filter.
+func fetchedModalities(in []string) []string {
+	out := append([]string(nil), in...)
+	for i, m := range out {
+		if m == "file" {
+			out[i] = "document"
+		}
+	}
+	return out
 }
 
 // ---- chats ----

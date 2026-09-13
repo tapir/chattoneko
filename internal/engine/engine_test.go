@@ -422,7 +422,7 @@ func TestHistoryOnlyToolIsPlaceholder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defs, err := eng.effectiveTools(ctx, chat)
+	defs, err := eng.effectiveTools(ctx, chat, nil)
 	if err != nil {
 		t.Fatalf("effectiveTools: %v", err)
 	}
@@ -1260,21 +1260,73 @@ func TestBuildMessagesUnreadableAttachments(t *testing.T) {
 	}
 }
 
-// TestModelAcceptsImages: the modality lookup the vision decision rests on.
-// Unfetched metadata is text-only by default, so a missing row must not claim
-// image input.
-func TestModelAcceptsImages(t *testing.T) {
+// TestInputModalities: the modality lookup the vision decision and the agent
+// tool's offer rest on. Unfetched metadata is text-only by default, so a
+// missing row must not claim image input.
+func TestInputModalities(t *testing.T) {
 	eng, _, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
 	ctx := context.Background()
-	if eng.modelAcceptsImages(ctx, "no-such-row") {
-		t.Fatal("unset metadata must not claim image input")
+	if mods := eng.inputModalities(ctx, "no-such-row"); slices.Contains(mods, "image") {
+		t.Fatalf("unset metadata must not claim image input: %v", mods)
 	}
 	if err := eng.cfg.UpsertModelMetas(ctx, []config.ModelMeta{
 		{ModelID: "vision", InputModality: []string{"text", "image"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !eng.modelAcceptsImages(ctx, "vision") {
-		t.Fatal("stored image input not seen")
+	if mods := eng.inputModalities(ctx, "vision"); !slices.Contains(mods, "image") {
+		t.Fatalf("stored image input not seen: %v", mods)
+	}
+}
+
+// TestEffectiveToolsTailorsAgent: the agent tool is advertised only for the
+// file types the chat model cannot take itself, and stays out of the request
+// entirely when it can take all of them.
+func TestEffectiveToolsTailorsAgent(t *testing.T) {
+	fake := &fakeMCP{tools: []mcphub.Entry{
+		{Display: tools.AgentName, Description: "catalog description", DefaultEnabled: true},
+		{Display: "time", Description: "clock", DefaultEnabled: true},
+	}}
+	eng, st, _ := testEngine(t, &scriptedProvider{}, fake)
+	ctx := context.Background()
+	chat, err := st.GetChat(ctx, newTestChat(t, st))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	agentDef := func(mods []string) *provider.Tool {
+		t.Helper()
+		defs, err := eng.effectiveTools(ctx, chat, mods)
+		if err != nil {
+			t.Fatalf("effectiveTools: %v", err)
+		}
+		for i := range defs {
+			if defs[i].Name == tools.AgentName {
+				return &defs[i]
+			}
+		}
+		return nil
+	}
+
+	// A model that hears audio still needs help with images and PDFs, and the
+	// description says exactly that.
+	got := agentDef([]string{"text", "audio"})
+	if got == nil {
+		t.Fatal("agent tool missing for a model that can't see")
+	}
+	if !strings.Contains(got.Description, "images") || !strings.Contains(got.Description, "PDF documents") {
+		t.Errorf("description does not offer the missing types: %q", got.Description)
+	}
+	if strings.Contains(got.Description, "audio recordings") {
+		t.Errorf("description offers audio to a model that hears it: %q", got.Description)
+	}
+	if got.Description == "catalog description" {
+		t.Error("the catalog's static description went out instead of the tailored one")
+	}
+
+	// A model that takes everything needs no specialist, so the tool is not
+	// offered at all.
+	if got := agentDef([]string{"text", "image", "document", "audio"}); got != nil {
+		t.Fatalf("agent tool advertised to a model that needs none: %+v", got)
 	}
 }

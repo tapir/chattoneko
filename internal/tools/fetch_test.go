@@ -199,7 +199,7 @@ func TestBuiltinFileTools(t *testing.T) {
 	for _, e := range Builtin(&fakeFileStore{}, nil).Tools() {
 		names[e.Display] = true
 	}
-	for _, want := range []string{"create_file", "fetch", "code", "time"} {
+	for _, want := range []string{"create_file", "fetch", "code", "time", "agent"} {
 		if !names[want] {
 			t.Fatalf("catalog is missing %q: %v", want, names)
 		}

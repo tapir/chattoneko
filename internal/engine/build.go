@@ -12,6 +12,7 @@ import (
 	"chattoneko/internal/attach"
 	"chattoneko/internal/provider"
 	"chattoneko/internal/store"
+	"chattoneko/internal/tools"
 )
 
 // chatParams loads the chat and derives provider.GenParams from its persisted
@@ -108,18 +109,18 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 	return out, nil
 }
 
-// modelAcceptsImages reports whether the model's stored metadata lists image
-// input. Metadata never fetched from the provider defaults to text-only
-// (config.DefaultModelMeta), and a failed lookup is treated the same way: the
-// fallback costs the model a picture (it still gets the attachment's id) and
-// never sends image parts to an endpoint that rejects them.
-func (e *Engine) modelAcceptsImages(ctx context.Context, model string) bool {
+// inputModalities returns the model's stored input modalities. Metadata never
+// fetched from the provider defaults to text-only (config.DefaultModelMeta),
+// and a failed lookup is treated the same way: the fallback costs the model a
+// picture (it still gets the attachment's id) and never sends image parts to
+// an endpoint that rejects them.
+func (e *Engine) inputModalities(ctx context.Context, model string) []string {
 	metas, err := e.cfg.ModelMetas(ctx, []string{model})
 	if err != nil || len(metas) == 0 {
 		slog.Warn("engine: load model metadata", "model", model, "error", err)
-		return false
+		return nil
 	}
-	return slices.Contains(metas[0].InputModality, "image")
+	return metas[0].InputModality
 }
 
 // enabledTools computes the per-chat effective tool set: config defaults
@@ -153,12 +154,13 @@ func (e *Engine) SystemPrompt() string {
 // effectiveTools returns the tool definitions to send to the provider:
 // enabled tools ∪ tools referenced anywhere in the chat's history (H3 —
 // omitting a tool whose calls exist in history would make chat_completions
-// reject the request with orphan tool_call ids). History-only tools get a
-// bare placeholder rather than their real definition: they are declared so the
-// provider accepts the old call ids, and re-advertising a disabled or removed
-// tool with its full description reads to the model as an invitation to call
-// it.
-func (e *Engine) effectiveTools(ctx context.Context, chat *store.Chat) ([]provider.Tool, error) {
+// reject the request with orphan tool_call ids). mods are the chat model's
+// input modalities: they decide what the agent tool offers, if anything.
+// History-only tools get a bare placeholder rather than their real definition:
+// they are declared so the provider accepts the old call ids, and
+// re-advertising a disabled or removed tool with its full description reads to
+// the model as an invitation to call it.
+func (e *Engine) effectiveTools(ctx context.Context, chat *store.Chat, mods []string) ([]provider.Tool, error) {
 	catalog := e.catalog.Tools()
 	byDisplay := map[string]int{}
 	for i, t := range catalog {
@@ -171,7 +173,17 @@ func (e *Engine) effectiveTools(ctx context.Context, chat *store.Chat) ([]provid
 	for _, name := range slices.Sorted(maps.Keys(enabled)) {
 		if i, ok := byDisplay[name]; ok {
 			t := catalog[i]
-			defs = append(defs, provider.Tool{Name: t.Display, Description: t.Description, Schema: t.Schema})
+			desc := t.Description
+			// The agent tool speaks for the file types this chat model cannot
+			// take itself; when that is none of them it stays out of the
+			// request entirely.
+			if t.Display == tools.AgentName {
+				var needed bool
+				if desc, needed = tools.AgentDescription(mods); !needed {
+					continue
+				}
+			}
+			defs = append(defs, provider.Tool{Name: t.Display, Description: desc, Schema: t.Schema})
 			included[t.Display] = true
 		}
 	}

@@ -105,15 +105,19 @@
     return { baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
   }
 
-  const MODALITIES = ['text', 'image', 'audio'];
+  // "document" is PDF input, and only an input: a model never produces one.
+  // It is separate from "image" because plenty of models see pictures but
+  // refuse a PDF (and the reverse happens too).
+  const INPUT_MODALITIES = ['text', 'image', 'document', 'audio'];
+  const OUTPUT_MODALITIES = ['text', 'image', 'audio'];
   // The role flags on every model card. `key` doubles as the config field
   // name: the server stores each one as `default_<key>_model`.
   const ROLES = [
     { key: 'chat', label: 'Chat model', icon: MessageCircle },
     { key: 'task', label: 'Task model (background jobs like chat titles)', icon: Zap },
-    { key: 'vision', label: 'Vision model (reserved for upcoming image features)', icon: Eye },
-    { key: 'document', label: 'Document model (reserved for upcoming document features)', icon: FileText },
-    { key: 'audio', label: 'Audio model (reserved for upcoming audio features)', icon: AudioLines },
+    { key: 'vision', label: 'Vision model (describes images for a chat model that can’t see them)', icon: Eye },
+    { key: 'document', label: 'Document model (reads PDFs for a chat model that can’t)', icon: FileText },
+    { key: 'audio', label: 'Audio model (listens to recordings for a chat model that can’t)', icon: AudioLines },
   ];
   const DEFAULT_EFFORTS = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
   const DEFAULT_EFFORT = 'medium';
@@ -513,7 +517,7 @@
           This server isn’t ready yet. Set the <strong>provider</strong> (base URL + API key) and flag a model as
           <strong>Chat</strong> and <strong>Task</strong> below, then save. You can’t close this screen until setup is
           complete. A flag is dropped on save when the model can’t take the input its role needs — text for Chat and
-          Task, image for Vision and Document, audio for Audio.
+          Task, image for Vision, document for Document, audio for Audio.
         </div>
       {/if}
 
@@ -661,7 +665,7 @@
                           }}
                           class="w-full flex-wrap justify-start"
                         >
-                          {#each MODALITIES as mod (mod)}
+                          {#each INPUT_MODALITIES as mod (mod)}
                             <ToggleGroup.Item value={mod}>{mod}</ToggleGroup.Item>
                           {/each}
                         </ToggleGroup.Root>
@@ -678,7 +682,7 @@
                           }}
                           class="w-full flex-wrap justify-start"
                         >
-                          {#each MODALITIES as mod (mod)}
+                          {#each OUTPUT_MODALITIES as mod (mod)}
                             <ToggleGroup.Item value={mod}>{mod}</ToggleGroup.Item>
                           {/each}
                         </ToggleGroup.Root>

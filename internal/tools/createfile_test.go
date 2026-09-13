@@ -20,7 +20,7 @@ type fakeFileStore struct {
 	files []fakeFile
 	links [][2]string // attachment id -> message id
 	// fail switches: one error per method, so a test can fail any step.
-	createErr, linkErr error
+	createErr, linkErr, getErr error
 }
 
 type fakeFile struct {
@@ -54,6 +54,25 @@ func (f *fakeFileStore) LinkAttachmentToMessage(_ context.Context, attachmentID,
 	}
 	f.links = append(f.links, [2]string{attachmentID, messageID})
 	return nil
+}
+
+func (f *fakeFileStore) GetAttachment(_ context.Context, id string) (*store.Attachment, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	for _, file := range f.files {
+		if file.id != id {
+			continue
+		}
+		return &store.Attachment{
+			AttachmentMeta: store.AttachmentMeta{
+				ID: file.id, ChatID: file.chatID, Filename: file.filename,
+				Kind: file.kind, Mime: file.mime, Size: file.size,
+			},
+			Data: file.data,
+		}, nil
+	}
+	return nil, store.ErrNotFound
 }
 
 // shownOn asserts the one file created by a call was linked to the message

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -141,13 +142,14 @@ func (s *Server) handleMe(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.Get()
+	info := s.engine.ModelInfo(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"models": map[string]any{
-			"whitelist":            cfg.Models.Whitelist,
+			"whitelist":            textInputModels(cfg.Models.Whitelist, info),
 			"default_chat_model":   cfg.Models.DefaultChatModel,
 			"default_vision_model": cfg.Models.DefaultVisionModel,
 		},
-		"model_info": s.engine.ModelInfo(r.Context()),
+		"model_info": info,
 		"tools":      s.tools.Tools(),
 		"limits": map[string]any{
 			"upload_max_file_bytes": cfg.Limits.UploadMaxFileBytes,
@@ -397,6 +399,23 @@ func (s *Server) handleSetupMCPTools(w http.ResponseWriter, r *http.Request) {
 		tools = append(tools, map[string]string{"name": e.Display, "description": e.Description, "title": e.Title})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
+}
+
+// textInputModels drops whitelist ids whose metadata offers no "text" input:
+// a model that can't take text can't drive a chat, so the picker shouldn't
+// offer it. Ids with no metadata (defaults = text) are kept.
+func textInputModels(whitelist []string, metas []config.ModelMeta) []string {
+	byID := make(map[string]config.ModelMeta, len(metas))
+	for _, m := range metas {
+		byID[m.ModelID] = m
+	}
+	out := make([]string, 0, len(whitelist))
+	for _, id := range whitelist {
+		if m, ok := byID[id]; !ok || slices.Contains(m.InputModality, "text") {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // metaFromFetched builds one stored ModelMeta from provider-reported data,

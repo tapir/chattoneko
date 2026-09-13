@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -908,5 +909,39 @@ func TestGetAttachmentServing(t *testing.T) {
 	}
 	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") || !strings.Contains(cd, "page.html") {
 		t.Fatalf("content-disposition = %q, want an attachment with the filename", cd)
+	}
+}
+
+// A model that can't take text input can't drive a chat, so /api/config
+// drops it from the whitelist the picker renders. Models with no stored
+// metadata keep the text default and stay.
+func TestGetConfigHidesNonTextModels(t *testing.T) {
+	ts := newTestServer(t, quickProvider{}, false)
+	whitelist := []string{"m", "vision", "plain"}
+	metas := []config.ModelMeta{{ModelID: "vision", InputModality: []string{"image"}}}
+	if _, err := ts.cfg.Update(context.Background(), config.Patch{
+		Models: &config.ModelsPatch{Whitelist: &whitelist, Metas: &metas},
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	rec := ts.do(t, "GET", "/api/config", nil, nil)
+	if rec.Code != 200 {
+		t.Fatalf("config: %d %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		Models struct {
+			Whitelist []string `json:"whitelist"`
+		} `json:"models"`
+		ModelInfo []config.ModelMeta `json:"model_info"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"m", "plain"}; !slices.Equal(out.Models.Whitelist, want) {
+		t.Fatalf("whitelist = %v, want %v", out.Models.Whitelist, want)
+	}
+	// The metadata still reports every model so the settings UI can fix it.
+	if len(out.ModelInfo) != 3 {
+		t.Fatalf("model_info = %d entries, want 3", len(out.ModelInfo))
 	}
 }

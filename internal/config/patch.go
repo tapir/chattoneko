@@ -3,6 +3,8 @@ package config
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 )
 
@@ -78,6 +80,9 @@ func (s *Store) Update(ctx context.Context, patch Patch) (*Config, error) {
 	next := s.Get().clone()
 	applyPatch(next, patch)
 	next.finalize()
+	if err := s.sanitizeDesignated(ctx, next, patch); err != nil {
+		return nil, err
+	}
 	if err := next.validate(); err != nil {
 		return nil, &ValidationError{err}
 	}
@@ -97,6 +102,60 @@ func (s *Store) Update(ctx context.Context, patch Patch) (*Config, error) {
 	}
 	s.notify(next)
 	return next, nil
+}
+
+// sanitizeDesignated clears a designated model that can't do the job it is
+// designated for: the chat and task models must accept "text" input, the
+// vision model "image" input. Clearing rather than rejecting is the point — a
+// broken designation ends up in the same state as a missing one, so Complete()
+// reports the config as unfinished and the settings overlay stays forced open
+// until it is fixed. Metadata lives in the models table, not in the Config
+// snapshot, so this reads it; the patch's metas win over the stored rows
+// because the settings sheet sends the edited card list in the same patch as
+// the designations. (Metas changed behind Update's back —
+// POST /api/setup/models — are caught by the next save.)
+func (s *Store) sanitizeDesignated(ctx context.Context, c *Config, patch Patch) error {
+	designated := []struct {
+		kind     string
+		id       *string
+		modality string
+	}{
+		{"chat", &c.Models.DefaultChatModel, "text"},
+		{"task", &c.Models.DefaultTaskModel, "text"},
+		{"vision", &c.Models.DefaultVisionModel, "image"},
+	}
+	ids := make([]string, 0, len(designated))
+	for _, d := range designated {
+		if *d.id != "" {
+			ids = append(ids, *d.id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	stored, err := s.ModelMetas(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("load model metadata: %w", err)
+	}
+	input := make(map[string][]string, len(stored))
+	for _, m := range stored {
+		input[m.ModelID] = m.InputModality
+	}
+	if patch.Models != nil && patch.Models.Metas != nil {
+		for _, m := range *patch.Models.Metas {
+			// m is a copy: sanitizing it never touches the caller's patch.
+			SanitizeMeta(&m)
+			input[m.ModelID] = m.InputModality
+		}
+	}
+	for _, d := range designated {
+		if *d.id != "" && !slices.Contains(input[*d.id], d.modality) {
+			slog.Warn("config: dropping designated model without the input modality its role needs",
+				"role", d.kind, "model", *d.id, "needs", d.modality)
+			*d.id = ""
+		}
+	}
+	return nil
 }
 
 // applyPatch merges the non-nil patch fields into c.

@@ -516,7 +516,9 @@
       {#if app.setupComplete === false}
         <div class="mx-4 mt-4 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm text-foreground sm:mx-6">
           This server isn’t ready yet. Set the <strong>provider</strong> (base URL + API key) and flag a model as
-          <strong>Chat</strong> and <strong>Task</strong> below, then save. You can’t close this screen until setup is complete.
+          <strong>Chat</strong> and <strong>Task</strong> below, then save. You can’t close this screen until setup is
+          complete. A flag is dropped on save when the model can’t take the input its role needs — text for Chat and
+          Task, image for Vision.
         </div>
       {/if}
 

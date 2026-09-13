@@ -439,11 +439,14 @@ func TestVisionModelPatchAndSanitize(t *testing.T) {
 	ctx := context.Background()
 	s, _ := NewStore(ctx, h)
 
+	// The vision designation requires image input (validateDesignated).
+	vision := []ModelMeta{{ModelID: "v", InputModality: []string{"text", "image"}}}
 	if _, err := s.Update(ctx, Patch{Models: &ModelsPatch{
 		Whitelist:          &[]string{"a", "v"},
 		DefaultChatModel:   ptr("a"),
 		DefaultTaskModel:   ptr("a"),
 		DefaultVisionModel: ptr("v"),
+		Metas:              &vision,
 	}}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -473,11 +476,72 @@ func TestVisionModelPatchAndSanitize(t *testing.T) {
 		DefaultChatModel:   ptr("a"),
 		DefaultTaskModel:   ptr(""),
 		DefaultVisionModel: ptr("v"),
+		Metas:              &vision,
 	}})
 	if err != nil {
 		t.Fatalf("Update 3: %v", err)
 	}
 	if s.Complete() {
 		t.Error("config complete without a task model: the vision model must not substitute for it")
+	}
+}
+
+// A designated model that can't do its job is cleared, not rejected: the save
+// lands in the same state as one with no designation at all, so Complete()
+// reports setup as unfinished and the settings overlay stays forced open until
+// the user picks a model that fits the role.
+func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
+	h := newDB(t)
+	ctx := context.Background()
+	s, err := NewStore(ctx, h)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	update := func(p Patch) *Config {
+		t.Helper()
+		c, err := s.Update(ctx, p)
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		return c
+	}
+	// Provider set, so only the designations decide Complete().
+	update(Patch{Provider: &ProviderPatch{BaseURL: ptr("https://p.example"), APIKey: ptr("k")}})
+	whitelist := []string{"m", "vision", "audio"}
+	stored := []ModelMeta{
+		{ModelID: "vision", InputModality: []string{"image"}},
+		{ModelID: "audio", InputModality: []string{"audio"}},
+	}
+	update(Patch{Models: &ModelsPatch{Whitelist: &whitelist, Metas: &stored}})
+
+	// An image-only model can't be the chat or the task model.
+	c := update(Patch{Models: &ModelsPatch{DefaultChatModel: ptr("vision"), DefaultTaskModel: ptr("vision")}})
+	if c.Models.DefaultChatModel != "" || c.Models.DefaultTaskModel != "" {
+		t.Errorf("designations = %q/%q, want both cleared", c.Models.DefaultChatModel, c.Models.DefaultTaskModel)
+	}
+	if c.Complete() {
+		t.Error("config complete without a chat/task model")
+	}
+	if got := s.Get().Models; got.DefaultChatModel != "" || got.DefaultTaskModel != "" {
+		t.Errorf("stored designations = %+v, want cleared", got)
+	}
+
+	// Same for the vision role, which needs image input.
+	if c = update(Patch{Models: &ModelsPatch{DefaultVisionModel: ptr("audio")}}); c.Models.DefaultVisionModel != "" {
+		t.Errorf("vision model = %q, want cleared", c.Models.DefaultVisionModel)
+	}
+	if c = update(Patch{Models: &ModelsPatch{DefaultVisionModel: ptr("vision")}}); c.Models.DefaultVisionModel != "vision" {
+		t.Errorf("vision model = %q, want vision", c.Models.DefaultVisionModel)
+	}
+
+	// Metas sent in the same patch win over the stored rows: adding text
+	// input to the card and flagging it as chat saves in one go.
+	fixed := []ModelMeta{{ModelID: "vision", InputModality: []string{"text", "image"}}}
+	c = update(Patch{Models: &ModelsPatch{DefaultChatModel: ptr("vision"), DefaultTaskModel: ptr("m"), Metas: &fixed}})
+	if c.Models.DefaultChatModel != "vision" {
+		t.Errorf("chat model = %q, want vision", c.Models.DefaultChatModel)
+	}
+	if !c.Complete() {
+		t.Error("config should be complete once every role has a model that fits")
 	}
 }

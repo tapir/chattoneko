@@ -20,6 +20,8 @@
   import { isNative } from '../lib/server.js';
   import { registerOverlay } from '../lib/overlays.svelte.js';
   import { shareAttachment } from '../lib/attach-actions.js';
+  import { isPdf, pdfPages } from '../lib/pdf.js';
+  import PdfPreview from './PdfPreview.svelte';
   import { Check, ChevronLeft, ChevronRight, Copy, Download, Share2, X, ZoomIn, ZoomOut } from '@lucide/svelte';
   import { copyText } from '../lib/clipboard.js';
 
@@ -32,6 +34,10 @@
   } = $props();
 
   let isImage = $derived(attachment?.kind === 'image');
+  // A PDF is stored under the binary kind, so it is named by its mime — and it
+  // joins the pictures' black media viewer rather than the themed text pane.
+  let pdf = $derived(isPdf(attachment));
+  let media = $derived(isImage || pdf);
   // <img>/<a> can't carry the Authorization header; attachmentUrl appends
   // ?token= (the server accepts a token on GETs). Keeping the real URL
   // visible to the browser also keeps download trivial.
@@ -61,7 +67,7 @@
     'flex size-9 shrink-0 items-center justify-center rounded-full transition-colors';
   let BTN = $derived(
     `${BTN_BASE} ${
-      isImage
+      media
         ? 'text-white/70 hover:bg-white/15 hover:text-white focus-visible:bg-white/15 focus-visible:text-white'
         : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground'
     }`,
@@ -92,6 +98,16 @@
 
   // Arrow keys walk the gallery (Escape already closes it, natively).
   function onKeydown(e) {
+    if (pdf) {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        prevPage();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        nextPage();
+      }
+      return;
+    }
     if (!hasNav) return;
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
@@ -123,8 +139,54 @@
 
   $effect(() => {
     const id = attachment?.id;
-    if (!id || isImage) return;
+    if (!id || isImage || pdf) return;
     loadText(id);
+  });
+
+  // ---- pdf pane ----
+  // The page is ours: svelte-pdf's own navigation is switched off and it takes
+  // the page as a controlled prop. The count comes from lib/pdf.js, which asks
+  // pdf.js directly, because the component never reports it.
+  let page = $state(1);
+  let pages = $state(0);
+
+  $effect(() => {
+    const id = attachment?.id;
+    if (!id || !pdf) return;
+    page = 1;
+    pages = 0;
+    // A count is a nicety: without it the buttons just stop short of the ends
+    // on their own (svelte-pdf ignores an out-of-range page).
+    pdfPages(api.attachmentUrl(id)).then(
+      (n) => {
+        if (attachment?.id === id) pages = n;
+      },
+      () => {},
+    );
+  });
+
+  function prevPage() {
+    if (page > 1) page--;
+  }
+  function nextPage() {
+    if (!(pages > 0 && page >= pages)) page++;
+  }
+
+  // The page keeps its rendered size and the stage transform fits it, exactly
+  // like a zoomed-out picture — that is what buys the same pinch / wheel /
+  // double-tap gestures and the same pan bounds. Measured once, off the first
+  // painted page: a landscape sheet later in the document keeps the portrait
+  // fit (recompute per page if mixed-orientation docs ever matter).
+  let pdfReady = $state(false);
+  $effect(() => {
+    if (!pdf || !pdfReady || !img || !stage) return;
+    const w = img.offsetWidth;
+    const h = img.offsetHeight;
+    if (!w || !h) return;
+    fit = Math.min(stage.clientWidth / w, stage.clientHeight / h);
+    scale = fit;
+    tx = 0;
+    ty = 0;
   });
 
   // Copy is the one affordance a text viewer wants beyond download — these
@@ -178,6 +240,12 @@
   // The +/- buttons are pointer:fine-only; touch relies on the gestures.
   const MIN_SCALE = 1;
   const MAX_SCALE = 6;
+  // A picture is contained by CSS at scale 1, so 1 is its floor and 100% is
+  // its natural size. A page is fitted by the transform instead, so ITS floor
+  // is the measured fit — and 100% means "the whole page in view".
+  let fit = $state(1);
+  let minScale = $derived(pdf ? fit : MIN_SCALE);
+  let maxScale = $derived(minScale * MAX_SCALE);
   const DOUBLE_TAP_SCALE = 2.5;
   const TAP_MS = 300; // double-tap window
   const TAP_PX = 40; // max distance between the two taps
@@ -186,7 +254,9 @@
   const SWIPE_RATIO = 1.5; // how much wider than tall the flick must be
 
   let stage = $state(null); // the flex-centered layer the picture lives in
-  let img = $state(null); // the <img>: offsetWidth/Height = layout size pre-transform
+  // The <img>, or the page wrapper around PdfPreview: offsetWidth/Height is
+  // the layout size pre-transform, which is what the pan bounds clamp on.
+  let img = $state(null);
   let scale = $state(1);
   let tx = $state(0);
   let ty = $state(0);
@@ -284,12 +354,12 @@
 
   function zoomBy(factor) {
     const c = stageCentre();
-    const next = clamp(scale * factor, MIN_SCALE, MAX_SCALE);
+    const next = clamp(scale * factor, minScale, maxScale);
     if (next !== scale) rescale(next, c);
   }
 
   function resetZoom() {
-    scale = 1;
+    scale = minScale;
     tx = 0;
     ty = 0;
   }
@@ -314,7 +384,8 @@
     }
     // Pointer capture keeps move/up arriving when the finger slides over the
     // header, but it also retargets them at the stage — hence the flag above.
-    if (e.target === img) gestureHitImage = true;
+    // contains(), not ===: a page is a canvas INSIDE the transformed wrapper.
+    if (img?.contains(e.target)) gestureHitImage = true;
     capture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     gesturing = true;
@@ -336,7 +407,7 @@
 
     if (pinch && pointers.size >= 2) {
       const p = pinchBaseline();
-      const next = clamp(pinch.scale * (p.d / pinch.d), MIN_SCALE, MAX_SCALE);
+      const next = clamp(pinch.scale * (p.d / pinch.d), minScale, maxScale);
       // Anchor on the ORIGINAL midpoint, so an off-centre pinch pans as it
       // zooms (the content under the first midpoint follows the fingers).
       rescale(next, { x: pinch.cx, y: pinch.cy }, { x: p.cx, y: p.cy }, pinch.scale, pinch.tx, pinch.ty);
@@ -384,13 +455,20 @@
     if (flick) swipeNav(flick.dx, flick.dy);
   }
 
-  // Gallery flick. Content follows the finger, so swiping left advances and
-  // swiping right goes back. Once zoomed the same drag pans instead —
-  // swiping away a picture you're inspecting would feel like losing it.
+  // Gallery flick, and the same flick turns PAGES on a document. Content
+  // follows the finger, so swiping left advances and swiping right goes back.
+  // Once zoomed the same drag pans instead — swiping away a picture (or a
+  // page) you're inspecting would feel like losing it.
   function swipeNav(dx, dy) {
-    if (!hasNav || scale !== MIN_SCALE) return;
+    if (scale !== minScale) return;
     if (Math.abs(dx) < SWIPE_PX || Math.abs(dx) < Math.abs(dy) * SWIPE_RATIO)
       return;
+    if (pdf) {
+      if (dx < 0) nextPage();
+      else prevPage();
+      return;
+    }
+    if (!hasNav) return;
     if (dx < 0) onnext?.();
     else onprev?.();
   }
@@ -410,12 +488,15 @@
       return;
     }
     lastTap = null;
-    if (scale > MIN_SCALE) {
+    if (scale > minScale) {
       resetZoom();
       return;
     }
     // Zoom in centred on the tapped point rather than the middle.
-    rescale(Math.min(MAX_SCALE, DOUBLE_TAP_SCALE), { x: e.clientX, y: e.clientY });
+    rescale(Math.min(maxScale, minScale * DOUBLE_TAP_SCALE), {
+      x: e.clientX,
+      y: e.clientY,
+    });
   }
 
   // Single press on the dark area AROUND the picture dismisses (the
@@ -427,9 +508,9 @@
   }
 
   function onWheel(e) {
-    if (!isImage) return;
+    if (!media) return;
     e.preventDefault();
-    const next = clamp(scale * Math.exp(-e.deltaY * 0.002), MIN_SCALE, MAX_SCALE);
+    const next = clamp(scale * Math.exp(-e.deltaY * 0.002), minScale, maxScale);
     if (next !== scale) rescale(next, { x: e.clientX, y: e.clientY });
   }
 
@@ -447,12 +528,12 @@
     `transform: translate3d(${tx}px, ${ty}px, 0) scale(${scale});` +
       (gesturing ? '' : ' transition: transform 160ms ease-out;'),
   );
-  let zoomPct = $derived(`${Math.round(scale * 100)}%`);
+  let zoomPct = $derived(`${Math.round((scale / minScale) * 100)}%`);
 </script>
 
 <dialog
   bind:this={dlg}
-  class="fixed inset-0 m-0 h-full max-h-none w-full max-w-none overflow-hidden border-0 p-0 {isImage
+  class="fixed inset-0 m-0 h-full max-h-none w-full max-w-none overflow-hidden border-0 p-0 {media
     ? 'bg-black/90 text-white [&::backdrop]:bg-black/70'
     : 'bg-background text-foreground [&::backdrop]:bg-background/70'} {closing ? 'closing' : ''}"
   aria-labelledby="attachment-viewer-title"
@@ -480,15 +561,48 @@
       </button>
 
       <div class="min-w-0 flex-1">
-        <div id="attachment-viewer-title" class="truncate text-sm font-medium {isImage ? 'text-white/90' : 'text-foreground'}" title={attachment?.filename}>
+        <div id="attachment-viewer-title" class="truncate text-sm font-medium {media ? 'text-white/90' : 'text-foreground'}" title={attachment?.filename}>
           {attachment?.filename || 'Attachment'}
         </div>
         {#if subtitle}
-          <div class="truncate text-[11px] tabular-nums {isImage ? 'text-white/45' : 'text-muted-foreground'}">{subtitle}</div>
+          <div class="truncate text-[11px] tabular-nums {media ? 'text-white/45' : 'text-muted-foreground'}">{subtitle}</div>
         {/if}
       </div>
 
-      {#if isImage}
+      {#if pdf}
+        <!-- Page navigation sits in the top bar on every pointer, unlike the
+             gallery's side chevrons: a document has no thumbnail row to swipe
+             from, and where you are in it is the one thing worth a permanent
+             control. Touch also gets the gallery's flick (at fit zoom) and
+             the arrow keys. -->
+        <div class="flex items-center gap-0.5">
+          <button
+            type="button"
+            class="{BTN} disabled:pointer-events-none disabled:opacity-25"
+            title="Previous page (←)"
+            aria-label="Previous page"
+            disabled={page <= 1}
+            onclick={prevPage}
+          >
+            <ChevronLeft class="size-5" strokeWidth={1.75} aria-hidden="true" />
+          </button>
+          <span class="min-w-11 text-center font-mono text-xs tabular-nums text-white/70">
+            {pages ? `${page} / ${pages}` : page}
+          </span>
+          <button
+            type="button"
+            class="{BTN} disabled:pointer-events-none disabled:opacity-25"
+            title="Next page (→)"
+            aria-label="Next page"
+            disabled={pages > 0 && page >= pages}
+            onclick={nextPage}
+          >
+            <ChevronRight class="size-5" strokeWidth={1.75} aria-hidden="true" />
+          </button>
+        </div>
+      {/if}
+
+      {#if media}
         <!-- Zoom controls: pointer:fine only — touch uses pinch and
              double-tap, which is the gesture users expect on a phone. -->
         <div class="hidden items-center gap-0.5 [@media(pointer:fine)]:flex">
@@ -497,7 +611,7 @@
             class="{BTN} disabled:pointer-events-none disabled:opacity-25"
             title="Zoom out"
             aria-label="Zoom out"
-            disabled={scale <= MIN_SCALE}
+            disabled={scale <= minScale}
             onclick={() => zoomBy(1 / 1.4)}
           >
             <ZoomOut class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
@@ -516,7 +630,7 @@
             class="{BTN} disabled:pointer-events-none disabled:opacity-25"
             title="Zoom in"
             aria-label="Zoom in"
-            disabled={scale >= MAX_SCALE}
+            disabled={scale >= maxScale}
             onclick={() => zoomBy(1.4)}
           >
             <ZoomIn class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
@@ -566,7 +680,7 @@
       </a>
     </header>
 
-    {#if isImage}
+    {#if media}
       <div class="relative min-h-0 flex-1">
         <div
           bind:this={stage}
@@ -579,19 +693,37 @@
           onclick={onStageClick}
           onwheel={onWheel}
         >
-          <img
-            bind:this={img}
-            src={url}
-            alt={attachment?.filename ?? ''}
-            draggable="false"
-            class="max-h-full max-w-full shrink-0 object-contain {imgLoaded ? '' : 'invisible'}"
-            style={imageStyle}
-            onload={() => {
-              imgLoaded = true;
-              clampOffsets();
-            }}
-            onerror={() => (imgFailed = true)}
-          />
+          {#if isImage}
+            <img
+              bind:this={img}
+              src={url}
+              alt={attachment?.filename ?? ''}
+              draggable="false"
+              class="max-h-full max-w-full shrink-0 object-contain {imgLoaded ? '' : 'invisible'}"
+              style={imageStyle}
+              onload={() => {
+                imgLoaded = true;
+                clampOffsets();
+              }}
+              onerror={() => (imgFailed = true)}
+            />
+          {:else}
+            <!-- The page keeps its rendered size and the stage transform fits
+                 it, exactly like a zoomed-out picture: same gestures, same
+                 pan bounds, same chrome. onready is the first painted page. -->
+            <div bind:this={img} class="shrink-0" style={imageStyle}>
+              <PdfPreview
+                att={attachment}
+                {page}
+                natural
+                class="bg-transparent"
+                onready={() => {
+                  pdfReady = true;
+                  imgLoaded = true;
+                }}
+              />
+            </div>
+          {/if}
         </div>
 
         {#if hasNav}
@@ -623,13 +755,13 @@
           <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
             <span
               role="status"
-              aria-label="Loading image"
+              aria-label={isImage ? 'Loading image' : 'Loading page'}
               class="inline-block size-6 animate-spin rounded-full border-2 border-white/25 border-t-white"
             ></span>
           </div>
         {/if}
 
-        {#if imgLoaded && scale === MIN_SCALE}
+        {#if imgLoaded && scale === minScale}
           <!-- Touch hint: gestures are invisible, so say them once. Hidden
                on hover-capable devices, which get the +/- buttons instead,
                and once zoomed, where it would sit on top of the picture.

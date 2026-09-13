@@ -14,7 +14,23 @@ export default defineConfig({
       // lazy markdown chunk stays where it was. Exact match: a string alias
       // also rewrites "highlight.js/lib/common" into a doubled path.
       { find: /^highlight\.js$/, replacement: "highlight.js/lib/common" },
+      // svelte-pdf points pdf.js's workerSrc at the UNMINIFIED worker via
+      // `new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url)`, which
+      // Vite resolves and emits as a second 2.2 MB asset next to the minified
+      // one lib/pdf.js loads (dist is embedded in the Go binary, so dead
+      // weight costs a binary). Both specifiers then name the same file and
+      // the build emits it once.
+      {
+        find: /^pdfjs-dist\/build\/pdf\.worker\.mjs$/,
+        replacement: "pdfjs-dist/build/pdf.worker.min.mjs",
+      },
     ],
+  },
+  optimizeDeps: {
+    // svelte-pdf ships raw .svelte source (its dist/index.js re-exports one),
+    // which the dep pre-bundler's esbuild cannot parse — vite-plugin-svelte
+    // has to compile it instead.
+    exclude: ["svelte-pdf"],
   },
   build: {
     outDir: "dist",

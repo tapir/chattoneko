@@ -16,11 +16,13 @@
   import { attachMenu } from '../lib/attachmenu.svelte.js';
   import { longPress } from '../lib/longpress.js';
   import { downloadAttachment } from '../lib/attach-actions.js';
+  import { isPdf } from '../lib/pdf.js';
   import { FileText, Info, Paperclip, Pencil, RotateCcw, Workflow, X } from '@lucide/svelte';
   import CollapsibleStatus from './CollapsibleStatus.svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
   import Scramble from './Scramble.svelte';
   import ImageGallery from './ImageGallery.svelte';
+  import PdfPreview from './PdfPreview.svelte';
   import ToolCallItem from './ToolCallItem.svelte';
   import GenerationError from './GenerationError.svelte';
   import IconButton from './IconButton.svelte';
@@ -65,7 +67,12 @@
   // treatment (text opens a preview, a binary file downloads on click). User
   // rows are never live, so the same two lists feed both sides.
   let imageFiles = $derived(attachments.filter((a) => a.kind === 'image'));
-  let files = $derived(attachments.filter((a) => a.kind !== 'image'));
+  // A PDF shows its first page inline (a card, like a picture) and opens the
+  // lightbox on a click; the rest keep the download-chip treatment.
+  let pdfFiles = $derived(attachments.filter(isPdf));
+  let files = $derived(
+    attachments.filter((a) => a.kind !== 'image' && !isPdf(a)),
+  );
 
   // ---- streaming markdown ----
   // incremark-renderer patches blocks straight into `contentEl`: stabilized
@@ -287,6 +294,21 @@
 </script>
 
 <!-- The turn timeline, rendered bare or inside the "Processing…" fold below. -->
+{#snippet pdfCard(att, width)}
+  <!-- The page IS the thumbnail — the same cursor + long-press sheet as a
+       picture, and no filename under it (the page shows what it is). -->
+  <button
+    type="button"
+    class="block cursor-zoom-in select-none [-webkit-touch-callout:none]"
+    title={`View ${att.filename}`}
+    aria-label={`View ${att.filename}`}
+    onclick={() => viewer.open(att)}
+    {...longPress(() => attachMenu.open(att))}
+  >
+    <PdfPreview {att} scale={1} class="{width} rounded-lg border" />
+  </button>
+{/snippet}
+
 {#snippet timeline()}
   {#each turns as t (t.turn)}
     {#if t.text || (waiting && t.turn === 0)}
@@ -338,17 +360,25 @@
                 singleClass="max-h-40"
                 widthClass="w-64 sm:w-80"
               />
+              {#if pdfFiles.length}
+                <div class="flex flex-wrap gap-1.5">
+                  {#each pdfFiles as att (att.id)}
+                    {@render pdfCard(att, 'w-32 sm:w-40')}
+                  {/each}
+                </div>
+              {/if}
               {#if files.length}
                 <div class="flex flex-wrap gap-1.5">
                   {#each files as att (att.id)}
-                    <!-- Opens the lightbox rather than a new tab: the URL still
-                         exists (and the viewer's download button exposes it),
-                         but the click stays inside the app. -->
+                    <!-- Text opens the lightbox rather than a new tab: the URL
+                         still exists (and the viewer's download button exposes
+                         it), but the click stays inside the app. Anything else
+                         has no preview to open, so it downloads. -->
                     <button
                       type="button"
                       class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors select-none [-webkit-touch-callout:none] hover:text-foreground"
-                      title={`View ${att.filename}`}
-                      onclick={() => viewer.open(att)}
+                      title={att.kind === 'text' ? `View ${att.filename}` : `Download ${att.filename}`}
+                      onclick={() => (att.kind === 'text' ? viewer.open(att) : downloadAttachment(att))}
                       {...longPress(() => attachMenu.open(att))}
                     >
                       <Paperclip class="size-3" strokeWidth={1.75} aria-hidden="true" />
@@ -414,6 +444,14 @@
            cell opens the same lightbox as a single image, now with prev/next
            over the whole set. -->
       <ImageGallery items={imageFiles} class="mt-2" />
+    {/if}
+
+    {#if pdfFiles.length}
+      <div class="mt-2 flex flex-wrap gap-1.5">
+        {#each pdfFiles as att (att.id)}
+          {@render pdfCard(att, 'w-40 sm:w-48')}
+        {/each}
+      </div>
     {/if}
 
     {#if files.length}

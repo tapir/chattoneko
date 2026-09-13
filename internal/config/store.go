@@ -22,6 +22,8 @@ const (
 	keyDefaultChatModel      = "default_chat_model"
 	keyDefaultTaskModel      = "default_task_model"
 	keyDefaultVisionModel    = "default_vision_model"
+	keyDefaultDocumentModel  = "default_document_model"
+	keyDefaultAudioModel     = "default_audio_model"
 	keyMCPServers            = "mcp_servers"
 	keyUploadMaxFileBytes    = "upload_max_file_bytes"
 	keyMaxToolIterations     = "max_tool_iterations"
@@ -147,6 +149,8 @@ func writeConfigRows(ctx context.Context, tx *sql.Tx, c *Config, now int64) erro
 		keyDefaultChatModel:      c.Models.DefaultChatModel,
 		keyDefaultTaskModel:      c.Models.DefaultTaskModel,
 		keyDefaultVisionModel:    c.Models.DefaultVisionModel,
+		keyDefaultDocumentModel:  c.Models.DefaultDocumentModel,
+		keyDefaultAudioModel:     c.Models.DefaultAudioModel,
 		keyMCPServers:            string(servers),
 		keyUploadMaxFileBytes:    strconv.FormatInt(c.Limits.UploadMaxFileBytes, 10),
 		keyMaxToolIterations:     strconv.Itoa(c.Limits.MaxToolIterations),
@@ -227,6 +231,8 @@ func loadSnapshot(ctx context.Context, db *sql.DB) (*Config, error) {
 	c.Models.DefaultChatModel = kv[keyDefaultChatModel]
 	c.Models.DefaultTaskModel = kv[keyDefaultTaskModel]
 	c.Models.DefaultVisionModel = kv[keyDefaultVisionModel]
+	c.Models.DefaultDocumentModel = kv[keyDefaultDocumentModel]
+	c.Models.DefaultAudioModel = kv[keyDefaultAudioModel]
 	// Auth never comes from the database: it is derived from the
 	// CHATTO_USERNAME / CHATTO_PASSWORD environment variables.
 	c.Auth = authFromEnv()

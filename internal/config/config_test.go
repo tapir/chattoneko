@@ -534,6 +534,14 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 		t.Errorf("vision model = %q, want vision", c.Models.DefaultVisionModel)
 	}
 
+	// The document role needs image input too; the audio role needs audio.
+	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("audio"), DefaultAudioModel: ptr("vision")}}); c.Models.DefaultDocumentModel != "" || c.Models.DefaultAudioModel != "" {
+		t.Errorf("document/audio models = %q/%q, want both cleared", c.Models.DefaultDocumentModel, c.Models.DefaultAudioModel)
+	}
+	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("vision"), DefaultAudioModel: ptr("audio")}}); c.Models.DefaultDocumentModel != "vision" || c.Models.DefaultAudioModel != "audio" {
+		t.Errorf("document/audio models = %q/%q, want vision/audio", c.Models.DefaultDocumentModel, c.Models.DefaultAudioModel)
+	}
+
 	// Metas sent in the same patch win over the stored rows: adding text
 	// input to the card and flagging it as chat saves in one go.
 	fixed := []ModelMeta{{ModelID: "vision", InputModality: []string{"text", "image"}}}
@@ -543,5 +551,14 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	}
 	if !c.Complete() {
 		t.Error("config should be complete once every role has a model that fits")
+	}
+
+	// The optional designations survive a reopen.
+	s2, err := NewStore(ctx, h)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if got := s2.Get().Models; got.DefaultDocumentModel != "vision" || got.DefaultAudioModel != "audio" {
+		t.Errorf("stored document/audio = %q/%q, want vision/audio", got.DefaultDocumentModel, got.DefaultAudioModel)
 	}
 }

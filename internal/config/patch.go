@@ -43,6 +43,10 @@ type ModelsPatch struct {
 	DefaultChatModel   *string   `json:"default_chat_model,omitempty"`
 	DefaultTaskModel   *string   `json:"default_task_model,omitempty"`
 	DefaultVisionModel *string   `json:"default_vision_model,omitempty"`
+	// Both optional, like the vision model: reservations for role-specific
+	// features that Complete() does not require.
+	DefaultDocumentModel *string `json:"default_document_model,omitempty"`
+	DefaultAudioModel    *string `json:"default_audio_model,omitempty"`
 	// Metas upserts per-model metadata (context window, modalities,
 	// reasoning efforts) into the models table alongside the whitelist.
 	// Entries are sanitized on write; models dropped from the whitelist
@@ -106,8 +110,9 @@ func (s *Store) Update(ctx context.Context, patch Patch) (*Config, error) {
 
 // sanitizeDesignated clears a designated model that can't do the job it is
 // designated for: the chat and task models must accept "text" input, the
-// vision model "image" input. Clearing rather than rejecting is the point — a
-// broken designation ends up in the same state as a missing one, so Complete()
+// vision and document models "image", the audio model "audio". Clearing
+// rather than rejecting is the point — a broken designation ends up in the
+// same state as a missing one, so Complete()
 // reports the config as unfinished and the settings overlay stays forced open
 // until it is fixed. Metadata lives in the models table, not in the Config
 // snapshot, so this reads it; the patch's metas win over the stored rows
@@ -123,6 +128,8 @@ func (s *Store) sanitizeDesignated(ctx context.Context, c *Config, patch Patch) 
 		{"chat", &c.Models.DefaultChatModel, "text"},
 		{"task", &c.Models.DefaultTaskModel, "text"},
 		{"vision", &c.Models.DefaultVisionModel, "image"},
+		{"document", &c.Models.DefaultDocumentModel, "image"},
+		{"audio", &c.Models.DefaultAudioModel, "audio"},
 	}
 	ids := make([]string, 0, len(designated))
 	for _, d := range designated {
@@ -183,6 +190,12 @@ func applyPatch(c *Config, p Patch) {
 		}
 		if p.Models.DefaultVisionModel != nil {
 			c.Models.DefaultVisionModel = strings.TrimSpace(*p.Models.DefaultVisionModel)
+		}
+		if p.Models.DefaultDocumentModel != nil {
+			c.Models.DefaultDocumentModel = strings.TrimSpace(*p.Models.DefaultDocumentModel)
+		}
+		if p.Models.DefaultAudioModel != nil {
+			c.Models.DefaultAudioModel = strings.TrimSpace(*p.Models.DefaultAudioModel)
 		}
 	}
 	if p.MCPServers != nil {

@@ -78,10 +78,13 @@ type ModelsConfig struct {
 	// DefaultTaskModel is the model id used by background tasks (title
 	// generation). It talks to the same provider as chat.
 	DefaultTaskModel string `json:"default_task_model"`
-	// DefaultVisionModel designates a model with image input, reserved for
-	// upcoming vision-backed features. Optional; talks to the same provider
-	// as chat.
-	DefaultVisionModel string `json:"default_vision_model"`
+	// The remaining designations are optional reservations for role-specific
+	// features (vision and documents need image input, audio needs audio
+	// input). None of them is required by Complete(); all talk to the same
+	// provider as chat.
+	DefaultVisionModel   string `json:"default_vision_model"`
+	DefaultDocumentModel string `json:"default_document_model"`
+	DefaultAudioModel    string `json:"default_audio_model"`
 }
 
 // MCPServerConfig declares one MCP server. Only streamable HTTP is
@@ -230,7 +233,7 @@ func (c *Config) sanitizeToolTitles() {
 }
 
 // sanitizeWhitelist drops empty and duplicate model ids and clears a
-// designated model (default chat/task/vision) that is not whitelisted. Designated
+// designated model (any of the role defaults) that is not whitelisted. Designated
 // models must be members of the whitelist (the settings UI flags them from
 // whitelisted cards), so auto-adding them would paper over stale ids.
 func (c *Config) sanitizeWhitelist() {
@@ -239,14 +242,13 @@ func (c *Config) sanitizeWhitelist() {
 	for _, m := range c.Models.Whitelist {
 		seen[m] = true
 	}
-	if m := strings.TrimSpace(c.Models.DefaultChatModel); !seen[m] {
-		c.Models.DefaultChatModel = ""
-	}
-	if m := strings.TrimSpace(c.Models.DefaultTaskModel); !seen[m] {
-		c.Models.DefaultTaskModel = ""
-	}
-	if m := strings.TrimSpace(c.Models.DefaultVisionModel); !seen[m] {
-		c.Models.DefaultVisionModel = ""
+	for _, d := range []*string{
+		&c.Models.DefaultChatModel, &c.Models.DefaultTaskModel, &c.Models.DefaultVisionModel,
+		&c.Models.DefaultDocumentModel, &c.Models.DefaultAudioModel,
+	} {
+		if !seen[strings.TrimSpace(*d)] {
+			*d = ""
+		}
 	}
 }
 

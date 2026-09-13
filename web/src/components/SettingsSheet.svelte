@@ -1,7 +1,7 @@
 <script>
   import { app } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
-  import { Download, Eye, EyeOff, MessageCircle, Trash2, X, Zap } from '@lucide/svelte';
+  import { AudioLines, Download, Eye, EyeOff, FileText, MessageCircle, Trash2, X, Zap } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
   import ToolToggleRow from './ToolToggleRow.svelte';
   import { Button } from '$lib/components/ui/button';
@@ -80,12 +80,12 @@
   // catalog already reports.
   let toolTitles = $state({});
 
-  // Models: one card per whitelisted model. The default chat/task models are
-  // flagged from these cards — there are no separate inputs for them.
+  // Models: one card per whitelisted model. Role designations are flagged
+  // from these cards — there are no separate inputs for them.
   let modelCards = $state([]);
-  let defaultChatModel = $state('');
-  let defaultTaskModel = $state('');
-  let defaultVisionModel = $state('');
+  // Role key → designated model id (see ROLES). Only chat and task are
+  // required by the server; the rest are optional reservations.
+  let roleModels = $state({ chat: '', task: '', vision: '', document: '', audio: '' });
   let newModel = $state('');
 
   // Dirty tracking: a JSON snapshot of the whole form, compared against the
@@ -106,6 +106,15 @@
   }
 
   const MODALITIES = ['text', 'image', 'audio'];
+  // The role flags on every model card. `key` doubles as the config field
+  // name: the server stores each one as `default_<key>_model`.
+  const ROLES = [
+    { key: 'chat', label: 'Chat model', icon: MessageCircle },
+    { key: 'task', label: 'Task model (background jobs like chat titles)', icon: Zap },
+    { key: 'vision', label: 'Vision model (reserved for upcoming image features)', icon: Eye },
+    { key: 'document', label: 'Document model (reserved for upcoming document features)', icon: FileText },
+    { key: 'audio', label: 'Audio model (reserved for upcoming audio features)', icon: AudioLines },
+  ];
   const DEFAULT_EFFORTS = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
   const DEFAULT_EFFORT = 'medium';
   const DEFAULT_CONTEXT = 131072;
@@ -117,9 +126,7 @@
       systemPrompt,
       baseUrl,
       apiKey,
-      defaultChatModel,
-      defaultTaskModel,
-      defaultVisionModel,
+      roleModels,
       cards: modelCards,
       mcp: mcpServers,
       // Sorted so the comparison is deterministic regardless of toggle order.
@@ -137,9 +144,7 @@
     uploadMaxBytes = String(c.limits?.upload_max_file_bytes ?? '');
     maxToolIter = String(c.limits?.max_tool_iterations ?? '');
     mcpTimeout = String(c.limits?.mcp_call_timeout_seconds ?? '');
-    defaultChatModel = c.models?.default_chat_model ?? '';
-    defaultTaskModel = c.models?.default_task_model ?? '';
-    defaultVisionModel = c.models?.default_vision_model ?? '';
+    roleModels = Object.fromEntries(ROLES.map((r) => [r.key, c.models?.[`default_${r.key}_model`] ?? '']));
     const metas = {};
     for (const m of c.models?.metas ?? []) metas[m.model_id] = m;
     modelCards = (c.models?.whitelist ?? []).map((id) => {
@@ -232,18 +237,10 @@
   }
   function removeModel(id) {
     modelCards = modelCards.filter((c) => c.id !== id);
-    if (defaultChatModel === id) defaultChatModel = '';
-    if (defaultTaskModel === id) defaultTaskModel = '';
-    if (defaultVisionModel === id) defaultVisionModel = '';
+    for (const r of ROLES) if (roleModels[r.key] === id) roleModels[r.key] = '';
   }
-  function toggleDefaultChat(id) {
-    defaultChatModel = defaultChatModel === id ? '' : id;
-  }
-  function toggleDefaultTask(id) {
-    defaultTaskModel = defaultTaskModel === id ? '' : id;
-  }
-  function toggleDefaultVision(id) {
-    defaultVisionModel = defaultVisionModel === id ? '' : id;
+  function toggleRole(key, id) {
+    roleModels[key] = roleModels[key] === id ? '' : id;
   }
   function setEfforts(card, efforts) {
     // At least one level must stay selected — an empty change is rejected by
@@ -434,9 +431,7 @@
         provider: { base_url: baseUrl.trim() },
         models: {
           whitelist: modelCards.map((c) => c.id),
-          default_chat_model: defaultChatModel.trim(),
-          default_task_model: defaultTaskModel.trim(),
-          default_vision_model: defaultVisionModel.trim(),
+          ...Object.fromEntries(ROLES.map((r) => [`default_${r.key}_model`, (roleModels[r.key] ?? '').trim()])),
           metas: modelCards.map((c) => ({
             model_id: c.id,
             context_length: Number(c.contextLength) || 0,
@@ -518,7 +513,7 @@
           This server isn’t ready yet. Set the <strong>provider</strong> (base URL + API key) and flag a model as
           <strong>Chat</strong> and <strong>Task</strong> below, then save. You can’t close this screen until setup is
           complete. A flag is dropped on save when the model can’t take the input its role needs — text for Chat and
-          Task, image for Vision.
+          Task, image for Vision and Document, audio for Audio.
         </div>
       {/if}
 
@@ -588,48 +583,29 @@
                   <div class="space-y-3 rounded-lg border p-3">
                     <!-- Card header: id, default flags, fetch data, delete -->
                     <div class="flex flex-wrap items-center gap-2">
-                      <span class="min-w-0 flex-1 truncate font-mono text-sm">{card.id}</span>
-                      <!-- Role flags: icon buttons (chat / task / vision) with tooltips. -->
-                      <button
-                        type="button"
-                        title="Chat model"
-                        aria-label="Chat model"
-                        aria-pressed={defaultChatModel === card.id}
-                        class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors {defaultChatModel === card.id
-                          ? 'border-primary/50 bg-primary/10 text-primary'
-                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-                        onclick={() => toggleDefaultChat(card.id)}
-                      >
-                        <MessageCircle class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        title="Task model (background jobs like chat titles)"
-                        aria-label="Task model"
-                        aria-pressed={defaultTaskModel === card.id}
-                        class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors {defaultTaskModel === card.id
-                          ? 'border-primary/50 bg-primary/10 text-primary'
-                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-                        onclick={() => toggleDefaultTask(card.id)}
-                      >
-                        <Zap class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        title="Vision model (reserved for upcoming image features)"
-                        aria-label="Vision model"
-                        aria-pressed={defaultVisionModel === card.id}
-                        class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors {defaultVisionModel === card.id
-                          ? 'border-primary/50 bg-primary/10 text-primary'
-                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-                        onclick={() => toggleDefaultVision(card.id)}
-                      >
-                        <Eye class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-                      </button>
+                      <!-- Own line on mobile: five role flags would squeeze
+                           the id into an unreadable sliver. -->
+                      <span class="w-full break-all font-mono text-sm sm:w-auto sm:min-w-0 sm:flex-1 sm:break-normal sm:truncate">{card.id}</span>
+                      <!-- Role flags: icon buttons (see ROLES) with tooltips. -->
+                      {#each ROLES as role (role.key)}
+                        {@const Icon = role.icon}
+                        <button
+                          type="button"
+                          title={role.label}
+                          aria-label={role.label}
+                          aria-pressed={roleModels[role.key] === card.id}
+                          class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors {roleModels[role.key] === card.id
+                            ? 'border-primary/50 bg-primary/10 text-primary'
+                            : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+                          onclick={() => toggleRole(role.key, card.id)}
+                        >
+                          <Icon class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+                        </button>
+                      {/each}
                       <Button
                         variant="outline"
                         size="sm"
-                        class="h-7 gap-1 px-2 text-xs"
+                        class="ml-auto h-7 gap-1 px-2 text-xs sm:ml-0"
                         onclick={() => fetchModelData(card.id)}
                         disabled={!providerReady || fetchingId === card.id}
                       >

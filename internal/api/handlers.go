@@ -204,11 +204,13 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 			"api_key_set": c.Provider.APIKey != "",
 		},
 		"models": map[string]any{
-			"whitelist":            c.Models.Whitelist,
-			"default_chat_model":   c.Models.DefaultChatModel,
-			"default_task_model":   c.Models.DefaultTaskModel,
-			"default_vision_model": c.Models.DefaultVisionModel,
-			"metas":                metas,
+			"whitelist":              c.Models.Whitelist,
+			"default_chat_model":     c.Models.DefaultChatModel,
+			"default_task_model":     c.Models.DefaultTaskModel,
+			"default_vision_model":   c.Models.DefaultVisionModel,
+			"default_document_model": c.Models.DefaultDocumentModel,
+			"default_audio_model":    c.Models.DefaultAudioModel,
+			"metas":                  metas,
 		},
 		"mcp_servers": servers,
 		// Global per-tool default toggles. Go marshals maps with sorted keys,
@@ -1094,4 +1096,3 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	// ServeContent sets Content-Length and handles Range requests.
 	http.ServeContent(w, r, "", time.UnixMilli(att.CreatedAt), bytes.NewReader(att.Data))
 }
-

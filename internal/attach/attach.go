@@ -392,4 +392,3 @@ func SerializeRef(filename, id, kind, mime string, size int64) string {
 		mime, size, id)
 	return fmt.Sprintf("%s\n%s\n</file id=%q>", fileTag(filename, id, Type(kind, mime)), body, id)
 }
-

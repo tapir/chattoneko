@@ -25,3 +25,7 @@ Everything goes through the `Makefile`:
 - `make tidy`, `make docker`, `make mobile`, `make mobile-apk`, `make mobile-run`.
 
 Go changes must be preceded by `make sqlc` when queries changed, and the frontend must be built (`make web`) before `go build` since `web/dist` is embedded.
+
+## Rules
+
+- Never add explanatory/description text to the UI (hint lines, help paragraphs, "nothing to configure here" notes, extra sentences in existing notices) without asking first. Labels and placeholders only; copy comes from the user.

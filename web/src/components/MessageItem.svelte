@@ -23,6 +23,7 @@
   import Scramble from './Scramble.svelte';
   import ImageGallery from './ImageGallery.svelte';
   import PdfPreview from './PdfPreview.svelte';
+  import AudioPreview from './AudioPreview.svelte';
   import ToolCallItem from './ToolCallItem.svelte';
   import GenerationError from './GenerationError.svelte';
   import IconButton from './IconButton.svelte';
@@ -68,10 +69,16 @@
   // rows are never live, so the same two lists feed both sides.
   let imageFiles = $derived(attachments.filter((a) => a.kind === 'image'));
   // A PDF shows its first page inline (a card, like a picture) and opens the
-  // lightbox on a click; the rest keep the download-chip treatment.
+  // lightbox on a click; audio gets a player row (AudioPreview — the app's own
+  // chrome, since a native control is browser-drawn and eats the long press);
+  // the rest keep the download-chip treatment. Both are picked out by mime,
+  // since the binary kind is shared with every other file, and a staged one
+  // carries no mime yet — so it stays a chip until the send round-trips.
   let pdfFiles = $derived(attachments.filter(isPdf));
+  const isAudio = (att) => att?.mime?.startsWith('audio/');
+  let audioFiles = $derived(attachments.filter(isAudio));
   let files = $derived(
-    attachments.filter((a) => a.kind !== 'image' && !isPdf(a)),
+    attachments.filter((a) => a.kind !== 'image' && !isPdf(a) && !isAudio(a)),
   );
 
   // ---- streaming markdown ----
@@ -367,6 +374,9 @@
                   {/each}
                 </div>
               {/if}
+              {#each audioFiles as att (att.id)}
+                <AudioPreview {att} />
+              {/each}
               {#if files.length}
                 <div class="flex flex-wrap gap-1.5">
                   {#each files as att (att.id)}
@@ -450,6 +460,14 @@
       <div class="mt-2 flex flex-wrap gap-1.5">
         {#each pdfFiles as att (att.id)}
           {@render pdfCard(att, 'w-40 sm:w-48')}
+        {/each}
+      </div>
+    {/if}
+
+    {#if audioFiles.length}
+      <div class="mt-2 flex flex-col gap-1.5">
+        {#each audioFiles as att (att.id)}
+          <AudioPreview {att} />
         {/each}
       </div>
     {/if}

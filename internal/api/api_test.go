@@ -924,6 +924,21 @@ func TestGetAttachmentServing(t *testing.T) {
 	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") || !strings.Contains(cd, "page.html") {
 		t.Fatalf("content-disposition = %q, want an attachment with the filename", cd)
 	}
+
+	// Audio is the one binary served under its stored mime: the chat's inline
+	// <audio> player needs a real type (Safari refuses octet-stream). It stays
+	// a download by disposition.
+	aud, err := ts.store.CreateAttachment(context.Background(), chatID, "voice.wav", "file", "audio/wav", 4, []byte("RIFF"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = ts.do(t, "GET", "/api/attachments/"+aud.ID, nil, nil)
+	if ct := rec.Header().Get("Content-Type"); ct != "audio/wav" {
+		t.Fatalf("audio content-type = %q, want audio/wav", ct)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") {
+		t.Fatalf("audio content-disposition = %q, want an attachment", cd)
+	}
 }
 
 // A model that can't take text input can't drive a chat, so /api/config

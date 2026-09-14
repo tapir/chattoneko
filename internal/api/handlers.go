@@ -1096,7 +1096,14 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	case attach.KindImage:
 		ctype = "image/png"
 	case attach.KindFile:
+		// Audio is the one binary that keeps its stored mime: it cannot
+		// execute, and the chat's inline <audio> player needs the real type
+		// (Safari refuses to play octet-stream, and the URL carries no
+		// extension for the browser to fall back on).
 		ctype = "application/octet-stream"
+		if strings.HasPrefix(att.Mime, "audio/") {
+			ctype = att.Mime
+		}
 	}
 	if att.Kind != attach.KindImage {
 		if cd := mime.FormatMediaType("attachment", map[string]string{"filename": att.Filename}); cd != "" {

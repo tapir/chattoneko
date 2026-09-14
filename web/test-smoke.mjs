@@ -2,6 +2,7 @@
 // Run: node test-smoke.mjs
 
 import { Typewriter } from './src/lib/typewriter.js';
+import { formatClock } from './src/lib/format.js';
 import { loadMarkdown, normalizeHeadings, normalizeSource, splitHeadingHold } from './src/lib/markdown.js';
 
 // The heavy pipeline is a dynamic import in the browser so it stays off the
@@ -380,6 +381,15 @@ console.log('OK streaming parity');
   await wait(500);
   assert(fired === 0 && !rc.defaultPrevented, 'mouse press and right-click stay the browser\'s');
   console.log('OK long press');
+}
+
+// --- media clock (the audio player's label) ---
+{
+  assert(formatClock(0) === '0:00', 'formatClock(0) = 0:00');
+  assert(formatClock(74.6) === '1:14', 'formatClock floors to whole seconds');
+  assert(formatClock(3671) === '1:01:11', 'formatClock pads minutes past an hour');
+  assert(formatClock(NaN) === '0:00' && formatClock(-5) === '0:00', 'formatClock junk = 0:00');
+  console.log('OK media clock');
 }
 
 function assert(cond, msg) {

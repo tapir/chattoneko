@@ -30,6 +30,17 @@ export function formatBytes(n) {
   return `${v >= 10 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+// Media clock: 74.6 -> "1:15", 3671 -> "1:01:11", junk -> "0:00". Hours only
+// appear once there is one, and the minutes are then zero-padded so the width
+// doesn't jump while a player counts up.
+export function formatClock(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${h ? `${h}:${pad(m)}` : m}:${pad(s % 60)}`;
+}
+
 // Generation duration: 420 -> "420 ms", 2300 -> "2.3 s", 95000 -> "1m 35s".
 export function formatDuration(ms) {
   if (!ms || ms <= 0) return "—";

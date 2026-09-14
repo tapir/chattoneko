@@ -97,8 +97,9 @@ var textExts = map[string]string{
 // mapped to the mime they are stored under. The extension decides because
 // content sniffing cannot: bare MP3 frames sniff as application/octet-stream.
 // That is safe here — the bytes are never interpreted: stored verbatim, served
-// as an octet-stream download, and handed to the model only as a database
-// reference (SerializeRef).
+// as an octet-stream download (audio under its own mime, which the inline
+// player needs), and handed to the model only as a database reference
+// (SerializeRef).
 //
 // This is the ONLY audio list in the app: AudioFormat reads it back for the
 // agent tool's input_audio format, so uploads and specialist calls cannot
@@ -329,8 +330,9 @@ func CleanFilename(name string) (string, error) {
 }
 
 // sniffMime labels binary bytes for the metadata the model and the UI see. It
-// is never served as a Content-Type (the attachment handler forces
-// octet-stream for KindFile), so a wrong guess costs a label, not a hole.
+// is served as a Content-Type only for audio, which the inline player needs
+// and which cannot execute; every other binary is forced to octet-stream by
+// the attachment handler, so a wrong guess there costs a label, not a hole.
 func sniffMime(data []byte) string {
 	ct := http.DetectContentType(data)
 	if i := strings.IndexByte(ct, ';'); i >= 0 {

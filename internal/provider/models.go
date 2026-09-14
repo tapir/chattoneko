@@ -18,7 +18,6 @@ type FetchedModel struct {
 	ID               string
 	ContextLength    int64    // tokens; 0 = not reported
 	InputModalities  []string // nil = not reported
-	OutputModalities []string // nil = not reported
 	ReasoningEfforts []string // nil = not reported
 	ReasoningDefault string   // "" = not reported
 }
@@ -61,8 +60,7 @@ func FetchModels(ctx context.Context, baseURL, apiKey string) ([]FetchedModel, e
 			ID            string `json:"id"`
 			ContextLength int64  `json:"context_length"`
 			Architecture  *struct {
-				InputModalities  []string `json:"input_modalities"`
-				OutputModalities []string `json:"output_modalities"`
+				InputModalities []string `json:"input_modalities"`
 			} `json:"architecture"`
 			Reasoning *struct {
 				SupportedEfforts []string `json:"supported_efforts"`
@@ -81,7 +79,6 @@ func FetchModels(ctx context.Context, baseURL, apiKey string) ([]FetchedModel, e
 		f := FetchedModel{ID: m.ID, ContextLength: m.ContextLength}
 		if m.Architecture != nil {
 			f.InputModalities = m.Architecture.InputModalities
-			f.OutputModalities = m.Architecture.OutputModalities
 		}
 		if m.Reasoning != nil {
 			f.ReasoningEfforts = m.Reasoning.SupportedEfforts

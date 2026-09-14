@@ -63,7 +63,7 @@ Both artifacts carry a version, shown in the sidebar's footer: `VERSION` (defaul
 
 There is no config file. On first start the database is seeded with defaults and the server comes up. All configuration happens after your first visit to the page: enter your provider's base URL and API key, pick your models, done. Settings are stored in the database and apply live, no restart needed.
 
-If your provider is OpenRouter, a lot of this is automated. ChattoNeko reads the provider's `/models` endpoint, and OpenRouter reports everything it uses: context length, input and output modalities, supported reasoning efforts and the default effort. Pick a model and its capabilities are filled in for you, which is also how the app knows whether a model can see images or read PDFs (OpenRouter calls that input `file`). Other OpenAI-compatible providers report less; missing values fall back to sensible defaults and can be edited by hand.
+If your provider is OpenRouter, a lot of this is automated. ChattoNeko reads the provider's `/models` endpoint, and OpenRouter reports everything it uses: context length, input modalities, supported reasoning efforts and the default effort. Pick a model and its capabilities are filled in for you, which is also how the app knows whether a model can see images or read PDFs. Other OpenAI-compatible providers report less; missing values fall back to sensible defaults and can be edited by hand.
 
 ### Environment variables
 

@@ -254,7 +254,6 @@ func TestSetupModelsFetchAndDefaults(t *testing.T) {
 			ID               string   `json:"model_id"`
 			ContextWindow    int64    `json:"context_length"`
 			InputModality    []string `json:"input_modality"`
-			OutputModality   []string `json:"output_modality"`
 			ReasoningEfforts []string `json:"reasoning_efforts"`
 			ReasoningDefault string   `json:"reasoning_default"`
 		} `json:"models"`
@@ -280,8 +279,7 @@ func TestSetupModelsFetchAndDefaults(t *testing.T) {
 	if v.ContextWindow != 200000 || out.Source["or/vision"] != "provider" {
 		t.Errorf("or/vision = %+v (source %q)", v, out.Source["or/vision"])
 	}
-	// OpenRouter's "file" is our "document" (PDF input).
-	if !slices.Equal(v.InputModality, []string{"text", "image", "document"}) {
+	if !slices.Equal(v.InputModality, []string{"text", "image", "file"}) {
 		t.Errorf("or/vision input = %v", v.InputModality)
 	}
 	if !slices.Equal(v.ReasoningEfforts, []string{"low", "medium"}) || v.ReasoningDefault != "low" {
@@ -300,8 +298,8 @@ func TestSetupModelsFetchAndDefaults(t *testing.T) {
 	if !slices.Equal(u.ReasoningEfforts, []string{"max", "xhigh", "high", "medium", "low", "minimal", "none"}) || u.ReasoningDefault != "medium" {
 		t.Errorf("or/unknown reasoning = %v / %q", u.ReasoningEfforts, u.ReasoningDefault)
 	}
-	if !slices.Equal(u.InputModality, []string{"text"}) || !slices.Equal(u.OutputModality, []string{"text"}) {
-		t.Errorf("or/unknown modalities = %v / %v", u.InputModality, u.OutputModality)
+	if !slices.Equal(u.InputModality, []string{"text"}) {
+		t.Errorf("or/unknown input = %v", u.InputModality)
 	}
 
 	// The metadata was persisted: re-reading via the store returns it.
@@ -465,7 +463,6 @@ func TestSetupExposesModelMetasAndHidesListen(t *testing.T) {
 					"model_id":          "m",
 					"context_length":    4242,
 					"input_modality":    []string{"text", "image"},
-					"output_modality":   []string{"text"},
 					"reasoning_efforts": []string{"low"},
 					"reasoning_default": "low",
 				},

@@ -49,26 +49,29 @@ const (
 )
 
 // specialist is one file type the agent tool can hand off. kind is
-// attach.Type's name for it, which is deliberately also the input-modality
-// name the gating in AgentDescription compares against: a chat model listing
-// "image" sees pictures itself, one listing "document" reads PDFs itself.
+// attach.Type's name for it, i.e. what routes the attachment and what its
+// <file type=...> block says; modality is the input-modality name the gating
+// in AgentDescription compares against — the same word except for PDFs, which
+// the provider calls "file": a chat model listing "image" sees pictures
+// itself, one listing "file" reads PDFs itself.
 type specialist struct {
-	kind   string // attachment type (attach.Type) == required input modality
-	what   string // how the tool description names this file type and its formats
-	model  func(config.ModelsConfig) string
-	prompt string // system prompt; empty when the specialist is not a chat model
+	kind     string // attachment type (attach.Type)
+	modality string // required input modality
+	what     string // how the tool description names this file type and its formats
+	model    func(config.ModelsConfig) string
+	prompt   string // system prompt; empty when the specialist is not a chat model
 }
 
 // specialists is the whole hand-off table, in the order the description lists
 // them. `what` carries the accepted formats, so the model hears the limit
 // before it calls rather than from a refusal.
 var specialists = []specialist{
-	{"image", "images (PNG or WebP only)", func(m config.ModelsConfig) string { return m.DefaultVisionModel }, promptVision},
-	{"document", "PDF documents", func(m config.ModelsConfig) string { return m.DefaultDocumentModel }, promptDocument},
+	{"image", "image", "images (PNG or WebP only)", func(m config.ModelsConfig) string { return m.DefaultVisionModel }, promptVision},
+	{"document", "file", "PDF documents", func(m config.ModelsConfig) string { return m.DefaultDocumentModel }, promptDocument},
 	// Audio is transcribed, not asked: the models this role names are
 	// transcription models with no chat endpoint, so what comes back is the
 	// recording's text and the chat model answers its own question from it.
-	{"audio", "audio recordings (which come back as a transcript, whatever the question was)", func(m config.ModelsConfig) string { return m.DefaultTranscriptionModel }, ""},
+	{"audio", "audio", "audio recordings (which come back as a transcript, whatever the question was)", func(m config.ModelsConfig) string { return m.DefaultTranscriptionModel }, ""},
 }
 
 // agentSchema is the tool's argument shape. The file's TYPE is not an
@@ -130,7 +133,7 @@ func Agent(files fileStore, cfgs *config.Store) tool {
 func AgentDescription(inputModality []string) (description string, needed bool) {
 	offered := make([]string, 0, len(specialists))
 	for _, s := range specialists {
-		if !slices.Contains(inputModality, s.kind) {
+		if !slices.Contains(inputModality, s.modality) {
 			offered = append(offered, s.what)
 		}
 	}

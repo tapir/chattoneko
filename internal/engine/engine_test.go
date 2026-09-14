@@ -1326,7 +1326,7 @@ func TestEffectiveToolsTailorsAgent(t *testing.T) {
 
 	// A model that takes everything needs no specialist, so the tool is not
 	// offered at all.
-	if got := agentDef([]string{"text", "image", "document", "audio"}); got != nil {
+	if got := agentDef([]string{"text", "image", "file", "audio"}); got != nil {
 		t.Fatalf("agent tool advertised to a model that needs none: %+v", got)
 	}
 }

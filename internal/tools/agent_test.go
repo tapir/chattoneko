@@ -188,7 +188,7 @@ func userParts(t *testing.T, body map[string]any) []map[string]any {
 // TestAgentDescriptionOffersOnlyMissingTypes: the description advertises the
 // file types the chat model cannot take itself, and the tool drops out
 // entirely when it can take all of them. Image input says nothing about PDFs —
-// that is why "document" is its own modality.
+// that is why "file" is its own modality.
 func TestAgentDescriptionOffersOnlyMissingTypes(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -201,7 +201,7 @@ func TestAgentDescriptionOffersOnlyMissingTypes(t *testing.T) {
 		{"text only", []string{"text"}, []string{"images", "PDF documents", "audio recordings"}, nil, true},
 		{"sees images", []string{"text", "image"}, []string{"PDF documents", "audio recordings"}, []string{"images"}, true},
 		{"hears audio", []string{"text", "audio"}, []string{"images", "PDF documents"}, []string{"audio recordings"}, true},
-		{"everything", []string{"text", "image", "document", "audio"}, nil, nil, false},
+		{"everything", []string{"text", "image", "file", "audio"}, nil, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			desc, needed := AgentDescription(tc.mods)

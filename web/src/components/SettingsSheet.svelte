@@ -106,11 +106,10 @@
     return { baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
   }
 
-  // "document" is PDF input, and only an input: a model never produces one.
-  // It is separate from "image" because plenty of models see pictures but
-  // refuse a PDF (and the reverse happens too).
-  const INPUT_MODALITIES = ['text', 'image', 'document', 'audio'];
-  const OUTPUT_MODALITIES = ['text', 'image', 'audio'];
+  // "file" is PDF input, and only an input: a chat model always produces
+  // text and nothing else. It is separate from "image" because plenty of
+  // models see pictures but refuse a PDF (and the reverse happens too).
+  const INPUT_MODALITIES = ['text', 'image', 'file', 'audio'];
   // The endpoint a model is added on, i.e. the provider route it is called
   // through. Only "chat" models carry the metadata below; a transcription
   // model is posted to /audio/transcriptions and gets its own flag instead.
@@ -180,7 +179,6 @@
         endpoint: m.endpoint ?? 'chat',
         contextLength: String(m.context_length ?? DEFAULT_CONTEXT),
         inputModality: [...(m.input_modality ?? ['text'])],
-        outputModality: [...(m.output_modality ?? ['text'])],
         reasoningEfforts: [...(m.reasoning_efforts ?? DEFAULT_EFFORTS)],
         effortOptions: [...(m.reasoning_efforts ?? DEFAULT_EFFORTS)],
         reasoningDefault: m.reasoning_default ?? DEFAULT_EFFORT,
@@ -249,7 +247,6 @@
         endpoint,
         contextLength: String(DEFAULT_CONTEXT),
         inputModality: ['text'],
-        outputModality: ['text'],
         reasoningEfforts: [...DEFAULT_EFFORTS],
         effortOptions: [...DEFAULT_EFFORTS],
         reasoningDefault: DEFAULT_EFFORT,
@@ -325,9 +322,8 @@
         const reported = m?.reasoning_efforts ?? card.reasoningEfforts;
         card.effortOptions = [...reported];
         // Modalities mirror the provider's /models data; a failed/unknown
-        // fetch falls back to text modalities.
+        // fetch falls back to text input.
         card.inputModality = [...(m?.input_modality ?? ['text'])];
-        card.outputModality = [...(m?.output_modality ?? ['text'])];
         if (fromProvider) {
           card.reasoningEfforts = [...reported];
           card.reasoningDefault = m.reasoning_default ?? card.reasoningDefault;
@@ -472,7 +468,6 @@
             endpoint: c.endpoint,
             context_length: Number(c.contextLength) || 0,
             input_modality: c.inputModality,
-            output_modality: c.outputModality,
             reasoning_efforts: c.reasoningEfforts,
             reasoning_default: c.reasoningDefault,
           })),
@@ -700,44 +695,25 @@
                         </div>
                       </div>
 
-                      <div class="grid gap-3 sm:grid-cols-2">
-                        <div class="space-y-1.5">
-                          <Label class={labelCls}>Input modalities</Label>
-                          <ToggleGroup.Root
-                            type="multiple"
-                            size="sm"
-                            variant="outline"
-                            value={card.inputModality}
-                            onValueChange={(v) => {
-                              // At least one modality must stay selected: an
-                              // empty change is rejected by re-pushing the
-                              // current value (new reference) into the group.
-                              card.inputModality = (v ?? []).length ? v : [...card.inputModality];
-                            }}
-                            class="w-full flex-wrap justify-start"
-                          >
-                            {#each INPUT_MODALITIES as mod (mod)}
-                              <ToggleGroup.Item value={mod}>{mod}</ToggleGroup.Item>
-                            {/each}
-                          </ToggleGroup.Root>
-                        </div>
-                        <div class="space-y-1.5">
-                          <Label class={labelCls}>Output modalities</Label>
-                          <ToggleGroup.Root
-                            type="multiple"
-                            size="sm"
-                            variant="outline"
-                            value={card.outputModality}
-                            onValueChange={(v) => {
-                              card.outputModality = (v ?? []).length ? v : [...card.outputModality];
-                            }}
-                            class="w-full flex-wrap justify-start"
-                          >
-                            {#each OUTPUT_MODALITIES as mod (mod)}
-                              <ToggleGroup.Item value={mod}>{mod}</ToggleGroup.Item>
-                            {/each}
-                          </ToggleGroup.Root>
-                        </div>
+                      <div class="space-y-1.5">
+                        <Label class={labelCls}>Input modalities</Label>
+                        <ToggleGroup.Root
+                          type="multiple"
+                          size="sm"
+                          variant="outline"
+                          value={card.inputModality}
+                          onValueChange={(v) => {
+                            // At least one modality must stay selected: an
+                            // empty change is rejected by re-pushing the
+                            // current value (new reference) into the group.
+                            card.inputModality = (v ?? []).length ? v : [...card.inputModality];
+                          }}
+                          class="w-full flex-wrap justify-start"
+                        >
+                          {#each INPUT_MODALITIES as mod (mod)}
+                            <ToggleGroup.Item value={mod}>{mod}</ToggleGroup.Item>
+                          {/each}
+                        </ToggleGroup.Root>
                       </div>
 
                       <div class="space-y-1.5">

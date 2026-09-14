@@ -99,7 +99,7 @@ type ModelsConfig struct {
 	DefaultTaskModel string `json:"default_task_model"`
 	// The remaining designations are the specialist models the agent tool
 	// hands files to when the chat model cannot read them itself (vision
-	// needs image input, document needs document input). None of them is
+	// needs image input, the document model needs "file" input). None of them is
 	// required by Complete() — a missing one just leaves that file type
 	// unreadable, which the tool reports in-band; all talk to the same
 	// provider as chat. The transcription model is the odd one out: it is an

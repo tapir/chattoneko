@@ -281,8 +281,8 @@ func TestModelMetasDefaultsAndRoundTrip(t *testing.T) {
 	if m.ContextLength != DefaultContextLength {
 		t.Errorf("ContextLength = %d", m.ContextLength)
 	}
-	if strings.Join(m.InputModality, ",") != "text" || strings.Join(m.OutputModality, ",") != "text" {
-		t.Errorf("modalities = %v / %v", m.InputModality, m.OutputModality)
+	if strings.Join(m.InputModality, ",") != "text" {
+		t.Errorf("input modality = %v", m.InputModality)
 	}
 	if strings.Join(m.ReasoningEfforts, ",") != "max,xhigh,high,medium,low,minimal,none" || m.ReasoningDefault != "medium" {
 		t.Errorf("reasoning = %v / %q", m.ReasoningEfforts, m.ReasoningDefault)
@@ -292,7 +292,6 @@ func TestModelMetasDefaultsAndRoundTrip(t *testing.T) {
 	err = s.UpsertModelMetas(ctx, []ModelMeta{{
 		ModelID:          "x/vision",
 		InputModality:    []string{"text", "image"},
-		OutputModality:   []string{"text"},
 		ContextLength:    200000,
 		ReasoningEfforts: []string{"minimal", "maximal"},
 		ReasoningDefault: "maximal",
@@ -318,13 +317,15 @@ func TestModelMetasDefaultsAndRoundTrip(t *testing.T) {
 
 func TestSanitizeMeta(t *testing.T) {
 	// Invalid modalities filtered, empty → ["text"].
-	m := ModelMeta{ModelID: "a", InputModality: []string{"IMAGE", "bogus"}, OutputModality: nil}
+	m := ModelMeta{ModelID: "a", InputModality: []string{"IMAGE", "bogus"}}
 	SanitizeMeta(&m)
 	if strings.Join(m.InputModality, ",") != "image" {
 		t.Errorf("input = %v", m.InputModality)
 	}
-	if strings.Join(m.OutputModality, ",") != "text" {
-		t.Errorf("output = %v", m.OutputModality)
+	m = ModelMeta{ModelID: "a"}
+	SanitizeMeta(&m)
+	if strings.Join(m.InputModality, ",") != "text" {
+		t.Errorf("input = %v", m.InputModality)
 	}
 
 	// Bad context → default; default effort not in list → 2nd element.
@@ -510,7 +511,7 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	whitelist := []string{"m", "vision", "pdf", "audio"}
 	stored := []ModelMeta{
 		{ModelID: "vision", InputModality: []string{"image"}},
-		{ModelID: "pdf", InputModality: []string{"text", "image", "document"}},
+		{ModelID: "pdf", InputModality: []string{"text", "image", "file"}},
 		// A transcriber: called through /audio/transcriptions, so it carries no
 		// chat modalities at all.
 		{ModelID: "audio", Endpoint: EndpointTranscription},
@@ -537,7 +538,7 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 		t.Errorf("vision model = %q, want vision", c.Models.DefaultVisionModel)
 	}
 
-	// The document role needs document input — image input does NOT imply it,
+	// The document role needs "file" input — image input does NOT imply it,
 	// plenty of models see pictures but refuse a PDF. The transcription role
 	// needs no modality, only a model added on the transcription endpoint.
 	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("vision"), DefaultTranscriptionModel: ptr("vision")}}); c.Models.DefaultDocumentModel != "" || c.Models.DefaultTranscriptionModel != "" {

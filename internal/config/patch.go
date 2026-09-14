@@ -113,7 +113,7 @@ func (s *Store) Update(ctx context.Context, patch Patch) (*Config, error) {
 // sanitizeDesignated clears a designated model that can't do the job it is
 // designated for: the chat, task, vision and document models must be chat
 // models whose input modalities cover the role ("text", "text", "image",
-// "document"), and the transcription model must be a transcription one — it is
+// "file"), and the transcription model must be a transcription one — it is
 // called through /audio/transcriptions, which no chat metadata describes.
 // Clearing rather than rejecting is the point — a broken designation
 // ends up in the same state as a missing one, so Complete()
@@ -133,7 +133,7 @@ func (s *Store) sanitizeDesignated(ctx context.Context, c *Config, patch Patch) 
 		{"chat", &c.Models.DefaultChatModel, EndpointChat, "text"},
 		{"task", &c.Models.DefaultTaskModel, EndpointChat, "text"},
 		{"vision", &c.Models.DefaultVisionModel, EndpointChat, "image"},
-		{"document", &c.Models.DefaultDocumentModel, EndpointChat, "document"},
+		{"document", &c.Models.DefaultDocumentModel, EndpointChat, "file"},
 		{"transcription", &c.Models.DefaultTranscriptionModel, EndpointTranscription, ""},
 	}
 	ids := make([]string, 0, len(designated))

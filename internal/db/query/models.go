@@ -60,7 +60,6 @@ type MessageAttachment struct {
 type Model struct {
 	ModelID          string
 	InputModality    string
-	OutputModality   string
 	ContextLength    int64
 	ReasoningEfforts string
 	ReasoningDefault string

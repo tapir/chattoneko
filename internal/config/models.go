@@ -9,35 +9,35 @@ import (
 	"time"
 )
 
-// Modalities a model can accept/produce. "document" is PDF input: it is its
-// own modality because plenty of models take images but not PDFs (and the
-// other way round), so image says nothing about it.
-var validModalities = map[string]bool{"text": true, "image": true, "document": true, "audio": true}
+// Input modalities a model can accept, in the provider's own words
+// (OpenRouter reports PDF input as "file"). "file" is its own modality
+// because plenty of models take images but not PDFs (and the other way
+// round), so image says nothing about it. Output is always text — a chat
+// completions model produces nothing else — so it is not stored.
+var validModalities = map[string]bool{"text": true, "image": true, "file": true, "audio": true}
 
 // ModelMeta is the per-model metadata stored in the models table: the
-// endpoint the model is called through, what it accepts/produces, how much
-// context it takes, and which reasoning effort levels it offers. Everything
-// but Endpoint describes a CHAT model; a transcription/image/speech row keeps
-// the defaults and nothing reads them.
+// endpoint the model is called through, what it accepts, how much context it
+// takes, and which reasoning effort levels it offers. Everything but Endpoint
+// describes a CHAT model; a transcription/image/speech row keeps the defaults
+// and nothing reads them.
 type ModelMeta struct {
 	ModelID          string   `json:"model_id"`
 	Endpoint         string   `json:"endpoint"` // one of the Endpoint* constants
 	InputModality    []string `json:"input_modality"`
-	OutputModality   []string `json:"output_modality"`
 	ContextLength    int64    `json:"context_length"`
 	ReasoningEfforts []string `json:"reasoning_efforts"`
 	ReasoningDefault string   `json:"reasoning_default"`
 }
 
 // DefaultModelMeta returns the spec defaults for one model: a chat endpoint,
-// text-only modalities, 128K context, the default effort levels with "medium"
+// text-only input, 128K context, the default effort levels with "medium"
 // preselected.
 func DefaultModelMeta(id string) ModelMeta {
 	return ModelMeta{
 		ModelID:          id,
 		Endpoint:         EndpointChat,
 		InputModality:    []string{"text"},
-		OutputModality:   []string{"text"},
 		ContextLength:    DefaultContextLength,
 		ReasoningEfforts: append([]string(nil), DefaultReasoningEfforts...),
 		ReasoningDefault: DefaultReasoningEffort,
@@ -45,7 +45,7 @@ func DefaultModelMeta(id string) ModelMeta {
 }
 
 // SanitizeMeta normalizes one model metadata entry in place: an unknown
-// endpoint becomes "chat", modalities are
+// endpoint becomes "chat", input modalities are
 // filtered to the known set (defaulting to ["text"]), context length must be
 // positive (default 128K), effort levels fall back to the default list and
 // the default effort must be one of the levels (falls back to the 2nd
@@ -57,7 +57,6 @@ func SanitizeMeta(m *ModelMeta) {
 		m.Endpoint = EndpointChat
 	}
 	m.InputModality = filterModalities(m.InputModality)
-	m.OutputModality = filterModalities(m.OutputModality)
 	if m.ContextLength <= 0 {
 		m.ContextLength = DefaultContextLength
 	}
@@ -118,7 +117,7 @@ func (s *Store) ModelMetas(ctx context.Context, ids []string) ([]ModelMeta, erro
 	stored := map[string]ModelMeta{}
 	if len(ids) > 0 {
 		rows, err := s.db.QueryContext(ctx, `
-			SELECT model_id, endpoint, input_modality, output_modality, context_length, reasoning_efforts, reasoning_default
+			SELECT model_id, endpoint, input_modality, context_length, reasoning_efforts, reasoning_default
 			FROM models WHERE model_id IN (`+placeholders(len(ids))+`)`, args(ids)...)
 		if err != nil {
 			return nil, fmt.Errorf("query models: %w", err)
@@ -171,20 +170,18 @@ func upsertModelMetas(ctx context.Context, tx *sql.Tx, metas []ModelMeta, now in
 			continue
 		}
 		in, _ := json.Marshal(m.InputModality)
-		out, _ := json.Marshal(m.OutputModality)
 		efforts, _ := json.Marshal(m.ReasoningEfforts)
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO models (model_id, endpoint, input_modality, output_modality, context_length, reasoning_efforts, reasoning_default, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO models (model_id, endpoint, input_modality, context_length, reasoning_efforts, reasoning_default, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(model_id) DO UPDATE SET
 				endpoint = excluded.endpoint,
 				input_modality = excluded.input_modality,
-				output_modality = excluded.output_modality,
 				context_length = excluded.context_length,
 				reasoning_efforts = excluded.reasoning_efforts,
 				reasoning_default = excluded.reasoning_default,
 				updated_at = excluded.updated_at`,
-			m.ModelID, m.Endpoint, string(in), string(out), m.ContextLength, string(efforts), m.ReasoningDefault, now); err != nil {
+			m.ModelID, m.Endpoint, string(in), m.ContextLength, string(efforts), m.ReasoningDefault, now); err != nil {
 			return err
 		}
 	}
@@ -206,10 +203,10 @@ func pruneModelMetas(ctx context.Context, tx *sql.Tx, keep []string) error {
 
 func scanModelMeta(rows *sql.Rows) (ModelMeta, error) {
 	var (
-		m                ModelMeta
-		in, out, efforts string
+		m           ModelMeta
+		in, efforts string
 	)
-	if err := rows.Scan(&m.ModelID, &m.Endpoint, &in, &out, &m.ContextLength, &efforts, &m.ReasoningDefault); err != nil {
+	if err := rows.Scan(&m.ModelID, &m.Endpoint, &in, &m.ContextLength, &efforts, &m.ReasoningDefault); err != nil {
 		return m, err
 	}
 	if !validEndpoints[m.Endpoint] {
@@ -218,7 +215,6 @@ func scanModelMeta(rows *sql.Rows) (ModelMeta, error) {
 	// Stored rows are sanitized on write; parse errors fall back to the
 	// column defaults rather than failing the whole read.
 	m.InputModality = parseModalities(in)
-	m.OutputModality = parseModalities(out)
 	m.ReasoningEfforts = filterEmpty(parseStrings(efforts))
 	if len(m.ReasoningEfforts) == 0 {
 		m.ReasoningEfforts = append([]string(nil), DefaultReasoningEfforts...)

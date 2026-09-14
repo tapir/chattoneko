@@ -419,7 +419,7 @@ console.log('OK streaming parity');
     [[0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50], 'image'], // RIFF/WEBP
     [[0x47, 0x49, 0x46, 0x38, 0x39, 0x61], 'image'], // GIF89a
     [[0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0], 'image'], // BMP + its four reserved zeroes
-    [[0, 0, 1, 0, 1, 0], 'image'], // ICO
+    [[0, 0, 1, 0, 1, 0], ''], // ICO: not a supported image, so it is not media
     [[0x25, 0x50, 0x44, 0x46], 'pdf'], // %PDF
     [[0x49, 0x44, 0x33, 4], 'audio'], // ID3
     [[0x4f, 0x67, 0x67, 0x53], 'audio'], // OggS

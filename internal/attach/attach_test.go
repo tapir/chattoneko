@@ -146,7 +146,9 @@ func TestProcessAnyToolMedia(t *testing.T) {
 		{"misnamed jpeg", "photo", jpg, KindImage, MimeJPEG}, // gains .jpg
 		{"gif", "anim.gif", gifHeader, KindImage, MimeGIF},
 		{"bmp", "bitmap.bmp", bmpHeader, KindImage, MimeBMP},
-		{"ico", "favicon.ico", icoHeader, KindImage, MimeICO},
+		// ICO is not a supported image: no conversion path handles it, so it is
+		// kept as the download the tool policy keeps any unknown binary as.
+		{"ico is not an image", "favicon.ico", icoHeader, KindFile, "image/x-icon"},
 		{"wav", "rec.wav", wavHeader, KindFile, MimeWAV},
 		{"tagged mp3", "song.mp3", id3Header, KindFile, MimeMP3},
 		{"bare-frame mp3", "song.mp3", mp3Frame, KindFile, MimeMP3},
@@ -247,14 +249,39 @@ func TestProcessUploadStaysStrict(t *testing.T) {
 	}
 }
 
-// Only PNG and WebP may go to a model as an image: they are what a browser
-// converts an upload to, and history is rebuilt every turn, so a mime the
+// IsRasterImage is the gate on create_file's WebP conversion: the five formats
+// it decodes, and nothing else — ICO in particular, which the app dropped.
+func TestIsRasterImage(t *testing.T) {
+	jpg := makeJPEG(t, 8, 6)
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"jpeg", jpg, true},
+		{"png", makePNG(t, 8, 6), true},
+		{"webp", sampleWebP(t), true},
+		{"gif", gifHeader, true},
+		{"bmp", bmpHeader, true},
+		{"ico", icoHeader, false},
+		{"wav", wavHeader, false},
+		{"pdf", pdfHeader, false},
+		{"text", []byte("hello"), false},
+	} {
+		if got := IsRasterImage(tc.data); got != tc.want {
+			t.Errorf("IsRasterImage(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Only PNG and WebP may go to a model as an image: they are what both
+// conversion paths produce, and history is rebuilt every turn, so a mime the
 // provider rejects would break that chat for good. Everything else previews in
 // the browser but takes the <file> reference path.
 func TestSendsAsImage(t *testing.T) {
 	for mime, want := range map[string]bool{
 		MimePNG: true, MimeWebP: true,
-		MimeJPEG: false, MimeGIF: false, MimeBMP: false, MimeICO: false,
+		MimeJPEG: false, MimeGIF: false, MimeBMP: false, "image/x-icon": false,
 		MimePDF: false, MimeAudio: false, "": false,
 	} {
 		if got := SendsAsImage(mime); got != want {

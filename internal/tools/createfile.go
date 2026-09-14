@@ -128,9 +128,22 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 		}
 	}
 
+	// Images are normalized to WebP here, the same three steps the browser runs
+	// on an upload before sending it (see image.go), so a file the model drew or
+	// fetched lands in the chat in the shape a user's file does. Only inside the
+	// size limit: an oversized file is ProcessAny's ErrTooLarge to report, not
+	// ours to decode first.
+	if int64(len(data)) <= limit && attach.IsRasterImage(data) {
+		converted, err := toWebP(data)
+		if err != nil {
+			return "", fmt.Errorf("content rejected: the image could not be converted to WebP: %v", err)
+		}
+		data = converted
+	}
+
 	// Same content rules as user uploads, plus the binary kind they refuse:
-	// supported media is recognised by magic bytes and stored verbatim, text is
-	// validated, anything else is kept as a download-only file.
+	// supported media is recognised by magic bytes, text is validated, anything
+	// else is kept as a download-only file.
 	res, err := attach.ProcessAny(name, data, limit)
 	if errors.Is(err, attach.ErrTooLarge) {
 		return "", fmt.Errorf("content exceeds the %s file size limit", humanSize(limit))

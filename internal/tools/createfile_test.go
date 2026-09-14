@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -266,9 +265,9 @@ func TestCreateFileFromURLImage(t *testing.T) {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
 	c := shownOn(t, fs, "m1")
-	// Stored verbatim (same rule as uploads — nothing is re-encoded) and the
-	// name follows the bytes, not the URL.
-	if c.kind != "image" || c.mime != "image/png" || c.filename != "cat.png" {
+	// Converted to WebP exactly as the browser converts an upload, and the name
+	// follows the bytes, not the URL.
+	if c.kind != "image" || c.mime != "image/webp" || c.filename != "cat.webp" {
 		t.Fatalf("wrong attachment: kind=%q mime=%q name=%q", c.kind, c.mime, c.filename)
 	}
 	if c.size != int64(len(c.data)) {
@@ -279,9 +278,9 @@ func TestCreateFileFromURLImage(t *testing.T) {
 	}
 }
 
-// A JPEG a tool fetches is a picture, not a download: tools store what they got
-// (nothing is converted server-side) and every format a browser can render
-// unaided previews inline. The upload path is stricter — see attach's tests.
+// A JPEG a tool fetches is a picture, not a download: it is re-encoded to WebP
+// like every other raster format, which also makes it one of the two mimes a
+// vision model is sent. The upload path is stricter — see attach's tests.
 func TestCreateFileFromURLJPEGIsAnImage(t *testing.T) {
 	allowWebFetchLoopback(t)
 	ts := serve(t, "image/jpeg", testJPEG(t, 40, 30))
@@ -293,7 +292,7 @@ func TestCreateFileFromURLJPEGIsAnImage(t *testing.T) {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
 	c := shownOn(t, fs, "m1")
-	if c.kind != "image" || c.mime != "image/jpeg" || c.filename != "cat.jpg" {
+	if c.kind != "image" || c.mime != "image/webp" || c.filename != "cat.webp" {
 		t.Fatalf("wrong attachment: kind=%q mime=%q name=%q", c.kind, c.mime, c.filename)
 	}
 	if !strings.Contains(out, "inline as an image") {
@@ -386,17 +385,17 @@ func TestCreateFileFromURLFilename(t *testing.T) {
 	ts := serveTextOrImage(t, testPNG(t, 5, 5))
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 
-	// Media names get the extension their sniffed mime implies (stored bytes
-	// are never re-encoded, so the suffix simply has to match what came in).
+	// Media names get the extension their sniffed mime implies — and every
+	// raster format is converted to WebP first, so that suffix is always .webp.
 	cases := []struct{ name, args, want string }{
-		{"jpg source", `{"url":"` + ts.URL + `/a/photo.jpeg"}`, "photo.png"},
-		{"webp source", `{"url":"` + ts.URL + `/a/sticker.webp"}`, "sticker.png"},
-		{"png kept", `{"url":"` + ts.URL + `/a/diagram.PNG"}`, "diagram.PNG"},
-		{"no extension", `{"url":"` + ts.URL + `/a/img"}`, "img.png"},
-		{"root path", `{"url":"` + ts.URL + `"}`, "file.png"},
-		{"explicit wins", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"my cat"}`, "my cat.png"},
-		{"explicit invalid falls back", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"../evil"}`, "cat.png"},
-		{"query stripped", `{"url":"` + ts.URL + `/a/cat.jpg?sig=xyz&exp=1"}`, "cat.png"},
+		{"jpg source", `{"url":"` + ts.URL + `/a/photo.jpeg"}`, "photo.webp"},
+		{"webp source", `{"url":"` + ts.URL + `/a/sticker.webp"}`, "sticker.webp"},
+		{"png re-encoded", `{"url":"` + ts.URL + `/a/diagram.PNG"}`, "diagram.webp"},
+		{"no extension", `{"url":"` + ts.URL + `/a/img"}`, "img.webp"},
+		{"root path", `{"url":"` + ts.URL + `"}`, "file.webp"},
+		{"explicit wins", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"my cat"}`, "my cat.webp"},
+		{"explicit invalid falls back", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"../evil"}`, "cat.webp"},
+		{"query stripped", `{"url":"` + ts.URL + `/a/cat.jpg?sig=xyz&exp=1"}`, "cat.webp"},
 		// Text keeps the served name, extension and all.
 		{"text keeps name", `{"url":"` + ts.URL + `/a/notes.md"}`, "notes.md"},
 	}
@@ -413,7 +412,7 @@ func TestCreateFileFromURLFilename(t *testing.T) {
 		})
 	}
 
-	// A long multibyte explicit name (199 bytes, no extension) gets .png
+	// A long multibyte explicit name (199 bytes, no extension) gets .webp
 	// appended past the 200-byte cap: the truncation must cut at a rune
 	// boundary and stay valid UTF-8.
 	longCJK := strings.Repeat("日", 66) + "a"
@@ -423,8 +422,8 @@ func TestCreateFileFromURLFilename(t *testing.T) {
 		t.Fatalf("unexpected error: %q", out)
 	}
 	got := fs.files[0].filename
-	if len(got) > 200 || !utf8.ValidString(got) || !strings.HasSuffix(got, ".png") {
-		t.Fatalf("filename = %q (%d bytes, valid UTF-8 %v), want <=200 bytes ending in .png",
+	if len(got) > 200 || !utf8.ValidString(got) || !strings.HasSuffix(got, ".webp") {
+		t.Fatalf("filename = %q (%d bytes, valid UTF-8 %v), want <=200 bytes ending in .webp",
 			got, len(got), utf8.ValidString(got))
 	}
 }
@@ -449,11 +448,10 @@ func TestCreateFileFromURLBinary(t *testing.T) {
 	}
 }
 
-// The server never decodes pixels: bytes with a real PNG magic are stored
-// verbatim even when the payload after the header is nonsense. Validating the
-// decode was the old pipeline's job and died with it — the browser that
-// produced the file is the only converter.
-func TestCreateFileFromURLUndecodablePNGIsStoredVerbatim(t *testing.T) {
+// Bytes with a real PNG magic but nonsense after the header are refused: the
+// conversion runs on the server now, and a picture that will not decode is an
+// in-band error rather than a broken thumbnail nobody can explain.
+func TestCreateFileFromURLUndecodablePNGIsRefused(t *testing.T) {
 	allowWebFetchLoopback(t)
 	body := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
 	ts := serve(t, "image/png", body)
@@ -461,12 +459,11 @@ func TestCreateFileFromURLUndecodablePNGIsStoredVerbatim(t *testing.T) {
 	fs := &fakeFileStore{}
 	out, isErr := callTool(t, fs, "create_file", `{"url":"`+ts.URL+`/x.png"}`,
 		mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
-	if isErr {
-		t.Fatalf("want it stored, got error %q", out)
+	if !isErr || !strings.Contains(out, "could not be converted to WebP") {
+		t.Fatalf("want a conversion error, got isErr=%v %q", isErr, out)
 	}
-	c := shownOn(t, fs, "m1")
-	if c.kind != "image" || !bytes.Equal(c.data, body) {
-		t.Fatalf("stored kind=%q, %d bytes; want the same %d bytes verbatim", c.kind, len(c.data), len(body))
+	if len(fs.files) != 0 {
+		t.Fatalf("nothing should have been stored, got %d file(s)", len(fs.files))
 	}
 }
 

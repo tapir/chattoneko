@@ -1,8 +1,8 @@
 // Package attach classifies files by CONTENT — never by extension — and
-// sanitizes filenames. Nothing here decodes pixels or audio samples:
-// conversion, resizing and EXIF orientation happen in the browser before
-// upload (web/src/lib/media.js), and a tool's file is stored exactly as it was
-// fetched. The server's whole job is one magic-byte check per file.
+// sanitizes filenames. Nothing here decodes pixels or audio samples: an upload
+// arrives already converted by the browser (web/src/lib/media.js), and a tool's
+// picture is re-encoded to WebP by internal/tools before it reaches ProcessAny.
+// This package's whole job is one magic-byte check per file.
 //
 // Two policies share that check. Uploads accept only what the browser produces
 // (PNG/WebP, WebM, PDF) plus text; tools also accept any media a browser can
@@ -31,16 +31,18 @@ const (
 )
 
 // The mimes a file can be stored under, all decided by magic bytes. WebP is
-// what the browser encodes an upload to, PNG what it falls back to where WebP
-// encoding does not exist (Safari, every version, silently hands back a PNG).
-// The rest only ever arrive from a tool, which stores what it fetched.
+// what an image is encoded to on both paths — the browser before an upload,
+// create_file before storing a tool's file — and PNG is what a browser falls
+// back to where WebP encoding does not exist (Safari, every version, silently
+// hands back a PNG). JPEG, GIF and BMP stay in the tool table so a picture that
+// somehow skips that conversion still previews instead of downloading. ICO is
+// supported nowhere: an .ico is just a download.
 const (
 	MimePNG  = "image/png"
 	MimeJPEG = "image/jpeg"
 	MimeWebP = "image/webp"
 	MimeGIF  = "image/gif"
 	MimeBMP  = "image/bmp"
-	MimeICO  = "image/x-icon"
 
 	MimeAudio = "audio/webm" // the only audio an upload can carry
 	MimeMP3   = "audio/mpeg"
@@ -67,7 +69,7 @@ var (
 	}
 	toolMedia = map[string]string{
 		MimePNG: KindImage, MimeJPEG: KindImage, MimeWebP: KindImage,
-		MimeGIF: KindImage, MimeBMP: KindImage, MimeICO: KindImage,
+		MimeGIF: KindImage, MimeBMP: KindImage,
 		MimeAudio: KindFile, MimeMP3: KindFile, MimeWAV: KindFile,
 		MimeOGG: KindFile, MimeFLAC: KindFile, MimePDF: KindFile,
 	}
@@ -108,7 +110,7 @@ func acceptedList(media map[string]string) string {
 // their spelling.
 var mediaExts = map[string]string{
 	"png": MimePNG, "jpg": MimeJPEG, "jpeg": MimeJPEG, "webp": MimeWebP,
-	"gif": MimeGIF, "bmp": MimeBMP, "ico": MimeICO,
+	"gif": MimeGIF, "bmp": MimeBMP,
 	"mp3": MimeMP3, "wav": MimeWAV, "flac": MimeFLAC,
 	"ogg": MimeOGG, "opus": MimeOGG, "webm": MimeAudio,
 	"pdf": MimePDF,
@@ -194,10 +196,23 @@ func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 // ProcessAny is the TOOL path: the same classification plus every media format
 // a browser can render unaided (`toolMedia`). Any other binary is kept as a
 // download rather than refused, so a file the model found on the web reaches
-// the user whatever it is. Nothing is converted on either path — the bytes are
-// stored exactly as they arrived.
+// the user whatever it is. Neither path converts anything itself — create_file
+// has already re-encoded a picture to WebP by the time its bytes arrive here.
 func ProcessAny(filename string, data []byte, maxBytes int64) (*Result, error) {
 	return process(filename, data, maxBytes, toolPolicy)
+}
+
+// IsRasterImage reports whether data is one of the still-image formats a tool
+// re-encodes to WebP before storing: JPEG, PNG, WebP, GIF (first frame) and
+// BMP. The answer comes from the magic bytes like everything else here, never
+// from the extension, so a misnamed or extension-less download is caught too.
+// ICO is deliberately absent — see the mime table.
+func IsRasterImage(data []byte) bool {
+	switch sniffMime(data) {
+	case MimeJPEG, MimePNG, MimeWebP, MimeGIF, MimeBMP:
+		return true
+	}
+	return false
 }
 
 func process(filename string, data []byte, maxBytes int64, p policy) (*Result, error) {
@@ -390,11 +405,11 @@ func AudioFormat(mime string) string {
 }
 
 // SendsAsImage reports whether a stored image mime may go to a model as an
-// image part. Only the two formats a browser converts an upload to qualify: a
-// JPEG, GIF, BMP or ICO a tool fetched previews fine but takes the <file>
-// reference path instead, and the agent tool refuses it in-band. History is
-// rebuilt every turn, so a mime the provider rejects would break that chat for
-// good.
+// image part. Only the two formats both conversion paths produce qualify: a
+// JPEG, GIF or BMP survives in an attachment stored before create_file started
+// converting, previews fine but takes the <file> reference path instead, and
+// the agent tool refuses it in-band. History is rebuilt every turn, so a mime
+// the provider rejects would break that chat for good.
 func SendsAsImage(mime string) bool {
 	return mime == MimePNG || mime == MimeWebP
 }

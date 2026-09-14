@@ -1,10 +1,14 @@
 // Client-side media policy: what a file IS (magic bytes), what gets converted,
-// and what this browser can play. The server decodes nothing, so every image
-// and every recording is normalized here, the moment it is attached:
+// and what this browser can play. An upload is stored exactly as it is sent, so
+// every image and every recording is normalized here, the moment it is
+// attached:
 //
 //   image -> WebP at 75% quality, longest side capped at 1280px (but never
 //            shrunk by more than 2x — see scaleToFit)
 //   audio -> WebM/Opus, 24 kHz, mono, 48 kbps
+//
+// internal/tools/image.go runs that same image scheme on the server for a
+// picture create_file is handed, so both paths land in the chat alike.
 //
 // Two browser facts shape the code:
 //
@@ -27,16 +31,17 @@ const IMAGE_QUALITY = 0.75;
 // (anything else is judged by content — see lib/text-sniff.js). The rule the
 // server applies in internal/attach, so an extension-less or misnamed file goes
 // by what it IS and the two sides cannot disagree. ISO-BMFF (mp4/mov) is
-// deliberately not recognized: the app has no video player. An EBML file counts
-// as audio whatever its DocType — the conversion below either pulls out a
-// soundtrack or fails with a clear error.
+// deliberately not recognized: the app has no video player. So is ICO — no
+// conversion path handles it, so an .ico is refused here and downloads there.
+// An EBML file counts as audio whatever its DocType — the conversion below
+// either pulls out a soundtrack or fails with a clear error.
 export async function sniffKind(file) {
   const b = new Uint8Array(await file.slice(0, 16).arrayBuffer());
   const at = (off, s) => {
     for (let i = 0; i < s.length; i++) if (b[off + i] !== s.charCodeAt(i)) return false;
     return true;
   };
-  if (at(0, "\x89PNG") || at(0, "\xff\xd8\xff") || at(0, "GIF8") || at(0, "\x00\x00\x01\x00")) return "image";
+  if (at(0, "\x89PNG") || at(0, "\xff\xd8\xff") || at(0, "GIF8")) return "image";
   if (at(0, "RIFF") && at(8, "WEBP")) return "image";
   // "BM" is two bytes of weak signature, so the four reserved zeroes that
   // follow a BMP's file size are part of the check.

@@ -13,7 +13,7 @@ It is extremely small. Everything is one static Go binary with the web UI embedd
 - Chat with any model through an OpenAI-compatible (chat completions) API. Keep a list of favorites and switch per chat.
 - Replies stream in as they are written, and can be stopped at any time.
 - Models that reason out loud show their thinking in collapsible blocks, one per step of a tool-using reply, each next to the tool calls it produced.
-- Send images, text files, audio and PDFs as attachments. Pictures and recordings are converted in your browser as you attach them (images to WebP at most 1280px wide, and never shrunk by more than half; audio to WebM/Opus), so the server never has to decode anything. A file the picked model can't read is kept anyway and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that CAN read it (the `agent` tool), once you flag one in settings.
+- Send images, text files, audio and PDFs as attachments. Pictures and recordings are converted in your browser as you attach them (images to WebP at most 1280px wide, and never shrunk by more than half; audio to WebM/Opus), and a picture the model hands you goes through that same image conversion on the server, so both land in the chat in the same shape. A file the picked model can't read is kept anyway and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that CAN read it (the `agent` tool), once you flag one in settings.
 - Tools the model can call, plus any MCP server you add.
 - The model can hand you files back as download links, and show images inline.
 - Chats are saved and titled automatically; search, rename, delete.

@@ -1094,7 +1094,7 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Images are served inline under their stored mime — the closed set in
-	// attach's media tables (png, webp, jpeg, gif, bmp, ico), none of which can
+	// attach's media tables (png, webp, jpeg, gif, bmp), none of which can
 	// carry script; an SVG never reaches this branch because it classifies as
 	// text. Text attachments are served as
 	// text/plain regardless of their detected mime so an HTML/SVG upload can

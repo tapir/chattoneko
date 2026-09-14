@@ -5,7 +5,7 @@
 // This package's whole job is one magic-byte check per file.
 //
 // Two policies share that check. Uploads accept only what the browser produces
-// (PNG/WebP, WebM, PDF) plus text; tools also accept any media a browser can
+// (WebP, WebM, PDF) plus text; tools also accept any media a browser can
 // render unaided, and keep every other binary as a download.
 package attach
 
@@ -31,12 +31,14 @@ const (
 )
 
 // The mimes a file can be stored under, all decided by magic bytes. WebP is
-// what an image is encoded to on both paths — the browser before an upload,
-// create_file before storing a tool's file — and PNG is what a browser falls
-// back to where WebP encoding does not exist (Safari, every version, silently
-// hands back a PNG). JPEG, GIF and BMP stay in the tool table so a picture that
-// somehow skips that conversion still previews instead of downloading. ICO is
-// supported nowhere: an .ico is just a download.
+// THE image format: the browser encodes every upload to it — libwebp in WASM
+// where the browser cannot (Safari, every version, silently hands back a PNG
+// for a WebP request) — and create_file re-encodes a tool's picture to it, so
+// nothing else is accepted as an upload. PNG, JPEG, GIF and BMP stay in the
+// tool table so a picture that somehow skips that conversion still previews
+// instead of downloading, and PNG stays a mime the app can serve and send for
+// rows stored before uploads became WebP-only. ICO is supported nowhere: an
+// .ico is just a download.
 const (
 	MimePNG  = "image/png"
 	MimeJPEG = "image/jpeg"
@@ -64,7 +66,7 @@ var ErrTooLarge = errors.New("file too large")
 // they carry, because an audio player is the only one the app has.
 var (
 	uploadMedia = map[string]string{
-		MimePNG: KindImage, MimeWebP: KindImage,
+		MimeWebP:  KindImage,
 		MimeAudio: KindFile, MimePDF: KindFile,
 	}
 	toolMedia = map[string]string{
@@ -405,11 +407,12 @@ func AudioFormat(mime string) string {
 }
 
 // SendsAsImage reports whether a stored image mime may go to a model as an
-// image part. Only the two formats both conversion paths produce qualify: a
-// JPEG, GIF or BMP survives in an attachment stored before create_file started
-// converting, previews fine but takes the <file> reference path instead, and
-// the agent tool refuses it in-band. History is rebuilt every turn, so a mime
-// the provider rejects would break that chat for good.
+// image part. WebP is what every conversion path produces now; PNG is here for
+// the rows stored before uploads became WebP-only, which a Safari browser
+// encoded. A JPEG, GIF or BMP survives in an attachment stored before
+// create_file started converting, previews fine but takes the <file> reference
+// path instead, and the agent tool refuses it in-band. History is rebuilt every
+// turn, so a mime the provider rejects would break that chat for good.
 func SendsAsImage(mime string) bool {
 	return mime == MimePNG || mime == MimeWebP
 }

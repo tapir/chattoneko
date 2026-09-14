@@ -13,9 +13,9 @@
 // Two browser facts shape the code:
 //
 // 1. Safari — every version, desktop and iOS — cannot ENCODE WebP. toBlob()
-//    silently hands back a PNG instead of throwing, so the result's own
-//    blob.type decides the filename, never the type we asked for. The server
-//    accepts both.
+//    silently hands back a PNG instead of throwing, so the encoder is probed
+//    once and Safari gets libwebp as WASM instead (lib/webp-enc.js). There is
+//    no PNG fallback: the server stores WebP only.
 // 2. Audio goes through WebCodecs (inside mediabunny, which is pure TypeScript
 //    and carries no WASM). AudioEncoder exists in Chrome/Edge 94+, Firefox
 //    desktop 130+ and Safari 26+ only, and WebCodecs needs a secure context,
@@ -72,8 +72,8 @@ export function canPlayAudio(att) {
 }
 
 // renamed wraps a converted blob in a File whose name and type match what the
-// browser actually produced — on Safari a WebP request yields a PNG, and the
-// name has to say so.
+// conversion actually produced — the suffix is derived from the blob, never
+// from the type that was asked for.
 function renamed(file, blob, fallback) {
   const base = (file.name || fallback).replace(/\.[^.]+$/, "");
   return new File([blob], `${base || fallback}.${extFromMime(blob.type) || "bin"}`, {
@@ -94,9 +94,22 @@ export function scaleToFit(w, h, max) {
   return { width: Math.max(1, Math.round(w * k)), height: Math.max(1, Math.round(h * k)) };
 }
 
+// canEncodeWebP asks the browser once whether it can encode a WebP at all: the
+// only reliable answer is the type of a blob it actually produced, because an
+// unsupported one comes back as a PNG rather than an error. Cached like
+// canPlayAudio's table — every image attach would otherwise pay for the probe.
+let webpProbe;
+function canEncodeWebP() {
+  return (webpProbe ??= new Promise((resolve) => {
+    const probe = document.createElement("canvas");
+    probe.width = probe.height = 1;
+    probe.toBlob((b) => resolve(b?.type === "image/webp"), "image/webp");
+  }));
+}
+
 // convertImage decodes any supported image, downscales it if it is bigger than
-// MAX_SIDE on its longest side, and re-encodes to WebP (PNG on Safari). EXIF
-// orientation needs no code: createImageBitmap applies it by default.
+// MAX_SIDE on its longest side, and re-encodes to WebP. EXIF orientation needs
+// no code: createImageBitmap applies it by default.
 export async function convertImage(file) {
   const bitmap = await createImageBitmap(file);
   try {
@@ -104,14 +117,25 @@ export async function convertImage(file) {
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
-    canvas.getContext("2d").drawImage(bitmap, 0, 0, width, height);
-    const blob = await new Promise((resolve, reject) =>
-      canvas.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error("the browser could not encode this image"))),
-        "image/webp",
-        IMAGE_QUALITY,
-      ),
-    );
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    let blob;
+    if (await canEncodeWebP()) {
+      blob = await new Promise((resolve, reject) =>
+        canvas.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error("the browser could not encode this image"))),
+          "image/webp",
+          IMAGE_QUALITY,
+        ),
+      );
+    } else {
+      // Safari has no WebP encoder, so it gets libwebp in WASM off the raw
+      // pixels the canvas already holds. Imported here, not at the top: ~320 KB
+      // of glue and wasm that no other browser ever fetches.
+      const { encodeWebP } = await import("./webp-enc.js");
+      const bytes = await encodeWebP(ctx.getImageData(0, 0, width, height), IMAGE_QUALITY);
+      blob = new Blob([bytes], { type: "image/webp" });
+    }
     return renamed(file, blob, "image");
   } finally {
     bitmap.close();

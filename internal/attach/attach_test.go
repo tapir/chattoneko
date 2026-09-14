@@ -80,7 +80,6 @@ func TestProcessMediaStoredVerbatim(t *testing.T) {
 		wantName       string
 		allowedAsImage bool
 	}{
-		{"png", "pic.png", makePNG(t, 8, 6), KindImage, MimePNG, "pic.png", true},
 		{"webp", "sticker.webp", sampleWebP(t), KindImage, MimeWebP, "sticker.webp", true},
 		{"audio webm", "memo.webm", webmHeader, KindFile, MimeAudio, "memo.webm", false},
 		{"pdf", "invoice.pdf", []byte("%PDF-1.7 fake"), KindFile, MimePDF, "invoice.pdf", false},
@@ -114,9 +113,7 @@ func TestProcessNameFollowsMime(t *testing.T) {
 	}{
 		{"photo.jpg", webp, "photo.webp"},
 		{"photo", webp, "photo.webp"},
-		{"a.b.c.PNG", webp, "a.b.c.webp"},            // the bytes win over the name
-		{"a.b.c.PNG", makePNG(t, 4, 4), "a.b.c.PNG"}, // a matching suffix is left alone
-		{"photo.jpg", makePNG(t, 4, 4), "photo.png"},
+		{"a.b.c.PNG", webp, "a.b.c.webp"}, // the bytes win over the name
 		{"memo.mp3", webmHeader, "memo.webm"},
 		{"invoice.txt", []byte("%PDF-1.7 fake"), "invoice.pdf"},
 		{"notes.md", []byte("# hi\n"), "notes.md"},
@@ -223,8 +220,13 @@ func TestProcessAnyKeepsUnsupportedAsDownload(t *testing.T) {
 
 // An upload only ever carries what the browser produced, so anything else is
 // refused there even when a tool may attach it: the client's conversion step is
-// the rule, not an option.
+// the rule, not an option. PNG included — a browser with no WebP encoder
+// (Safari, every version) encodes one in WASM instead of sending the PNG
+// toBlob() silently falls back to.
 func TestProcessUploadStaysStrict(t *testing.T) {
+	if _, err := Process("pic.png", makePNG(t, 8, 6), 1<<20); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("png upload accepted: %v", err)
+	}
 	_, err := Process("photo.jpg", makeJPEG(t, 8, 6), 1<<20)
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("jpeg upload accepted: %v", err)
@@ -274,10 +276,11 @@ func TestIsRasterImage(t *testing.T) {
 	}
 }
 
-// Only PNG and WebP may go to a model as an image: they are what both
-// conversion paths produce, and history is rebuilt every turn, so a mime the
-// provider rejects would break that chat for good. Everything else previews in
-// the browser but takes the <file> reference path.
+// Only PNG and WebP may go to a model as an image: WebP is what both conversion
+// paths produce, and PNG is what a Safari browser stored before uploads became
+// WebP-only. History is rebuilt every turn, so a mime the provider rejects would
+// break that chat for good. Everything else previews in the browser but takes
+// the <file> reference path.
 func TestSendsAsImage(t *testing.T) {
 	for mime, want := range map[string]bool{
 		MimePNG: true, MimeWebP: true,
@@ -336,7 +339,7 @@ func TestProcessTooLarge(t *testing.T) {
 		t.Fatalf("want ErrTooLarge, got %v", err)
 	}
 	// The cap applies to media too — nothing is downscaled to fit any more.
-	if _, err := Process("pic.png", makePNG(t, 200, 200), 64); !errors.Is(err, ErrTooLarge) {
+	if _, err := Process("pic.webp", sampleWebP(t), 64); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("image over the cap accepted: %v", err)
 	}
 	if _, err := Process("x.txt", payload, 1024); err != nil {
@@ -359,7 +362,7 @@ func TestProcessSizeMatchesData(t *testing.T) {
 		filename string
 		data     []byte
 	}{
-		{"pic.png", makePNG(t, 50, 40)},
+		{"pic.webp", sampleWebP(t)},
 		{"notes.md", []byte("# hi\n")},
 		{"memo.webm", webmHeader},
 	} {

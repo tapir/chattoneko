@@ -394,18 +394,6 @@ func IsText(data []byte) bool {
 	return total > 0 && float64(good)/float64(total) >= 0.95
 }
 
-// AudioFormat returns the input_audio format name for a stored audio mime, or
-// "" for anything else. Only WebM maps: audio a TOOL attached (mp3, wav, flac,
-// …) is stored and played for the user but never sent to a specialist model,
-// so the agent tool refuses it in-band rather than guessing a format the
-// provider would misread.
-func AudioFormat(mime string) string {
-	if mime == MimeAudio {
-		return "webm"
-	}
-	return ""
-}
-
 // SendsAsImage reports whether a stored image mime may go to a model as an
 // image part. WebP is what every conversion path produces now; PNG is here for
 // the rows stored before uploads became WebP-only, which a Safari browser

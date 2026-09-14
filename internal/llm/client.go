@@ -6,6 +6,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"strings"
@@ -38,6 +39,20 @@ func (c *Client) Complete(ctx context.Context, msgs []openai.ChatCompletionMessa
 		params.ReasoningEffort = shared.ReasoningEffort(c.effort)
 	}
 	return c.api.Chat.Completions.New(ctx, params)
+}
+
+// Transcribe sends audio to the provider's /audio/transcriptions and returns
+// the text. The filename and mime ride along in the multipart part: the
+// endpoint identifies the container from them rather than from the bytes.
+func (c *Client) Transcribe(ctx context.Context, filename, mime string, data []byte) (string, error) {
+	resp, err := c.api.Audio.Transcriptions.New(ctx, openai.AudioTranscriptionNewParams{
+		Model: openai.AudioModel(c.model),
+		File:  openai.File(bytes.NewReader(data), filename, mime),
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Text, nil
 }
 
 // Cache holds one client and rebuilds it when the settings it was built from

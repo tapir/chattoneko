@@ -25,15 +25,14 @@ import (
 // model, so the constant lives here rather than being repeated there.
 const AgentName = "agent"
 
-// The specialists' system prompts, one file per file type, embedded so the
+// The system prompts of the specialists that are chat models, embedded so the
 // binary carries them. Edit the files to change how a specialist behaves.
+// Audio has none: it goes to /audio/transcriptions, which takes no prompt.
 var (
 	//go:embed prompts/agent_vision.md
 	promptVision string
 	//go:embed prompts/agent_document.md
 	promptDocument string
-	//go:embed prompts/agent_audio.md
-	promptAudio string
 )
 
 const (
@@ -57,7 +56,7 @@ type specialist struct {
 	kind   string // attachment type (attach.Type) == required input modality
 	what   string // how the tool description names this file type and its formats
 	model  func(config.ModelsConfig) string
-	prompt string
+	prompt string // system prompt; empty when the specialist is not a chat model
 }
 
 // specialists is the whole hand-off table, in the order the description lists
@@ -66,7 +65,10 @@ type specialist struct {
 var specialists = []specialist{
 	{"image", "images (PNG or WebP only)", func(m config.ModelsConfig) string { return m.DefaultVisionModel }, promptVision},
 	{"document", "PDF documents", func(m config.ModelsConfig) string { return m.DefaultDocumentModel }, promptDocument},
-	{"audio", "audio recordings (WebM only)", func(m config.ModelsConfig) string { return m.DefaultAudioModel }, promptAudio},
+	// Audio is transcribed, not asked: the models this role names have no
+	// chat endpoint, so what comes back is the recording's text and the chat
+	// model answers its own question from it.
+	{"audio", "audio recordings (which come back as a transcript, whatever the question was)", func(m config.ModelsConfig) string { return m.DefaultAudioModel }, ""},
 }
 
 // agentSchema is the tool's argument shape. The file's TYPE is not an
@@ -94,9 +96,9 @@ var agentSchema = json.RawMessage(`{
 // a <file> reference naming its id, so the id is all the tool needs to load
 // the bytes back from the database.
 //
-// Every exchange is one-off by construction: one user message (the file plus
-// the question) under the specialist's own system prompt, one answer back, no
-// conversation carried over in either direction.
+// Every exchange is one-off by construction: one request carrying the file
+// (and the question, for the specialists that are chat models), one answer
+// back, no conversation carried over in either direction.
 func Agent(files fileStore, cfgs *config.Store) tool {
 	a := &agent{files: files, cfgs: cfgs, caches: map[string]*llm.Cache{}}
 	for _, s := range specialists {
@@ -202,14 +204,29 @@ func (a *agent) call(ctx context.Context, argsJSON string, meta mcphub.CallMeta)
 	if cli == nil {
 		return "", errors.New("the provider is not configured yet")
 	}
-	part := contentPart(att, kind)
 
+	// Audio goes to /audio/transcriptions: the designated models are
+	// transcription models, which take a file and return text and have no
+	// chat endpoint to ask a question of.
+	if kind == "audio" {
+		text, err := cli.Transcribe(ctx, att.Filename, att.Mime, att.Data)
+		if err != nil {
+			return "", fmt.Errorf("audio model: %v", err)
+		}
+		if strings.TrimSpace(text) == "" {
+			// Silence and unintelligible speech both come back empty; say so
+			// rather than handing the chat model nothing.
+			return fmt.Sprintf("Nothing could be transcribed from %q: it is silent or unclear.", att.Filename), nil
+		}
+		return text, nil
+	}
+
+	// Media first, the question last: some OpenAI-compatible routes drop a
+	// text part that PRECEDES the media (see provider.buildChatMessages).
 	resp, err := cli.Complete(ctx, []openai.ChatCompletionMessageParamUnion{
 		openai.SystemMessage(sp.prompt),
-		// Media first, the question last: some OpenAI-compatible routes drop a
-		// text part that PRECEDES the media (see provider.buildChatMessages).
 		openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
-			part,
+			contentPart(att, kind),
 			openai.TextContentPart(args.Question),
 		}),
 	}, maxAgentTokens)
@@ -245,43 +262,29 @@ func specialistFor(kind string) *specialist {
 }
 
 // wireSupported refuses, in-band, a file whose stored mime has no wire
-// representation: an image outside the png/webp the app converts uploads to, or
-// audio in any container but the WebM an upload produces. The stored mime is the
-// sniffed one and nothing is re-encoded server-side, so what is stored is what
-// would go out.
+// representation: an image outside the png/webp the app converts uploads to.
+// The stored mime is the sniffed one and nothing is re-encoded server-side, so
+// what is stored is what would go out. Audio is not checked: the
+// transcriptions endpoint takes every container the app can store (webm, mp3,
+// wav, ogg, flac).
 func wireSupported(kind string, att *store.Attachment) error {
-	switch kind {
-	case "image":
-		if !attach.SendsAsImage(att.Mime) {
-			return fmt.Errorf("%q is stored as %s, which no image input takes (PNG and WebP only)",
-				att.Filename, att.Mime)
-		}
-	case "audio":
-		if attach.AudioFormat(att.Mime) == "" {
-			return fmt.Errorf("%q is stored as %s, which no audio input takes (%s only)",
-				att.Filename, att.Mime, attach.MimeAudio)
-		}
+	if kind == "image" && !attach.SendsAsImage(att.Mime) {
+		return fmt.Errorf("%q is stored as %s, which no image input takes (PNG and WebP only)",
+			att.Filename, att.Mime)
 	}
 	return nil
 }
 
-// contentPart builds the wire part carrying the file to the specialist.
-// wireSupported has already run, so every kind here has a representation.
+// contentPart builds the wire part carrying a non-audio file to its
+// specialist. wireSupported has already run, so both kinds have a
+// representation.
 func contentPart(att *store.Attachment, kind string) openai.ChatCompletionContentPartUnionParam {
-	b64 := base64.StdEncoding.EncodeToString(att.Data)
-	dataURL := "data:" + att.Mime + ";base64," + b64
-	switch kind {
-	case "image":
+	dataURL := "data:" + att.Mime + ";base64," + base64.StdEncoding.EncodeToString(att.Data)
+	if kind == "image" {
 		return openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL})
-	case "document":
-		return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
-			FileData: openai.String(dataURL),
-			Filename: openai.String(att.Filename),
-		})
-	default: // audio
-		return openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
-			Data:   b64,
-			Format: attach.AudioFormat(att.Mime),
-		})
 	}
+	return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+		FileData: openai.String(dataURL),
+		Filename: openai.String(att.Filename),
+	})
 }

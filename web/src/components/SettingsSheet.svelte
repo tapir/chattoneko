@@ -117,8 +117,14 @@
     { key: 'task', label: 'Task model (background jobs like chat titles)', icon: Zap },
     { key: 'vision', label: 'Vision model (describes images for a chat model that can’t see them)', icon: Eye },
     { key: 'document', label: 'Document model (reads PDFs for a chat model that can’t)', icon: FileText },
-    { key: 'audio', label: 'Audio model (listens to recordings for a chat model that can’t)', icon: AudioLines },
+    { key: 'audio', label: 'Audio model (transcribes recordings for a chat model that can’t hear them)', icon: AudioLines },
   ];
+  // A card flagged Audio names a transcription model: everything below the
+  // flags describes a CHAT model (context window, reasoning, modalities) and
+  // the recording is simply posted to /audio/transcriptions, so the block is
+  // disabled rather than edited. The backend keeps the audio designation
+  // whatever the metadata says.
+  const transcribes = (id) => roleModels.audio === id;
   const DEFAULT_EFFORTS = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
   const DEFAULT_EFFORT = 'medium';
   const DEFAULT_CONTEXT = 131072;
@@ -517,7 +523,8 @@
           This server isn’t ready yet. Set the <strong>provider</strong> (base URL + API key) and flag a model as
           <strong>Chat</strong> and <strong>Task</strong> below, then save. You can’t close this screen until setup is
           complete. A flag is dropped on save when the model can’t take the input its role needs — text for Chat and
-          Task, image for Vision, document for Document, audio for Audio.
+          Task, image for Vision, document for Document. Audio has no such requirement — that model is
+          transcribed, not asked.
         </div>
       {/if}
 
@@ -611,7 +618,7 @@
                         size="sm"
                         class="ml-auto h-7 gap-1 px-2 text-xs sm:ml-0"
                         onclick={() => fetchModelData(card.id)}
-                        disabled={!providerReady || fetchingId === card.id}
+                        disabled={!providerReady || fetchingId === card.id || transcribes(card.id)}
                       >
                         {#if fetchingId === card.id}<Spinner class="size-3" />{:else}<Download class="size-3" strokeWidth={1.75} aria-hidden="true" />{/if}
                         Fetch
@@ -630,12 +637,12 @@
                     <div class="grid gap-3 sm:grid-cols-2">
                       <div class="space-y-1.5">
                         <Label class={labelCls}>Context window (tokens)</Label>
-                        <Input type="number" min="1" class="h-8 font-mono text-xs" bind:value={card.contextLength} />
+                        <Input type="number" min="1" class="h-8 font-mono text-xs" bind:value={card.contextLength} disabled={transcribes(card.id)} />
                       </div>
                       <div class="space-y-1.5">
                         <Label class={labelCls}>Default reasoning effort</Label>
                         {#if card.reasoningEfforts.length > 0}
-                          <Select.Root type="single" value={card.reasoningDefault} onValueChange={(v) => (card.reasoningDefault = v)}>
+                          <Select.Root type="single" value={card.reasoningDefault} onValueChange={(v) => (card.reasoningDefault = v)} disabled={transcribes(card.id)}>
                             <Select.Trigger class="h-8 w-full text-sm">
                               <span class="truncate">{card.reasoningDefault || 'select'}</span>
                             </Select.Trigger>
@@ -663,6 +670,7 @@
                             // current value (new reference) into the group.
                             card.inputModality = (v ?? []).length ? v : [...card.inputModality];
                           }}
+                          disabled={transcribes(card.id)}
                           class="w-full flex-wrap justify-start"
                         >
                           {#each INPUT_MODALITIES as mod (mod)}
@@ -680,6 +688,7 @@
                           onValueChange={(v) => {
                             card.outputModality = (v ?? []).length ? v : [...card.outputModality];
                           }}
+                          disabled={transcribes(card.id)}
                           class="w-full flex-wrap justify-start"
                         >
                           {#each OUTPUT_MODALITIES as mod (mod)}
@@ -697,6 +706,7 @@
                         variant="outline"
                         value={card.reasoningEfforts}
                         onValueChange={(v) => setEfforts(card, v ?? [])}
+                        disabled={transcribes(card.id)}
                         class="w-full flex-wrap justify-start"
                       >
                         {#each effortOptionsFor(card) as e (e)}

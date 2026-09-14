@@ -110,8 +110,10 @@ func (s *Store) Update(ctx context.Context, patch Patch) (*Config, error) {
 
 // sanitizeDesignated clears a designated model that can't do the job it is
 // designated for: the chat and task models must accept "text" input, the
-// vision model "image", the document model "document" (PDF), the audio model
-// "audio". Clearing rather than rejecting is the point — a broken designation
+// vision model "image", the document model "document" (PDF). The audio model
+// is not gated: it is called through /audio/transcriptions, which no metadata
+// in the models table describes. Clearing rather than rejecting is the point —
+// a broken designation
 // ends up in the same state as a missing one, so Complete()
 // reports the config as unfinished and the settings overlay stays forced open
 // until it is fixed. Metadata lives in the models table, not in the Config
@@ -129,7 +131,6 @@ func (s *Store) sanitizeDesignated(ctx context.Context, c *Config, patch Patch) 
 		{"task", &c.Models.DefaultTaskModel, "text"},
 		{"vision", &c.Models.DefaultVisionModel, "image"},
 		{"document", &c.Models.DefaultDocumentModel, "document"},
-		{"audio", &c.Models.DefaultAudioModel, "audio"},
 	}
 	ids := make([]string, 0, len(designated))
 	for _, d := range designated {

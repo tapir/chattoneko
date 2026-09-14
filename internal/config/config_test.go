@@ -536,10 +536,11 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	}
 
 	// The document role needs document input — image input does NOT imply it,
-	// plenty of models see pictures but refuse a PDF; the audio role needs
-	// audio.
-	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("vision"), DefaultAudioModel: ptr("vision")}}); c.Models.DefaultDocumentModel != "" || c.Models.DefaultAudioModel != "" {
-		t.Errorf("document/audio models = %q/%q, want both cleared", c.Models.DefaultDocumentModel, c.Models.DefaultAudioModel)
+	// plenty of models see pictures but refuse a PDF. The audio role needs no
+	// modality at all: it is called through /audio/transcriptions, which the
+	// metadata in this table says nothing about.
+	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("vision"), DefaultAudioModel: ptr("vision")}}); c.Models.DefaultDocumentModel != "" || c.Models.DefaultAudioModel != "vision" {
+		t.Errorf("document/audio models = %q/%q, want cleared/vision", c.Models.DefaultDocumentModel, c.Models.DefaultAudioModel)
 	}
 	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("pdf"), DefaultAudioModel: ptr("audio")}}); c.Models.DefaultDocumentModel != "pdf" || c.Models.DefaultAudioModel != "audio" {
 		t.Errorf("document/audio models = %q/%q, want pdf/audio", c.Models.DefaultDocumentModel, c.Models.DefaultAudioModel)

@@ -376,19 +376,6 @@ func TestProcessSizeMatchesData(t *testing.T) {
 	}
 }
 
-func TestAudioFormat(t *testing.T) {
-	if got := AudioFormat(MimeAudio); got != "webm" {
-		t.Fatalf("AudioFormat(%q) = %q, want webm", MimeAudio, got)
-	}
-	// Anything else — a recording a tool fetched — is "" so the agent tool
-	// refuses it in-band instead of guessing a format the provider would misread.
-	for _, mime := range []string{"audio/wav", "audio/mpeg", "audio/ogg", "", "image/png"} {
-		if got := AudioFormat(mime); got != "" {
-			t.Fatalf("AudioFormat(%q) = %q, want empty", mime, got)
-		}
-	}
-}
-
 func TestType(t *testing.T) {
 	cases := []struct{ kind, mime, want string }{
 		{KindImage, MimePNG, "image"},

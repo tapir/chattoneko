@@ -950,13 +950,17 @@ func TestGetAttachmentServing(t *testing.T) {
 	}
 }
 
-// A model that can't take text input can't drive a chat, so /api/config
-// drops it from the whitelist the picker renders. Models with no stored
-// metadata keep the text default and stay.
+// A model that can't take text input can't drive a chat, and a model on any
+// endpoint but chat isn't a chat model at all, so /api/config drops both from
+// the whitelist the picker renders. Models with no stored metadata keep the
+// chat + text defaults and stay.
 func TestGetConfigHidesNonTextModels(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
-	whitelist := []string{"m", "vision", "plain"}
-	metas := []config.ModelMeta{{ModelID: "vision", InputModality: []string{"image"}}}
+	whitelist := []string{"m", "vision", "plain", "whisper"}
+	metas := []config.ModelMeta{
+		{ModelID: "vision", InputModality: []string{"image"}},
+		{ModelID: "whisper", Endpoint: config.EndpointTranscription},
+	}
 	if _, err := ts.cfg.Update(context.Background(), config.Patch{
 		Models: &config.ModelsPatch{Whitelist: &whitelist, Metas: &metas},
 	}); err != nil {
@@ -979,7 +983,7 @@ func TestGetConfigHidesNonTextModels(t *testing.T) {
 		t.Fatalf("whitelist = %v, want %v", out.Models.Whitelist, want)
 	}
 	// The metadata still reports every model so the settings UI can fix it.
-	if len(out.ModelInfo) != 3 {
-		t.Fatalf("model_info = %d entries, want 3", len(out.ModelInfo))
+	if len(out.ModelInfo) != 4 {
+		t.Fatalf("model_info = %d entries, want 4", len(out.ModelInfo))
 	}
 }

@@ -65,6 +65,7 @@ type Model struct {
 	ReasoningEfforts string
 	ReasoningDefault string
 	UpdatedAt        int64
+	Endpoint         string
 }
 
 type ToolCall struct {

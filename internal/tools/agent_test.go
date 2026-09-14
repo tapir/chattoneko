@@ -100,7 +100,7 @@ func agentConfig(t *testing.T, srvURL string, models config.ModelsConfig) *confi
 	// (sanitizeWhitelist), so the ids a case designates ARE the whitelist.
 	models.Whitelist = nil
 	for _, id := range []string{models.DefaultChatModel, models.DefaultTaskModel,
-		models.DefaultVisionModel, models.DefaultDocumentModel, models.DefaultAudioModel} {
+		models.DefaultVisionModel, models.DefaultDocumentModel, models.DefaultTranscriptionModel} {
 		if id != "" {
 			models.Whitelist = append(models.Whitelist, id)
 		}
@@ -341,7 +341,7 @@ func TestAgentTranscribesAudio(t *testing.T) {
 	seedAttachment(fs, "att-1", agentChat, "memo.ogg", "file", "audio/ogg", []byte("ogg-bytes"))
 
 	out, isErr := callAgent(t, fs,
-		agentConfig(t, srv.URL, config.ModelsConfig{DefaultAudioModel: "whisper"}),
+		agentConfig(t, srv.URL, config.ModelsConfig{DefaultTranscriptionModel: "whisper"}),
 		`{"id":"att-1","question":"What did they order?"}`,
 		mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg})
 	if isErr {
@@ -373,7 +373,7 @@ func TestAgentReportsUntranscribableAudio(t *testing.T) {
 	seedAttachment(fs, "att-1", agentChat, "memo.webm", "file", "audio/webm", []byte("webm"))
 
 	out, isErr := callAgent(t, fs,
-		agentConfig(t, srv.URL, config.ModelsConfig{DefaultAudioModel: "whisper"}),
+		agentConfig(t, srv.URL, config.ModelsConfig{DefaultTranscriptionModel: "whisper"}),
 		`{"id":"att-1","question":"?"}`,
 		mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg})
 	if isErr {
@@ -389,7 +389,7 @@ func TestAgentReportsUntranscribableAudio(t *testing.T) {
 func TestAgentRefusals(t *testing.T) {
 	srv, _ := completionServer(t, "unused")
 	all := config.ModelsConfig{
-		DefaultVisionModel: "v", DefaultDocumentModel: "d", DefaultAudioModel: "a",
+		DefaultVisionModel: "v", DefaultDocumentModel: "d", DefaultTranscriptionModel: "a",
 	}
 	visionOnly := config.ModelsConfig{DefaultVisionModel: "v"}
 

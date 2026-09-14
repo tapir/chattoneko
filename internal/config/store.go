@@ -15,21 +15,21 @@ import (
 
 // config-table keys.
 const (
-	keySystemPrompt          = "system_prompt"
-	keyProviderBaseURL       = "provider_base_url"
-	keyProviderAPIKey        = "provider_api_key"
-	keyModelWhitelist        = "model_whitelist"
-	keyDefaultChatModel      = "default_chat_model"
-	keyDefaultTaskModel      = "default_task_model"
-	keyDefaultVisionModel    = "default_vision_model"
-	keyDefaultDocumentModel  = "default_document_model"
-	keyDefaultAudioModel     = "default_audio_model"
-	keyMCPServers            = "mcp_servers"
-	keyUploadMaxFileBytes    = "upload_max_file_bytes"
-	keyMaxToolIterations     = "max_tool_iterations"
-	keyMCPCallTimeoutSeconds = "mcp_call_timeout_seconds"
-	keyToolDefaults          = "tool_defaults"
-	keyToolTitles            = "tool_titles"
+	keySystemPrompt              = "system_prompt"
+	keyProviderBaseURL           = "provider_base_url"
+	keyProviderAPIKey            = "provider_api_key"
+	keyModelWhitelist            = "model_whitelist"
+	keyDefaultChatModel          = "default_chat_model"
+	keyDefaultTaskModel          = "default_task_model"
+	keyDefaultVisionModel        = "default_vision_model"
+	keyDefaultDocumentModel      = "default_document_model"
+	keyDefaultTranscriptionModel = "default_transcription_model"
+	keyMCPServers                = "mcp_servers"
+	keyUploadMaxFileBytes        = "upload_max_file_bytes"
+	keyMaxToolIterations         = "max_tool_iterations"
+	keyMCPCallTimeoutSeconds     = "mcp_call_timeout_seconds"
+	keyToolDefaults              = "tool_defaults"
+	keyToolTitles                = "tool_titles"
 	// Auth has NO keys here: it is env-var driven (authFromEnv), read once
 	// at startup, and never persisted to the config table.
 )
@@ -142,21 +142,21 @@ func writeConfigRows(ctx context.Context, tx *sql.Tx, c *Config, now int64) erro
 	toolDefaults, _ := json.Marshal(c.ToolDefaults)
 	toolTitles, _ := json.Marshal(c.ToolTitles)
 	rows := map[string]string{
-		keySystemPrompt:          c.SystemPrompt,
-		keyProviderBaseURL:       c.Provider.BaseURL,
-		keyProviderAPIKey:        c.Provider.APIKey,
-		keyModelWhitelist:        string(whitelist),
-		keyDefaultChatModel:      c.Models.DefaultChatModel,
-		keyDefaultTaskModel:      c.Models.DefaultTaskModel,
-		keyDefaultVisionModel:    c.Models.DefaultVisionModel,
-		keyDefaultDocumentModel:  c.Models.DefaultDocumentModel,
-		keyDefaultAudioModel:     c.Models.DefaultAudioModel,
-		keyMCPServers:            string(servers),
-		keyUploadMaxFileBytes:    strconv.FormatInt(c.Limits.UploadMaxFileBytes, 10),
-		keyMaxToolIterations:     strconv.Itoa(c.Limits.MaxToolIterations),
-		keyMCPCallTimeoutSeconds: strconv.Itoa(c.Limits.MCPCallTimeoutSeconds),
-		keyToolDefaults:          string(toolDefaults),
-		keyToolTitles:            string(toolTitles),
+		keySystemPrompt:              c.SystemPrompt,
+		keyProviderBaseURL:           c.Provider.BaseURL,
+		keyProviderAPIKey:            c.Provider.APIKey,
+		keyModelWhitelist:            string(whitelist),
+		keyDefaultChatModel:          c.Models.DefaultChatModel,
+		keyDefaultTaskModel:          c.Models.DefaultTaskModel,
+		keyDefaultVisionModel:        c.Models.DefaultVisionModel,
+		keyDefaultDocumentModel:      c.Models.DefaultDocumentModel,
+		keyDefaultTranscriptionModel: c.Models.DefaultTranscriptionModel,
+		keyMCPServers:                string(servers),
+		keyUploadMaxFileBytes:        strconv.FormatInt(c.Limits.UploadMaxFileBytes, 10),
+		keyMaxToolIterations:         strconv.Itoa(c.Limits.MaxToolIterations),
+		keyMCPCallTimeoutSeconds:     strconv.Itoa(c.Limits.MCPCallTimeoutSeconds),
+		keyToolDefaults:              string(toolDefaults),
+		keyToolTitles:                string(toolTitles),
 		// Auth is env-var driven and never persisted.
 	}
 	// One transaction, so write order is unobservable — range the map.
@@ -232,7 +232,7 @@ func loadSnapshot(ctx context.Context, db *sql.DB) (*Config, error) {
 	c.Models.DefaultTaskModel = kv[keyDefaultTaskModel]
 	c.Models.DefaultVisionModel = kv[keyDefaultVisionModel]
 	c.Models.DefaultDocumentModel = kv[keyDefaultDocumentModel]
-	c.Models.DefaultAudioModel = kv[keyDefaultAudioModel]
+	c.Models.DefaultTranscriptionModel = kv[keyDefaultTranscriptionModel]
 	// Auth never comes from the database: it is derived from the
 	// CHATTO_USERNAME / CHATTO_PASSWORD environment variables.
 	c.Auth = authFromEnv()

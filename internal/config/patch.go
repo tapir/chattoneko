@@ -46,7 +46,9 @@ type ModelsPatch struct {
 	// Both optional, like the vision model: reservations for role-specific
 	// features that Complete() does not require.
 	DefaultDocumentModel *string `json:"default_document_model,omitempty"`
-	DefaultAudioModel    *string `json:"default_audio_model,omitempty"`
+	// The transcription model is an EndpointTranscription model: it is posted
+	// to /audio/transcriptions, so it has no chat metadata to check.
+	DefaultTranscriptionModel *string `json:"default_transcription_model,omitempty"`
 	// Metas upserts per-model metadata (context window, modalities,
 	// reasoning efforts) into the models table alongside the whitelist.
 	// Entries are sanitized on write; models dropped from the whitelist
@@ -109,11 +111,11 @@ func (s *Store) Update(ctx context.Context, patch Patch) (*Config, error) {
 }
 
 // sanitizeDesignated clears a designated model that can't do the job it is
-// designated for: the chat and task models must accept "text" input, the
-// vision model "image", the document model "document" (PDF). The audio model
-// is not gated: it is called through /audio/transcriptions, which no metadata
-// in the models table describes. Clearing rather than rejecting is the point —
-// a broken designation
+// designated for: the chat, task, vision and document models must be chat
+// models whose input modalities cover the role ("text", "text", "image",
+// "document"), and the transcription model must be a transcription one — it is
+// called through /audio/transcriptions, which no chat metadata describes.
+// Clearing rather than rejecting is the point — a broken designation
 // ends up in the same state as a missing one, so Complete()
 // reports the config as unfinished and the settings overlay stays forced open
 // until it is fixed. Metadata lives in the models table, not in the Config
@@ -125,12 +127,14 @@ func (s *Store) sanitizeDesignated(ctx context.Context, c *Config, patch Patch) 
 	designated := []struct {
 		kind     string
 		id       *string
-		modality string
+		endpoint string
+		modality string // "" = the endpoint alone decides
 	}{
-		{"chat", &c.Models.DefaultChatModel, "text"},
-		{"task", &c.Models.DefaultTaskModel, "text"},
-		{"vision", &c.Models.DefaultVisionModel, "image"},
-		{"document", &c.Models.DefaultDocumentModel, "document"},
+		{"chat", &c.Models.DefaultChatModel, EndpointChat, "text"},
+		{"task", &c.Models.DefaultTaskModel, EndpointChat, "text"},
+		{"vision", &c.Models.DefaultVisionModel, EndpointChat, "image"},
+		{"document", &c.Models.DefaultDocumentModel, EndpointChat, "document"},
+		{"transcription", &c.Models.DefaultTranscriptionModel, EndpointTranscription, ""},
 	}
 	ids := make([]string, 0, len(designated))
 	for _, d := range designated {
@@ -141,25 +145,31 @@ func (s *Store) sanitizeDesignated(ctx context.Context, c *Config, patch Patch) 
 	if len(ids) == 0 {
 		return nil
 	}
+	// ModelMetas fills the defaults for ids with no stored row, so an unknown
+	// model reads as a chat model rather than as nothing at all.
 	stored, err := s.ModelMetas(ctx, ids)
 	if err != nil {
 		return fmt.Errorf("load model metadata: %w", err)
 	}
-	input := make(map[string][]string, len(stored))
+	meta := make(map[string]ModelMeta, len(stored))
 	for _, m := range stored {
-		input[m.ModelID] = m.InputModality
+		meta[m.ModelID] = m
 	}
 	if patch.Models != nil && patch.Models.Metas != nil {
 		for _, m := range *patch.Models.Metas {
 			// m is a copy: sanitizing it never touches the caller's patch.
 			SanitizeMeta(&m)
-			input[m.ModelID] = m.InputModality
+			meta[m.ModelID] = m
 		}
 	}
 	for _, d := range designated {
-		if *d.id != "" && !slices.Contains(input[*d.id], d.modality) {
-			slog.Warn("config: dropping designated model without the input modality its role needs",
-				"role", d.kind, "model", *d.id, "needs", d.modality)
+		if *d.id == "" {
+			continue
+		}
+		m := meta[*d.id]
+		if m.Endpoint != d.endpoint || (d.modality != "" && !slices.Contains(m.InputModality, d.modality)) {
+			slog.Warn("config: dropping designated model that cannot fill its role",
+				"role", d.kind, "model", *d.id, "endpoint", m.Endpoint, "needs", d.modality)
 			*d.id = ""
 		}
 	}
@@ -195,8 +205,8 @@ func applyPatch(c *Config, p Patch) {
 		if p.Models.DefaultDocumentModel != nil {
 			c.Models.DefaultDocumentModel = strings.TrimSpace(*p.Models.DefaultDocumentModel)
 		}
-		if p.Models.DefaultAudioModel != nil {
-			c.Models.DefaultAudioModel = strings.TrimSpace(*p.Models.DefaultAudioModel)
+		if p.Models.DefaultTranscriptionModel != nil {
+			c.Models.DefaultTranscriptionModel = strings.TrimSpace(*p.Models.DefaultTranscriptionModel)
 		}
 	}
 	if p.MCPServers != nil {

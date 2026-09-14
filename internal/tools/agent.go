@@ -65,10 +65,10 @@ type specialist struct {
 var specialists = []specialist{
 	{"image", "images (PNG or WebP only)", func(m config.ModelsConfig) string { return m.DefaultVisionModel }, promptVision},
 	{"document", "PDF documents", func(m config.ModelsConfig) string { return m.DefaultDocumentModel }, promptDocument},
-	// Audio is transcribed, not asked: the models this role names have no
-	// chat endpoint, so what comes back is the recording's text and the chat
-	// model answers its own question from it.
-	{"audio", "audio recordings (which come back as a transcript, whatever the question was)", func(m config.ModelsConfig) string { return m.DefaultAudioModel }, ""},
+	// Audio is transcribed, not asked: the models this role names are
+	// transcription models with no chat endpoint, so what comes back is the
+	// recording's text and the chat model answers its own question from it.
+	{"audio", "audio recordings (which come back as a transcript, whatever the question was)", func(m config.ModelsConfig) string { return m.DefaultTranscriptionModel }, ""},
 }
 
 // agentSchema is the tool's argument shape. The file's TYPE is not an

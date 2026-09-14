@@ -511,7 +511,9 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	stored := []ModelMeta{
 		{ModelID: "vision", InputModality: []string{"image"}},
 		{ModelID: "pdf", InputModality: []string{"text", "image", "document"}},
-		{ModelID: "audio", InputModality: []string{"audio"}},
+		// A transcriber: called through /audio/transcriptions, so it carries no
+		// chat modalities at all.
+		{ModelID: "audio", Endpoint: EndpointTranscription},
 	}
 	update(Patch{Models: &ModelsPatch{Whitelist: &whitelist, Metas: &stored}})
 
@@ -527,7 +529,7 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 		t.Errorf("stored designations = %+v, want cleared", got)
 	}
 
-	// Same for the vision role, which needs image input.
+	// Same for the vision role, which needs a chat model with image input.
 	if c = update(Patch{Models: &ModelsPatch{DefaultVisionModel: ptr("audio")}}); c.Models.DefaultVisionModel != "" {
 		t.Errorf("vision model = %q, want cleared", c.Models.DefaultVisionModel)
 	}
@@ -536,14 +538,13 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	}
 
 	// The document role needs document input — image input does NOT imply it,
-	// plenty of models see pictures but refuse a PDF. The audio role needs no
-	// modality at all: it is called through /audio/transcriptions, which the
-	// metadata in this table says nothing about.
-	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("vision"), DefaultAudioModel: ptr("vision")}}); c.Models.DefaultDocumentModel != "" || c.Models.DefaultAudioModel != "vision" {
-		t.Errorf("document/audio models = %q/%q, want cleared/vision", c.Models.DefaultDocumentModel, c.Models.DefaultAudioModel)
+	// plenty of models see pictures but refuse a PDF. The transcription role
+	// needs no modality, only a model added on the transcription endpoint.
+	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("vision"), DefaultTranscriptionModel: ptr("vision")}}); c.Models.DefaultDocumentModel != "" || c.Models.DefaultTranscriptionModel != "" {
+		t.Errorf("document/transcription models = %q/%q, want both cleared", c.Models.DefaultDocumentModel, c.Models.DefaultTranscriptionModel)
 	}
-	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("pdf"), DefaultAudioModel: ptr("audio")}}); c.Models.DefaultDocumentModel != "pdf" || c.Models.DefaultAudioModel != "audio" {
-		t.Errorf("document/audio models = %q/%q, want pdf/audio", c.Models.DefaultDocumentModel, c.Models.DefaultAudioModel)
+	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("pdf"), DefaultTranscriptionModel: ptr("audio")}}); c.Models.DefaultDocumentModel != "pdf" || c.Models.DefaultTranscriptionModel != "audio" {
+		t.Errorf("document/transcription models = %q/%q, want pdf/audio", c.Models.DefaultDocumentModel, c.Models.DefaultTranscriptionModel)
 	}
 
 	// Metas sent in the same patch win over the stored rows: adding text
@@ -562,7 +563,7 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	if got := s2.Get().Models; got.DefaultDocumentModel != "pdf" || got.DefaultAudioModel != "audio" {
-		t.Errorf("stored document/audio = %q/%q, want pdf/audio", got.DefaultDocumentModel, got.DefaultAudioModel)
+	if got := s2.Get().Models; got.DefaultDocumentModel != "pdf" || got.DefaultTranscriptionModel != "audio" {
+		t.Errorf("stored document/transcription = %q/%q, want pdf/audio", got.DefaultDocumentModel, got.DefaultTranscriptionModel)
 	}
 }

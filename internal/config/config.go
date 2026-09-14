@@ -57,6 +57,25 @@ const (
 // levels, highest first. DefaultReasoningEffort is the preselected one.
 var DefaultReasoningEfforts = []string{"max", "xhigh", "high", "medium", "low", "minimal", "none"}
 
+// Model endpoints: the provider route a model is called through, chosen when
+// the model is added. Only "chat" models describe themselves with the
+// metadata below (context window, modalities, reasoning); the others are
+// specialists called through their own route.
+//
+// ponytail: image and speech are stored but not wired up yet — no code path
+// calls /images/generations or /audio/speech. The values exist so a model can
+// be registered under the kind it really is instead of being mislabelled chat.
+const (
+	EndpointChat          = "chat"          // POST /chat/completions
+	EndpointTranscription = "transcription" // POST /audio/transcriptions
+	EndpointImage         = "image"         // not used yet
+	EndpointSpeech        = "speech"        // not used yet
+)
+
+var validEndpoints = map[string]bool{
+	EndpointChat: true, EndpointTranscription: true, EndpointImage: true, EndpointSpeech: true,
+}
+
 const DefaultReasoningEffort = "medium"
 
 // defaultSystemPrompt is the seed system prompt.
@@ -80,13 +99,15 @@ type ModelsConfig struct {
 	DefaultTaskModel string `json:"default_task_model"`
 	// The remaining designations are the specialist models the agent tool
 	// hands files to when the chat model cannot read them itself (vision
-	// needs image input, document needs document input, audio needs audio
-	// input). None of them is required by Complete() — a missing one just
-	// leaves that file type unreadable, which the tool reports in-band; all
-	// talk to the same provider as chat.
-	DefaultVisionModel   string `json:"default_vision_model"`
-	DefaultDocumentModel string `json:"default_document_model"`
-	DefaultAudioModel    string `json:"default_audio_model"`
+	// needs image input, document needs document input). None of them is
+	// required by Complete() — a missing one just leaves that file type
+	// unreadable, which the tool reports in-band; all talk to the same
+	// provider as chat. The transcription model is the odd one out: it is an
+	// EndpointTranscription model posted to /audio/transcriptions, so it has
+	// no input modalities to check and no chat metadata at all.
+	DefaultVisionModel        string `json:"default_vision_model"`
+	DefaultDocumentModel      string `json:"default_document_model"`
+	DefaultTranscriptionModel string `json:"default_transcription_model"`
 }
 
 // MCPServerConfig declares one MCP server. Only streamable HTTP is
@@ -246,7 +267,7 @@ func (c *Config) sanitizeWhitelist() {
 	}
 	for _, d := range []*string{
 		&c.Models.DefaultChatModel, &c.Models.DefaultTaskModel, &c.Models.DefaultVisionModel,
-		&c.Models.DefaultDocumentModel, &c.Models.DefaultAudioModel,
+		&c.Models.DefaultDocumentModel, &c.Models.DefaultTranscriptionModel,
 	} {
 		if !seen[strings.TrimSpace(*d)] {
 			*d = ""

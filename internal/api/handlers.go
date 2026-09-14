@@ -145,7 +145,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	info := s.engine.ModelInfo(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"models": map[string]any{
-			"whitelist":            textInputModels(cfg.Models.Whitelist, info),
+			"whitelist":            chatModels(cfg.Models.Whitelist, info),
 			"default_chat_model":   cfg.Models.DefaultChatModel,
 			"default_vision_model": cfg.Models.DefaultVisionModel,
 		},
@@ -204,13 +204,13 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 			"api_key_set": c.Provider.APIKey != "",
 		},
 		"models": map[string]any{
-			"whitelist":              c.Models.Whitelist,
-			"default_chat_model":     c.Models.DefaultChatModel,
-			"default_task_model":     c.Models.DefaultTaskModel,
-			"default_vision_model":   c.Models.DefaultVisionModel,
-			"default_document_model": c.Models.DefaultDocumentModel,
-			"default_audio_model":    c.Models.DefaultAudioModel,
-			"metas":                  metas,
+			"whitelist":                   c.Models.Whitelist,
+			"default_chat_model":          c.Models.DefaultChatModel,
+			"default_task_model":          c.Models.DefaultTaskModel,
+			"default_vision_model":        c.Models.DefaultVisionModel,
+			"default_document_model":      c.Models.DefaultDocumentModel,
+			"default_transcription_model": c.Models.DefaultTranscriptionModel,
+			"metas":                       metas,
 		},
 		"mcp_servers": servers,
 		// Global per-tool default toggles. Go marshals maps with sorted keys,
@@ -326,6 +326,18 @@ func (s *Server) handleSetupModels(w http.ResponseWriter, r *http.Request) {
 
 	metas := make([]config.ModelMeta, 0, len(ids))
 	sources := make(map[string]string, len(ids))
+	// A model added on another endpoint has no /models metadata to fetch, and
+	// the defaults would quietly turn it back into a chat model: carry the
+	// stored endpoint over instead.
+	stored, err := s.cfg.ModelMetas(r.Context(), ids)
+	if err != nil {
+		internalError(w, "load model metadata", err)
+		return
+	}
+	endpoints := make(map[string]string, len(stored))
+	for _, m := range stored {
+		endpoints[m.ModelID] = m.Endpoint
+	}
 	for _, id := range ids {
 		f, found := byID[id]
 		var m config.ModelMeta
@@ -336,6 +348,7 @@ func (s *Server) handleSetupModels(w http.ResponseWriter, r *http.Request) {
 			m = config.DefaultModelMeta(id)
 			sources[id] = "defaults"
 		}
+		m.Endpoint = endpoints[id]
 		metas = append(metas, m)
 	}
 	if err := s.cfg.UpsertModelMetas(r.Context(), metas); err != nil {
@@ -403,17 +416,18 @@ func (s *Server) handleSetupMCPTools(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
 }
 
-// textInputModels drops whitelist ids whose metadata offers no "text" input:
-// a model that can't take text can't drive a chat, so the picker shouldn't
-// offer it. Ids with no metadata (defaults = text) are kept.
-func textInputModels(whitelist []string, metas []config.ModelMeta) []string {
+// chatModels drops whitelist ids the chat picker must not offer: a model on
+// any endpoint but /chat/completions (a transcriber, an image or speech model)
+// and a chat model whose metadata offers no "text" input. Ids with no metadata
+// (defaults = chat + text) are kept.
+func chatModels(whitelist []string, metas []config.ModelMeta) []string {
 	byID := make(map[string]config.ModelMeta, len(metas))
 	for _, m := range metas {
 		byID[m.ModelID] = m
 	}
 	out := make([]string, 0, len(whitelist))
 	for _, id := range whitelist {
-		if m, ok := byID[id]; !ok || slices.Contains(m.InputModality, "text") {
+		if m, ok := byID[id]; !ok || (m.Endpoint == config.EndpointChat && slices.Contains(m.InputModality, "text")) {
 			out = append(out, id)
 		}
 	}

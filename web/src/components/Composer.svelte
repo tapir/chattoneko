@@ -199,7 +199,7 @@
       {#if pending.length > 0}
         <div class="flex flex-wrap items-center gap-1.5 px-3 pt-3">
           {#each pending as att (att.id)}
-            <span class="inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-xs">
+            <span class="inline-flex h-7 items-center gap-1.5 rounded-full bg-accent px-2.5 text-xs">
               {#if att.kind === 'image' && att.previewUrl}
                 <!-- Everything but ✕ opens the lightbox: a staged image only
                      has a local object URL, which is what AttachmentViewer

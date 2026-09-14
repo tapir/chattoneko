@@ -36,7 +36,7 @@ lib/
   state.svelte.js           the app store — ALL application state + logic (~1100 lines)
   api.js                    REST client + response normalizers
   stream.svelte.js          the ONE SSE connection per tab (AppStream)
-  server.js                 runtime server config (native build) + JWT storage/expiry + stream URLs
+  server.js                 runtime server config + cert-verification opt-out (native build) + JWT storage/expiry + stream URLs
   markdown.js               façade: lazy loader + pure string helpers (escapeHtml, normalizeHeadings, escapeCurrency, splitHeadingHold)
   markdown.impl.js          the heavy pipeline (incremark-renderer options + DOM renderer factory) — own chunk
   native-attachments.js     native camera / gallery / file pickers → File[]
@@ -61,7 +61,7 @@ components/
   Composer.svelte           prompt, model + reasoning-effort pickers, attachment staging
   Sidebar.svelte / SidebarItem.svelte
   SettingsSheet.svelte      server settings overlay (forced open until setup is complete)
-  LoginScreen.svelte        server address (native) + credentials, one screen for both gates
+  LoginScreen.svelte        server address + cert-verification switch (native) + credentials, one screen for both gates
   AttachmentViewer.svelte   fullscreen text/image lightbox + gallery
   ImageGallery.svelte       capped square-thumbnail grid for message images
   AttachmentImage.svelte    <img> for an image attachment: local preview until the server copy is decoded

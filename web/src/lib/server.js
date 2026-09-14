@@ -9,6 +9,7 @@ import { lsGet, lsSet } from "./persist.js";
 
 const URL_KEY = "chattoneko-server-url";
 const TOKEN_KEY = "chattoneko-token";
+const INSECURE_KEY = "chattoneko-insecure-tls";
 
 // Capacitor injects window.Capacitor into the WebView — no npm dependency
 // needed for detection.
@@ -48,6 +49,20 @@ export function setServerUrl(url) {
 
 export function setToken(token) {
   lsSet(TOKEN_KEY, token);
+}
+
+// Native only: self-signed server certificates. The WebView cancels every
+// request whose certificate fails validation, so MainActivity installs an SSL
+// handler that reads this key back out of localStorage when a certificate
+// error arrives and proceeds only while it says so (nothing to mirror into
+// Java, nothing to re-apply at boot). Meaningless on the web build, where no
+// code can override verification anyway.
+export function getInsecureTls() {
+  return lsGet(INSECURE_KEY) === "1";
+}
+
+export function setInsecureTls(value) {
+  lsSet(INSECURE_KEY, value ? "1" : "");
 }
 
 // isTokenExpired decodes the JWT payload (no signature check — the server

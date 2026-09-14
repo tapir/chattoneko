@@ -1,7 +1,7 @@
 <script>
   import { app } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
-  import { normalizeServerUrl } from '../lib/server.js';
+  import { normalizeServerUrl, getInsecureTls, setInsecureTls } from '../lib/server.js';
   import logoUrl from '$lib/logo.svg';
   import { X } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
@@ -9,6 +9,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
+  import { Switch } from '$lib/components/ui/switch';
 
   // The web build is served by the Go backend itself (same-origin), so only
   // the native (Capacitor) build collects a server address — on this same
@@ -23,6 +24,9 @@
   const credsPhase = $derived(phase === 'credentials');
 
   let url = $state(app.serverUrl);
+  // Android rejects self-signed server certificates, so the address phase can
+  // opt out of verification (native half: MainActivity's SSL handler).
+  let insecureTls = $state(getInsecureTls());
   let username = $state('');
   let password = $state('');
   let error = $state('');
@@ -130,6 +134,19 @@
             spellcheck="false"
             required
           />
+          {#if !credsPhase}
+            <div class="flex items-center justify-between gap-3 pt-1">
+              <Label for="insecure-tls" class="font-normal text-muted-foreground">
+                Disable certificate verification
+              </Label>
+              <Switch
+                id="insecure-tls"
+                class="shrink-0"
+                bind:checked={insecureTls}
+                onCheckedChange={setInsecureTls}
+              />
+            </div>
+          {/if}
         </div>
       {/if}
       <!-- Grows the form open when the address locks and credentials appear. -->

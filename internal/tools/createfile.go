@@ -16,12 +16,6 @@ import (
 	"chattoneko/internal/mcphub"
 )
 
-// maxFileBytes caps a file the model writes itself. The practical ceiling is
-// far lower anyway: the content passes through the model's output tokens. A
-// file downloaded from a URL is capped by the live upload limit instead, same
-// as a file the user uploads.
-const maxFileBytes = 5 * 1024 * 1024 // 5 MiB
-
 // CreateFile returns the "create_file" tool: the model hands the user a file,
 // either one it writes (text as a string, binary as base64) or one it points
 // at by URL and we download. Storing and showing are ONE step — the file is
@@ -88,12 +82,18 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 		return "", errors.New("no chat context for this call")
 	}
 
+	// One size cap for both sources: the live upload limit, the same one a
+	// user's file is measured against. A file the model writes itself is far
+	// below it in practice — its content has to fit in the model's output.
+	limit := int64(config.DefaultUploadMaxFileBytes)
+	if limits != nil {
+		limit = limits.Get().Limits.UploadMaxFileBytes
+	}
 	// Exactly one source. The URL branch is its own download-and-name path; the
-	// two content branches share the byte resolution and the written-file cap.
+	// two content branches share the byte resolution.
 	var (
-		name  string
-		data  []byte
-		limit = int64(maxFileBytes)
+		name string
+		data []byte
 		// from is the " from <url>" clause of the result, empty for a file the
 		// model wrote itself.
 		from string
@@ -116,13 +116,6 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 			// bare; media get their real suffix forced on below, once ProcessAny
 			// has sniffed the bytes.
 			name += attach.ExtForMime(contentType)
-		}
-		// Per-file stored-size cap comes from the live upload limit (same as
-		// user uploads), and applies to the bytes as downloaded — nothing here
-		// is re-encoded.
-		limit = int64(config.DefaultUploadMaxFileBytes)
-		if limits != nil {
-			limit = limits.Get().Limits.UploadMaxFileBytes
 		}
 		from = " from " + finalURL.String()
 	} else {
@@ -217,16 +210,16 @@ func urlFilename(explicit string, final *url.URL, fallback string) string {
 	return fallback
 }
 
-// capName trims name to attach.CleanFilename's 200-byte budget (long CDN paths
-// and long explicit names must not blow it), keeping the extension and cutting
-// on a rune boundary so a multibyte name is never split.
+// capName trims name to attach.MaxFilenameBytes (long CDN paths and long
+// explicit names must not blow it), keeping the extension and cutting on a rune
+// boundary so a multibyte name is never split.
 func capName(name string) string {
-	if len(name) <= 200 {
+	if len(name) <= attach.MaxFilenameBytes {
 		return name
 	}
 	ext := filepath.Ext(name)
 	if len(ext) > 16 { // a "suffix" that long is part of the name, not an extension
 		ext = ""
 	}
-	return strings.ToValidUTF8(name[:200-len(ext)], "") + ext
+	return strings.ToValidUTF8(name[:attach.MaxFilenameBytes-len(ext)], "") + ext
 }

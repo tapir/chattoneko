@@ -289,20 +289,13 @@ console.log('OK streaming parity');
     'png header rejected');
   assert(!(await looksText(file(new Uint8Array([0xff, 0xfe, 0x68, 0x00, 0x69, 0x00])))),
     'utf-16 rejected like the server does');
-  assert(await looksText(file(new Uint8Array(0))), 'empty file left to the empty-file check');
+  assert(!(await looksText(file(new Uint8Array(0)))), 'empty file is not text (classifyFile rejects it first)');
   console.log('OK attachment text sniff');
 }
 
-// --- client-side media policy (what the server no longer decides) ---
+// --- image scaling policy ---
 {
-  const { mediaKind, scaleToFit } = await import('./src/lib/media.js');
-  assert(mediaKind('photo.JPG') === 'image' && mediaKind('sticker.webp') === 'image',
-    'image extensions recognized');
-  assert(mediaKind('memo.m4a') === 'audio' && mediaKind('recording.webm') === 'audio',
-    'audio extensions recognized');
-  assert(mediaKind('invoice.pdf') === 'pdf' && mediaKind('notes.md') === '',
-    'pdf is its own kind; text is judged by content');
-  assert(mediaKind('scan.tiff') === '', 'tiff is no longer an image — no engine decodes it');
+  const { scaleToFit } = await import('./src/lib/media.js');
   // The LONGEST side is capped at 1280, whichever way the image is oriented —
   // but never by more than 2x, so a huge shot keeps half its size instead.
   const land = scaleToFit(5000, 3000, 1280);
@@ -315,7 +308,7 @@ console.log('OK streaming parity');
   assert(exact.width === 1280 && exact.height === 720, 'exactly 2x lands on the cap');
   const same = scaleToFit(800, 600, 1280);
   assert(same.width === 800 && same.height === 600, 'smaller images are never upscaled');
-  console.log('OK media conversion policy');
+  console.log('OK image scaling');
 }
 
 // --- long press (the attachment action sheet's trigger) ---
@@ -415,6 +408,40 @@ console.log('OK streaming parity');
   assert(formatClock(3671) === '1:01:11', 'formatClock pads minutes past an hour');
   assert(formatClock(NaN) === '0:00' && formatClock(-5) === '0:00', 'formatClock junk = 0:00');
   console.log('OK media clock');
+}
+
+// --- media sniffing: magic bytes, never the filename ---
+{
+  const { sniffKind } = await import('./src/lib/media.js');
+  const cases = [
+    [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'image'], // PNG
+    [[0xff, 0xd8, 0xff, 0xe0], 'image'], // JPEG
+    [[0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50], 'image'], // RIFF/WEBP
+    [[0x47, 0x49, 0x46, 0x38, 0x39, 0x61], 'image'], // GIF89a
+    [[0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0], 'image'], // BMP + its four reserved zeroes
+    [[0, 0, 1, 0, 1, 0], 'image'], // ICO
+    [[0x25, 0x50, 0x44, 0x46], 'pdf'], // %PDF
+    [[0x49, 0x44, 0x33, 4], 'audio'], // ID3
+    [[0x4f, 0x67, 0x67, 0x53], 'audio'], // OggS
+    [[0x66, 0x4c, 0x61, 0x43], 'audio'], // fLaC
+    [[0x1a, 0x45, 0xdf, 0xa3], 'audio'], // EBML (WebM)
+    [[0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45], 'audio'], // RIFF/WAVE
+    [[0xff, 0xfb, 0x90, 0x44], 'audio'], // bare MP3 frame
+    // Not media. A video container and a zip fall through to the caller's
+    // content sniff, which refuses them; text is what that sniff accepts.
+    [[0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d], ''], // ISO-BMFF
+    [[0x50, 0x4b, 3, 4], ''], // zip
+    [[0x68, 0x65, 0x6c, 0x6c, 0x6f], ''], // "hello"
+    [[0x42, 0x4d, 0x61, 0x70, 0x6c, 0x65], ''], // "BMapple": text, not a BMP
+  ];
+  for (const [bytes, want] of cases) {
+    // A name that lies must not change the answer.
+    for (const name of ['x.bin', 'x.png', 'x']) {
+      const got = await sniffKind(new File([new Uint8Array(bytes)], name));
+      assert(got === want, `sniffKind(${name}, [${bytes.slice(0, 4)}…]) = ${got || '""'}, want ${want || '""'}`);
+    }
+  }
+  console.log('OK media sniffing');
 }
 
 function assert(cond, msg) {

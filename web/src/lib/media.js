@@ -1,7 +1,6 @@
-// Client-side media conversion. This file IS the app's codec policy: the
-// server no longer decodes a single pixel or sample (internal/attach only
-// sniffs magic bytes and stores what it gets), so every image and every
-// recording is normalized here, the moment it is attached:
+// Client-side media policy: what a file IS (magic bytes), what gets converted,
+// and what this browser can play. The server decodes nothing, so every image
+// and every recording is normalized here, the moment it is attached:
 //
 //   image -> WebP at 75% quality, longest side capped at 1280px (but never
 //            shrunk by more than 2x — see scaleToFit)
@@ -12,11 +11,10 @@
 // 1. Safari — every version, desktop and iOS — cannot ENCODE WebP. toBlob()
 //    silently hands back a PNG instead of throwing, so the result's own
 //    blob.type decides the filename, never the type we asked for. The server
-//    accepts both, which is the only reason this is a non-event.
+//    accepts both.
 // 2. Audio goes through WebCodecs (inside mediabunny, which is pure TypeScript
 //    and carries no WASM). AudioEncoder exists in Chrome/Edge 94+, Firefox
-//    desktop 130+ and Safari 26+ only — Firefox for Android and Safari 18 and
-//    older have no audio encoder at all, and WebCodecs needs a secure context,
+//    desktop 130+ and Safari 26+ only, and WebCodecs needs a secure context,
 //    so a plain-HTTP LAN origin has none either. There is no WASM-free Opus
 //    encoder to fall back on, so those cases get a clear refusal instead of a
 //    silently broken file.
@@ -25,24 +23,47 @@
 const MAX_SIDE = 1280;
 const IMAGE_QUALITY = 0.75;
 
-// What the browser can decode (createImageBitmap) and turn into WebP. TIFF is
-// deliberately absent: no engine decodes it, and the server no longer does.
-const IMAGE_EXTS = ["png", "jpg", "jpeg", "webp", "bmp", "gif", "ico"];
-// What mediabunny can read: MP4/AAC, MP3, WebM and Ogg (Opus or Vorbis), WAV,
-// FLAC. Everything leaves as WebM/Opus.
-const AUDIO_EXTS = ["mp4", "m4a", "mp3", "webm", "ogg", "oga", "opus", "wav", "flac"];
+// sniffKind classifies a file by its magic bytes: "image", "audio", "pdf" or ""
+// (anything else is judged by content — see lib/text-sniff.js). The rule the
+// server applies in internal/attach, so an extension-less or misnamed file goes
+// by what it IS and the two sides cannot disagree. ISO-BMFF (mp4/mov) is
+// deliberately not recognized: the app has no video player. An EBML file counts
+// as audio whatever its DocType — the conversion below either pulls out a
+// soundtrack or fails with a clear error.
+export async function sniffKind(file) {
+  const b = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  const at = (off, s) => {
+    for (let i = 0; i < s.length; i++) if (b[off + i] !== s.charCodeAt(i)) return false;
+    return true;
+  };
+  if (at(0, "\x89PNG") || at(0, "\xff\xd8\xff") || at(0, "GIF8") || at(0, "\x00\x00\x01\x00")) return "image";
+  if (at(0, "RIFF") && at(8, "WEBP")) return "image";
+  // "BM" is two bytes of weak signature, so the four reserved zeroes that
+  // follow a BMP's file size are part of the check.
+  if (at(0, "BM") && b[6] === 0 && b[7] === 0 && b[8] === 0 && b[9] === 0) return "image";
+  if (at(0, "%PDF")) return "pdf";
+  if (at(0, "ID3") || at(0, "OggS") || at(0, "fLaC") || at(0, "\x1aE\xdf\xa3")) return "audio";
+  if (at(0, "RIFF") && at(8, "WAVE")) return "audio";
+  if (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) return "audio"; // bare MP3 frame, no ID3 tag
+  return "";
+}
 
-const extOf = (name) =>
-  name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+// extFromMime is the display suffix for a mime, for a file whose name has none.
+export const extFromMime = (mime) =>
+  (mime?.split("/")[1] ?? "").split(";")[0].replace(/^x-/, "");
 
-// mediaKind classifies a staged file by its name: "image", "audio", "pdf" or
-// "" (anything else is judged by content — see lib/text-sniff.js). Extensions
-// are the client's hint only; the server re-decides from the bytes.
-export function mediaKind(filename) {
-  const ext = extOf(filename || "");
-  if (IMAGE_EXTS.includes(ext)) return "image";
-  if (AUDIO_EXTS.includes(ext)) return "audio";
-  return ext === "pdf" ? "pdf" : "";
+// isAudio picks the attachments that want a player; canPlayAudio is the gate on
+// actually showing one — a player for a codec this browser cannot decode is a
+// dead button, so an unsupported recording falls back to the download chip.
+// Cached per mime: canPlayType is a DOM call and the list re-derives per render.
+export const isAudio = (att) => att?.mime?.startsWith("audio/");
+const playable = new Map();
+export function canPlayAudio(att) {
+  const mime = att?.mime ?? "";
+  if (!playable.has(mime)) {
+    playable.set(mime, document.createElement("audio").canPlayType(mime) !== "");
+  }
+  return playable.get(mime);
 }
 
 // renamed wraps a converted blob in a File whose name and type match what the
@@ -50,8 +71,7 @@ export function mediaKind(filename) {
 // name has to say so.
 function renamed(file, blob, fallback) {
   const base = (file.name || fallback).replace(/\.[^.]+$/, "");
-  const ext = blob.type.split("/")[1]?.replace(/^x-/, "") || "bin";
-  return new File([blob], `${base || fallback}.${ext}`, {
+  return new File([blob], `${base || fallback}.${extFromMime(blob.type) || "bin"}`, {
     type: blob.type,
     lastModified: Date.now(),
   });
@@ -71,8 +91,7 @@ export function scaleToFit(w, h, max) {
 
 // convertImage decodes any supported image, downscales it if it is bigger than
 // MAX_SIDE on its longest side, and re-encodes to WebP (PNG on Safari). EXIF
-// orientation needs no code: createImageBitmap applies it by default, which is
-// what the server used to do by hand for JPEGs.
+// orientation needs no code: createImageBitmap applies it by default.
 export async function convertImage(file) {
   const bitmap = await createImageBitmap(file);
   try {

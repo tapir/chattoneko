@@ -9,6 +9,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"chattoneko/internal/config"
+	"chattoneko/internal/db"
 	"chattoneko/internal/mcphub"
 	"chattoneko/internal/store"
 )
@@ -185,7 +187,7 @@ func TestCreateFileValidation(t *testing.T) {
 		{"url and base64", `{"filename":"a.bin","content_base64":"eA==","url":"http://example.com/a.bin"}`, meta, "not both"},
 		{"bad base64", `{"filename":"a.bin","content_base64":"not base64 at all!"}`, meta, "not valid base64"},
 		{"blank base64", `{"filename":"a.bin","content_base64":"   "}`, meta, "content rejected"},
-		{"too large", `{"filename":"a.txt","content":"` + strings.Repeat("x", maxFileBytes+1) + `"}`, meta, "size limit"},
+		{"too large", `{"filename":"a.txt","content":"` + strings.Repeat("x", config.DefaultUploadMaxFileBytes+1) + `"}`, meta, "size limit"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,6 +203,42 @@ func TestCreateFileValidation(t *testing.T) {
 				t.Fatalf("store must not be called on validation failure")
 			}
 		})
+	}
+}
+
+// The size cap is the configured upload limit for BOTH sources, so a file the
+// model writes itself gets no larger a budget than a user's upload.
+func TestCreateFileWrittenContentHonorsConfiguredLimit(t *testing.T) {
+	sqlDB, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.Migrate(sqlDB); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	cfgs, err := config.TestStore(context.Background(), sqlDB, config.Config{
+		Limits: config.LimitsConfig{UploadMaxFileBytes: 100},
+	})
+	if err != nil {
+		t.Fatalf("config store: %v", err)
+	}
+	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
+	write := func(n int) (string, bool) {
+		out, isErr, err := Builtin(&fakeFileStore{}, cfgs).Call(context.Background(), "create_file",
+			`{"filename":"a.txt","content":"`+strings.Repeat("x", n)+`"}`, meta)
+		if err != nil {
+			t.Fatalf("transport error: %v", err)
+		}
+		return out, isErr
+	}
+
+	out, isErr := write(101)
+	if !isErr || !strings.Contains(out, "size limit") {
+		t.Fatalf("want a size-limit refusal, got isErr=%v %q", isErr, out)
+	}
+	if out, isErr = write(100); isErr {
+		t.Fatalf("a file within the cap was refused: %q", out)
 	}
 }
 
@@ -263,28 +301,29 @@ func TestCreateFileFromURLJPEGIsAnImage(t *testing.T) {
 	}
 }
 
-// Media no browser here can show is refused in-band, so the model hears it and
-// can pick another file instead of handing the user a dead download.
-func TestCreateFileFromURLRefusesUnshowableMedia(t *testing.T) {
+// A file no browser here can show is still handed over as a download: the model
+// found it on the web, and the user can have it whatever it is.
+func TestCreateFileFromURLKeepsUnsupportedAsDownload(t *testing.T) {
 	allowWebFetchLoopback(t)
 	ts := serve(t, "image/avif", avifBody())
 
 	fs := &fakeFileStore{}
 	out, isErr := callTool(t, fs, "create_file", `{"url":"`+ts.URL+`/pics/cat.avif"}`,
 		mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
-	if !isErr {
-		t.Fatalf("want an in-band error, got %q", out)
+	if isErr {
+		t.Fatalf("unexpected tool error: %q", out)
 	}
-	if !strings.Contains(out, "not accepted media") {
-		t.Fatalf("error should say why: %q", out)
+	c := shownOn(t, fs, "m1")
+	if c.kind != "file" || c.mime != "application/octet-stream" {
+		t.Fatalf("wrong attachment: kind=%q mime=%q", c.kind, c.mime)
 	}
-	if len(fs.files) != 0 {
-		t.Fatal("store must not be called")
+	if !strings.Contains(out, "downloads when clicked") {
+		t.Fatalf("result should say how it shows: %q", out)
 	}
 }
 
-// avifBody is an ISOBMFF file with the avif brand: Go's sniffer reports it as
-// octet-stream, so only the name says it was meant to be a picture.
+// avifBody is an ISOBMFF file with the avif brand, which Go's sniffer reports
+// as octet-stream.
 func avifBody() []byte {
 	return append([]byte("\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1"), make([]byte, 20)...)
 }

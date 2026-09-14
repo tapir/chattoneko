@@ -6,19 +6,13 @@
 // until a native platform actually calls in).
 
 import { Capacitor } from "@capacitor/core";
+import { extFromMime } from "./media.js";
 
 // MIME filter for the Files picker: none. Android reports application/
 // octet-stream for every extension it can't map (.go, .rs, .sh, .toml…), so
 // any allow-list either hides those files or includes the catch-all and
-// filters nothing. addAttachments() validates by content — the same rule the
-// server applies — so the picker stays out of it.
-
-const MIME_EXT = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/gif": "gif",
-  "image/webp": "webp",
-};
+// filters nothing. addAttachments() classifies by content, so the picker stays
+// out of it.
 
 // Plugin rejections for a dismissed picker: the camera plugin tags them
 // with OS-PLUG-CAMR-* codes (CameraErrorCode), the file picker (and the
@@ -45,11 +39,10 @@ async function fetchBlob(url, what) {
   return res.blob();
 }
 
-// Camera shots have no filename — synthesize one from the blob's MIME type so
-// addAttachments() recognizes the bytes as an image.
+// Camera shots have no filename — synthesize one, suffixed from the blob's MIME
+// type so the user sees something readable.
 function photoFile(blob, prefix) {
-  const ext = MIME_EXT[blob.type] ?? "jpg";
-  return new File([blob], `${prefix}-${stamp()}.${ext}`, {
+  return new File([blob], `${prefix}-${stamp()}.${extFromMime(blob.type) || "jpg"}`, {
     type: blob.type || "image/jpeg",
   });
 }
@@ -66,10 +59,10 @@ function mediaUrl(media) {
 // JPEG. The drawer is already closed by the caller before this runs.
 //
 // CAPTURE_SIDE caps the long side: the stock camera app returns a full-sensor
-// photo (several MB) the server downscales to 2048px anyway. Both target
-// options are required — the plugin ignores a lone value; aspect is preserved.
-// Gallery picks skip this: they come through the photo picker as the original
-// bytes, never re-encoded.
+// photo (several MB), and the browser conversion caps it at 1280px anyway. Both
+// target options are required — the plugin ignores a lone value; aspect is
+// preserved. Gallery picks skip this: they come through the photo picker as the
+// original bytes, never re-encoded.
 const CAPTURE_SIDE = 1280;
 
 export async function capturePhoto() {
@@ -112,14 +105,14 @@ async function pickVia(pick, what) {
   }
 }
 
-// The picker's display name when it carries an extension, so addAttachments()
-// can tell an image from text. The plugin falls back to the URI's last path
-// segment ("12") when a provider has no DISPLAY_NAME — synthesize an
-// extension from the MIME in that case.
+// The picker's display name when it carries an extension. The plugin falls back
+// to the URI's last path segment ("12") when a provider has no DISPLAY_NAME —
+// synthesize a suffixed name in that case. Classification never reads it.
 function pickedName(f, blob) {
   const name = f.name ?? "";
   if (/\.[A-Za-z0-9]{2,5}$/.test(name)) return name;
-  return `photo-${stamp()}.${MIME_EXT[blob.type] ?? "jpg"}`;
+  const ext = extFromMime(blob.type);
+  return `photo-${stamp()}${ext ? "." + ext : ""}`;
 }
 
 // Photos: the system photo picker (AndroidX PickMultipleVisualMedia) — images

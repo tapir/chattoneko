@@ -1000,7 +1000,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.chatExists(w, r.Context(), id) {
 		return
 	}
-	// Nothing is re-encoded any more, so the per-file stored cap
+	// Nothing is re-encoded, so the per-file stored cap
 	// (upload_max_file_bytes, enforced inside attach.Process) is also the real
 	// per-file body cost. This ceiling only guards the whole multipart read
 	// against pathological sizes (per-file raw cap + overhead).
@@ -1037,6 +1037,14 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			rollback()
 			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// The multipart header already carries the size, so an oversized file is
+		// refused before its bytes are read into memory.
+		if maxFileBytes > 0 && fh.Size > maxFileBytes {
+			rollback()
+			writeError(w, http.StatusRequestEntityTooLarge,
+				name+": "+attach.ErrTooLarge.Error())
 			return
 		}
 		f, err := fh.Open()

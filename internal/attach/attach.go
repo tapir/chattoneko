@@ -1,13 +1,12 @@
-// Package attach classifies uploaded and tool-created files by CONTENT — never
-// by extension — and sanitizes filenames. Nothing here decodes pixels or audio
-// samples: conversion, resizing and EXIF orientation all happen in the browser
-// before upload (web/src/lib/media.js), and a tool's file is stored exactly as
-// it was fetched. The server's whole job is one magic-byte check per file.
+// Package attach classifies files by CONTENT — never by extension — and
+// sanitizes filenames. Nothing here decodes pixels or audio samples:
+// conversion, resizing and EXIF orientation happen in the browser before
+// upload (web/src/lib/media.js), and a tool's file is stored exactly as it was
+// fetched. The server's whole job is one magic-byte check per file.
 //
-// Two policies share that check: uploads accept only what the browser produces
-// (PNG/WebP, WebM, PDF) plus text, while tools may also hand over any media a
-// browser can render unaided (see toolMedia) — a JPEG a model fetches is a
-// picture here, not a download.
+// Two policies share that check. Uploads accept only what the browser produces
+// (PNG/WebP, WebM, PDF) plus text; tools also accept any media a browser can
+// render unaided, and keep every other binary as a download.
 package attach
 
 import (
@@ -26,17 +25,15 @@ import (
 const (
 	KindImage = "image"
 	KindText  = "text"
-	// KindFile is any other binary: stored verbatim, served as a download
-	// (audio keeps its mime, which the inline player needs). Tool-created
-	// files (create_file, fetch) of any type use it, and user uploads reach it
-	// only for audio and PDF.
+	// KindFile is any other binary, stored verbatim: audio (whose mime the
+	// inline player needs), PDF, and every download-only file a tool fetches.
 	KindFile = "file"
 )
 
 // The mimes a file can be stored under, all decided by magic bytes. WebP is
-// what the browser encodes an upload to; PNG is what it falls back to where
-// WebP encoding does not exist (Safari, every version, silently hands back a
-// PNG). The rest only ever arrive from a tool, which stores what it fetched.
+// what the browser encodes an upload to, PNG what it falls back to where WebP
+// encoding does not exist (Safari, every version, silently hands back a PNG).
+// The rest only ever arrive from a tool, which stores what it fetched.
 const (
 	MimePNG  = "image/png"
 	MimeJPEG = "image/jpeg"
@@ -50,7 +47,6 @@ const (
 	MimeWAV   = "audio/wav"
 	MimeOGG   = "audio/ogg"
 	MimeFLAC  = "audio/flac"
-	MimeMP4   = "audio/mp4"
 
 	MimePDF = "application/pdf"
 )
@@ -61,20 +57,9 @@ var ErrUnsupported = errors.New("unsupported file type")
 // ErrTooLarge is returned when the file exceeds the configured limit (HTTP 413).
 var ErrTooLarge = errors.New("file too large")
 
-// Accepted names the media types an UPLOAD may carry, for refusals. The browser
-// converts everything to these before it sends (web/src/lib/media.js), so a
-// file that is not one of them came from a client that skipped that step.
-const Accepted = "PNG/WebP images, WebM audio, PDF and text"
-
-// ToolAccepted names what a TOOL may hand over: the same formats the composer
-// accepts for conversion, since those are exactly the ones a browser can
-// render with no help from us. Stored verbatim and previewed as they are.
-const ToolAccepted = "images png/jpg/webp/gif/bmp/ico, audio mp3/wav/flac/ogg/opus/m4a/mp4/webm, PDF and text"
-
 // uploadMedia and toolMedia are the two classification policies: accepted mime
-// → the kind it is stored under. Containers that can hold video (WebM, MP4,
-// Ogg) count as audio, because an audio player is the only one the app has — a
-// tool-fetched video plays its soundtrack and shows no picture.
+// → the kind it is stored under. WebM and Ogg count as audio whatever codec
+// they carry, because an audio player is the only one the app has.
 var (
 	uploadMedia = map[string]string{
 		MimePNG: KindImage, MimeWebP: KindImage,
@@ -84,32 +69,9 @@ var (
 		MimePNG: KindImage, MimeJPEG: KindImage, MimeWebP: KindImage,
 		MimeGIF: KindImage, MimeBMP: KindImage, MimeICO: KindImage,
 		MimeAudio: KindFile, MimeMP3: KindFile, MimeWAV: KindFile,
-		MimeOGG: KindFile, MimeFLAC: KindFile, MimeMP4: KindFile,
-		MimePDF: KindFile,
+		MimeOGG: KindFile, MimeFLAC: KindFile, MimePDF: KindFile,
 	}
 )
-
-// mediaExts maps an image, audio or video extension to the mime it CLAIMS.
-// Acceptance never reads it — the bytes decide that, always. It exists for two
-// things: to recognize a media file the app cannot show (a photo.avif, a
-// scan.tiff) and refuse it by name instead of storing a download no preview can
-// render, and to leave a correctly-named file alone when the stored name is
-// reconciled with its content. A video container claims the audio mime it is
-// normalized to, so an accepted .m4v keeps its name; the entries mapping to ""
-// are the refused ones.
-var mediaExts = map[string]string{
-	"png": MimePNG, "jpg": MimeJPEG, "jpeg": MimeJPEG, "webp": MimeWebP,
-	"gif": MimeGIF, "bmp": MimeBMP, "ico": MimeICO,
-	"mp3": MimeMP3, "wav": MimeWAV, "flac": MimeFLAC,
-	"ogg": MimeOGG, "oga": MimeOGG, "opus": MimeOGG, "ogv": MimeOGG,
-	"m4a": MimeMP4, "mp4": MimeMP4, "m4v": MimeMP4, "mov": MimeMP4,
-	"webm": MimeAudio, "mkv": MimeAudio,
-	// Refused: no browser here can show these, so storing one silently would
-	// leave the user a download that looks like it should have been a picture.
-	"tif": "", "tiff": "", "avif": "", "heic": "", "heif": "", "jxl": "",
-	"psd": "", "tga": "", "aac": "", "wma": "", "aif": "", "aiff": "",
-	"amr": "", "mid": "", "midi": "", "avi": "", "mpg": "", "mpeg": "", "3gp": "",
-}
 
 // policy is one classification path: which media mimes it stores, whether an
 // unrecognized binary is kept as a download or refused, and what a refusal says.
@@ -120,12 +82,40 @@ type policy struct {
 }
 
 var (
+	// Accepted and ToolAccepted name what each policy stores, for refusals.
+	Accepted     = acceptedList(uploadMedia)
+	ToolAccepted = acceptedList(toolMedia)
+
 	uploadPolicy = policy{media: uploadMedia, accepted: Accepted}
 	toolPolicy   = policy{media: toolMedia, acceptsAny: true, accepted: ToolAccepted}
 )
 
-// textExts hints the mime for accepted text; anything missing is text/plain.
-// Acceptance is content-based (IsText), not extension-based.
+// acceptedList renders a refusal's format list from the policy's own map, so
+// the prose cannot drift from it. Every policy takes text, named last.
+func acceptedList(media map[string]string) string {
+	names := make([]string, 0, len(media))
+	for mime := range media {
+		names = append(names, strings.TrimPrefix(ExtForMime(mime), "."))
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ") + " and text"
+}
+
+// mediaExts maps a supported media or document extension to the mime it claims.
+// Acceptance never reads it — the bytes decide that, always. It exists so a
+// correctly named file is left alone when its stored name is reconciled with
+// its content: "photo.jpeg" and "photo.jpg" both claim image/jpeg and both keep
+// their spelling.
+var mediaExts = map[string]string{
+	"png": MimePNG, "jpg": MimeJPEG, "jpeg": MimeJPEG, "webp": MimeWebP,
+	"gif": MimeGIF, "bmp": MimeBMP, "ico": MimeICO,
+	"mp3": MimeMP3, "wav": MimeWAV, "flac": MimeFLAC,
+	"ogg": MimeOGG, "opus": MimeOGG, "webm": MimeAudio,
+	"pdf": MimePDF,
+}
+
+// textExts hints the mime for text; anything missing is text/plain. Acceptance
+// is content-based (IsText), not extension-based.
 var textExts = map[string]string{
 	"md": "text/markdown", "markdown": "text/markdown",
 	"yaml": "text/yaml", "yml": "text/yaml",
@@ -134,26 +124,28 @@ var textExts = map[string]string{
 	"html": "text/html", "css": "text/css",
 }
 
-// mimeExts is textExts inverted plus the media mimes, so a Content-Type can be
-// turned back into a display extension. Where a mime has several spellings
-// (text/markdown → .md/.markdown) the shortest wins, which keeps the pick
-// stable across runs.
+// mimeExts inverts both tables, so a Content-Type can be turned back into a
+// display extension. Where a mime has several spellings the shortest wins,
+// which keeps the pick stable across runs.
 var mimeExts = func() map[string]string {
-	exts := make([]string, 0, len(textExts))
-	for e := range textExts {
-		exts = append(exts, e)
+	claims := make(map[string]string, len(mediaExts)+len(textExts))
+	exts := make([]string, 0, len(claims))
+	for _, table := range []map[string]string{mediaExts, textExts} {
+		for ext, mime := range table {
+			claims[ext] = mime
+			exts = append(exts, ext)
+		}
 	}
-	sort.Strings(exts)
-	m := map[string]string{
-		MimePNG: "png", MimeJPEG: "jpg", MimeWebP: "webp", MimeGIF: "gif",
-		MimeBMP: "bmp", MimeICO: "ico", MimeAudio: "webm", MimeMP3: "mp3",
-		MimeWAV: "wav", MimeOGG: "ogg", MimeFLAC: "flac", MimeMP4: "m4a",
-		MimePDF: "pdf",
-	}
-	for _, e := range exts {
-		mime := textExts[e]
-		if cur, ok := m[mime]; !ok || len(e) < len(cur) {
-			m[mime] = e
+	sort.Slice(exts, func(i, j int) bool {
+		if len(exts[i]) != len(exts[j]) {
+			return len(exts[i]) < len(exts[j])
+		}
+		return exts[i] < exts[j]
+	})
+	m := make(map[string]string, len(claims))
+	for _, ext := range exts {
+		if _, ok := m[claims[ext]]; !ok {
+			m[claims[ext]] = ext
 		}
 	}
 	return m
@@ -188,6 +180,10 @@ type Result struct {
 // sizes its multipart ceiling from the same constant instead of duplicating it.
 const MaxRawUploadBytes = 64 * 1024 * 1024 // 64 MiB
 
+// MaxFilenameBytes is the stored filename budget, shared by CleanFilename and
+// the callers that have to trim a name before it reaches that check.
+const MaxFilenameBytes = 200
+
 // Process classifies one UPLOADED file: the media the browser produces before
 // it sends (PNG/WebP, WebM, PDF) plus text. Anything else is refused — a client
 // that skipped conversion gets a 415 rather than a file nobody can preview.
@@ -196,10 +192,10 @@ func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 }
 
 // ProcessAny is the TOOL path: the same classification plus every media format
-// a browser can render unaided (`toolMedia`), and unrecognized binaries are
-// kept as downloads instead of refused, so a zip the model fetched still
-// reaches the user. Nothing is converted on either path — the bytes are stored
-// exactly as they arrived.
+// a browser can render unaided (`toolMedia`). Any other binary is kept as a
+// download rather than refused, so a file the model found on the web reaches
+// the user whatever it is. Nothing is converted on either path — the bytes are
+// stored exactly as they arrived.
 func ProcessAny(filename string, data []byte, maxBytes int64) (*Result, error) {
 	return process(filename, data, maxBytes, toolPolicy)
 }
@@ -209,31 +205,23 @@ func process(filename string, data []byte, maxBytes int64, p policy) (*Result, e
 		return nil, fmt.Errorf("%w: empty file", ErrUnsupported)
 	}
 	// One cap for everything: nothing is re-encoded, so the stored size IS the
-	// upload size and there is no "shrink and retry" path any more.
+	// upload size.
 	if int64(len(data)) > MaxRawUploadBytes || (maxBytes > 0 && int64(len(data)) > maxBytes) {
 		return nil, ErrTooLarge
 	}
 
-	ext := extOf(filename)
 	mime := sniffMime(data)
 	if kind, ok := p.media[mime]; ok {
 		return media(kind, mime, filename, data), nil
 	}
-	// Text before the media check below: an SVG is text, and stored as text it
-	// is served text/plain and can never execute in the app's origin.
+	// Text before the binary fallback: an SVG is text, and stored as text it is
+	// served text/plain and can never execute in the app's origin.
 	if IsText(data) {
 		textMime := "text/plain"
-		if m, ok := textExts[ext]; ok {
+		if m, ok := textExts[extOf(filename)]; ok {
 			textMime = m
 		}
 		return &Result{Kind: KindText, Mime: textMime, Name: filename, Data: data, Size: int64(len(data))}, nil
-	}
-	// Not accepted media and not text. A name that claims a media type is a
-	// refusal rather than a silent download: the app could not show it, and
-	// saying so beats a chip that looks like it should have been a picture.
-	if _, isMedia := mediaExts[ext]; isMedia {
-		return nil, fmt.Errorf("%w: not accepted media (%s) — these bytes look like %s",
-			ErrUnsupported, p.accepted, mime)
 	}
 	if !p.acceptsAny {
 		return nil, fmt.Errorf("%w: only %s", ErrUnsupported, p.accepted)
@@ -285,7 +273,7 @@ func CleanFilename(name string) (string, error) {
 	switch {
 	case name == "":
 		return "", errors.New("filename is required")
-	case len(name) > 200:
+	case len(name) > MaxFilenameBytes:
 		return "", errors.New("filename too long (max 200 bytes)")
 	case name == "." || name == "..":
 		return "", errors.New("invalid filename")
@@ -310,21 +298,17 @@ func CleanFilename(name string) (string, error) {
 
 // sniffMime labels bytes by magic — never by name — and normalizes what it
 // finds to the mime the app stores. http.DetectContentType covers the images,
-// WAV, ID3-tagged MP3, Ogg, ISO-BMFF and EBML; three of the audio formats the
-// app accepts have no entry there (FLAC, M4A and bare-frame MP3 all report
-// octet-stream), so their own magic is checked by hand.
+// WAV, ID3-tagged MP3, Ogg and EBML; FLAC and a bare-frame MP3 report
+// octet-stream there, so their own magic is checked by hand.
 //
-// Containers that can hold video are normalized to their AUDIO mime: WebM and
-// MP4 both report as video/*, Ogg as application/ogg. The app has no video
-// player, so a video is stored under an audio mime and its soundtrack plays —
-// a deliberate trade, since telling an audio WebM from a video one means
-// parsing EBML track entries.
+// Video is not supported. An EBML file is WebM only when its DocType says so —
+// Matroska shares the magic and is labelled as itself — and ISO-BMFF (MP4, M4A,
+// MOV) keeps the sniffer's video/mp4, which no policy accepts: a tool's file
+// becomes a download, an upload is refused.
 //
-// It is served as a Content-Type only for audio and images, which cannot
-// execute; every other binary is forced to octet-stream by the attachment
-// handler, so a wrong guess there costs a label, not a hole.
-// ponytail: Matroska shares the EBML magic with WebM, so an .mkv is accepted as
-// audio/webm; read the DocType element here if that ever matters.
+// A label here is served as a Content-Type only for audio and images, which
+// cannot execute; every other binary is forced to octet-stream by the
+// attachment handler, so a wrong guess costs a label, not a hole.
 func sniffMime(data []byte) string {
 	ct := http.DetectContentType(data)
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
@@ -332,9 +316,12 @@ func sniffMime(data []byte) string {
 	}
 	switch ct {
 	case "video/webm":
+		// The DocType element is within the first few dozen bytes of the EBML
+		// header, so a substring check is enough to tell the containers apart.
+		if bytes.Contains(data[:min(len(data), 64)], []byte("matroska")) {
+			return "video/x-matroska"
+		}
 		return MimeAudio
-	case "video/mp4":
-		return MimeMP4
 	case "audio/wave":
 		return MimeWAV
 	case "application/ogg":
@@ -343,11 +330,6 @@ func sniffMime(data []byte) string {
 		switch {
 		case bytes.HasPrefix(data, []byte("fLaC")):
 			return MimeFLAC
-		// Go knows the mp42/isom brands but not M4A, and it deliberately leaves
-		// the image brands (avif, heic, mif1) alone — so only the audio brand is
-		// claimed here and an ISOBMFF photo stays unrecognized and is refused.
-		case len(data) >= 12 && string(data[4:8]) == "ftyp" && string(data[8:12]) == "M4A ":
-			return MimeMP4
 		case isMP3Frame(data):
 			return MimeMP3
 		}
@@ -396,10 +378,10 @@ func IsText(data []byte) bool {
 }
 
 // AudioFormat returns the input_audio format name for a stored audio mime, or
-// "" for anything else. Only the WebM an upload produces maps: audio a TOOL
-// attached (mp3, wav, flac, …) is stored and played for the user but never sent
-// to a specialist model, so the agent tool refuses it in-band rather than
-// guessing a format the provider would misread.
+// "" for anything else. Only WebM maps: audio a TOOL attached (mp3, wav, flac,
+// …) is stored and played for the user but never sent to a specialist model,
+// so the agent tool refuses it in-band rather than guessing a format the
+// provider would misread.
 func AudioFormat(mime string) string {
 	if mime == MimeAudio {
 		return "webm"
@@ -407,17 +389,14 @@ func AudioFormat(mime string) string {
 	return ""
 }
 
-// SendsAsImage reports whether a stored image mime is one the OpenAI-compatible
-// image_url contract covers. A BMP or an ICO previews fine in the browser but
-// would 400 the provider — and history is rebuilt every turn, so a single such
-// attachment would break that chat for good. Those ride along as a <file>
-// reference instead, which is what a non-vision model gets anyway.
+// SendsAsImage reports whether a stored image mime may go to a model as an
+// image part. Only the two formats a browser converts an upload to qualify: a
+// JPEG, GIF, BMP or ICO a tool fetched previews fine but takes the <file>
+// reference path instead, and the agent tool refuses it in-band. History is
+// rebuilt every turn, so a mime the provider rejects would break that chat for
+// good.
 func SendsAsImage(mime string) bool {
-	switch mime {
-	case MimePNG, MimeJPEG, MimeWebP, MimeGIF:
-		return true
-	}
-	return false
+	return mime == MimePNG || mime == MimeWebP
 }
 
 // Type names an attachment for the <file> block the model reads. The kind is

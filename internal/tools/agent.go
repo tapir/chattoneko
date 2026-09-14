@@ -55,17 +55,18 @@ const (
 // "image" sees pictures itself, one listing "document" reads PDFs itself.
 type specialist struct {
 	kind   string // attachment type (attach.Type) == required input modality
-	what   string // how the tool description names this file type
+	what   string // how the tool description names this file type and its formats
 	model  func(config.ModelsConfig) string
 	prompt string
 }
 
 // specialists is the whole hand-off table, in the order the description lists
-// them.
+// them. `what` carries the accepted formats, so the model hears the limit
+// before it calls rather than from a refusal.
 var specialists = []specialist{
-	{"image", "images", func(m config.ModelsConfig) string { return m.DefaultVisionModel }, promptVision},
+	{"image", "images (PNG or WebP only)", func(m config.ModelsConfig) string { return m.DefaultVisionModel }, promptVision},
 	{"document", "PDF documents", func(m config.ModelsConfig) string { return m.DefaultDocumentModel }, promptDocument},
-	{"audio", "audio recordings", func(m config.ModelsConfig) string { return m.DefaultAudioModel }, promptAudio},
+	{"audio", "audio recordings (WebM only)", func(m config.ModelsConfig) string { return m.DefaultAudioModel }, promptAudio},
 }
 
 // agentSchema is the tool's argument shape. The file's TYPE is not an
@@ -184,6 +185,12 @@ func (a *agent) call(ctx context.Context, argsJSON string, meta mcphub.CallMeta)
 		}
 		return "", fmt.Errorf("no specialist can read %q (stored as %s)", att.Filename, att.Mime)
 	}
+	// The format is checked before the model lookup, so a file no specialist
+	// could ever carry is reported as unsupported rather than as a missing
+	// server setting — and nothing reaches a provider that cannot take it.
+	if err := wireSupported(kind, att); err != nil {
+		return "", err
+	}
 
 	model := sp.model(a.cfgs.Get().Models)
 	if model == "" {
@@ -195,10 +202,7 @@ func (a *agent) call(ctx context.Context, argsJSON string, meta mcphub.CallMeta)
 	if cli == nil {
 		return "", errors.New("the provider is not configured yet")
 	}
-	part, err := contentPart(att, kind)
-	if err != nil {
-		return "", err
-	}
+	part := contentPart(att, kind)
 
 	resp, err := cli.Complete(ctx, []openai.ChatCompletionMessageParamUnion{
 		openai.SystemMessage(sp.prompt),
@@ -240,42 +244,44 @@ func specialistFor(kind string) *specialist {
 	return nil
 }
 
-// contentPart builds the wire part carrying the file to the specialist.
-func contentPart(att *store.Attachment, kind string) (openai.ChatCompletionContentPartUnionParam, error) {
-	b64 := base64.StdEncoding.EncodeToString(att.Data)
+// wireSupported refuses, in-band, a file whose stored mime has no wire
+// representation: an image outside the png/webp the app converts uploads to, or
+// audio in any container but the WebM an upload produces. The stored mime is the
+// sniffed one and nothing is re-encoded server-side, so what is stored is what
+// would go out.
+func wireSupported(kind string, att *store.Attachment) error {
 	switch kind {
 	case "image":
-		// The stored mime is the sniffed one — nothing is re-encoded server-side,
-		// so the data URL must carry it. A tool can hand over a BMP or an ICO,
-		// which previews fine but sits outside the image_url contract: refuse
-		// in-band, the same way an unroutable recording is refused.
 		if !attach.SendsAsImage(att.Mime) {
-			return openai.ChatCompletionContentPartUnionParam{}, fmt.Errorf(
-				"%q is stored as %s, which no image input takes", att.Filename, att.Mime)
+			return fmt.Errorf("%q is stored as %s, which no image input takes (PNG and WebP only)",
+				att.Filename, att.Mime)
 		}
-		return openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-			URL: "data:" + att.Mime + ";base64," + b64,
-		}), nil
-	case "document":
-		return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
-			FileData: openai.String("data:" + att.Mime + ";base64," + b64),
-			Filename: openai.String(att.Filename),
-		}), nil
 	case "audio":
-		// The format name comes from the one audio container the app stores
-		// (attach), so the specialist is offered exactly what a user could have
-		// uploaded.
-		format := attach.AudioFormat(att.Mime)
-		if format == "" {
-			return openai.ChatCompletionContentPartUnionParam{}, fmt.Errorf(
-				"%q is stored as %s, which no audio input takes (%s only)",
+		if attach.AudioFormat(att.Mime) == "" {
+			return fmt.Errorf("%q is stored as %s, which no audio input takes (%s only)",
 				att.Filename, att.Mime, attach.MimeAudio)
 		}
+	}
+	return nil
+}
+
+// contentPart builds the wire part carrying the file to the specialist.
+// wireSupported has already run, so every kind here has a representation.
+func contentPart(att *store.Attachment, kind string) openai.ChatCompletionContentPartUnionParam {
+	b64 := base64.StdEncoding.EncodeToString(att.Data)
+	dataURL := "data:" + att.Mime + ";base64," + b64
+	switch kind {
+	case "image":
+		return openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL})
+	case "document":
+		return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+			FileData: openai.String(dataURL),
+			Filename: openai.String(att.Filename),
+		})
+	default: // audio
 		return openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
 			Data:   b64,
-			Format: format,
-		}), nil
+			Format: attach.AudioFormat(att.Mime),
+		})
 	}
-	// specialistFor already refused every other type.
-	return openai.ChatCompletionContentPartUnionParam{}, fmt.Errorf("no wire representation for a %q file", kind)
 }

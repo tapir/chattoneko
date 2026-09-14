@@ -191,6 +191,17 @@ func TestAgentDescriptionOffersOnlyMissingTypes(t *testing.T) {
 	}
 }
 
+// The description names the accepted formats, so the model hears the limit
+// before it calls instead of from a refusal.
+func TestAgentDescriptionNamesFormats(t *testing.T) {
+	desc, _ := AgentDescription(nil)
+	for _, want := range []string{"images (PNG or WebP only)", "audio recordings (WebM only)", "PDF documents"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("description does not name %q: %s", want, desc)
+		}
+	}
+}
+
 // TestAgentSendsFileToItsSpecialist: one attachment id in, one question to the
 // designated model out, on the wire shape that file type needs — and the
 // specialist's own embedded system prompt over it.
@@ -310,7 +321,8 @@ func TestAgentRefusals(t *testing.T) {
 	fs := &fakeFileStore{}
 	seedAttachment(fs, "img", agentChat, "photo.png", "image", "image/png", []byte("png"))
 	seedAttachment(fs, "notes", agentChat, "notes.md", "text", "text/markdown", []byte("hello"))
-	seedAttachment(fs, "voice", agentChat, "memo.ogg", "file", "audio/ogg", []byte("ogg")) // a mime the app no longer stores
+	seedAttachment(fs, "voice", agentChat, "memo.ogg", "file", "audio/ogg", []byte("ogg"))  // a tool's recording: playable, not routable
+	seedAttachment(fs, "jpg", agentChat, "photo.jpg", "image", "image/jpeg", []byte("jpg")) // previews, but outside the wire contract
 	seedAttachment(fs, "foreign", "other-chat", "photo.png", "image", "image/png", []byte("png"))
 
 	for _, tc := range []struct {
@@ -325,6 +337,10 @@ func TestAgentRefusals(t *testing.T) {
 		{"no question", `{"id":"img"}`, mcphub.CallMeta{ChatID: agentChat}, all, "required"},
 		{"text file", `{"id":"notes","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "already part of this conversation"},
 		{"unroutable audio", `{"id":"voice","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "audio/webm only"},
+		{"unroutable image", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "PNG and WebP only"},
+		// The format is checked first: an unsupported file must not be reported
+		// as a missing server setting.
+		{"format beats missing model", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "PNG and WebP only"},
 		{"no model designated", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "no model is designated for images"},
 		{"only some designated", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, visionOnly, ""},
 	} {

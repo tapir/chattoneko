@@ -19,7 +19,7 @@ import {
 } from "./server.js";
 import { Typewriter } from "./typewriter.js";
 import { looksText } from "./text-sniff.js";
-import { mediaKind, convertImage, convertAudio } from "./media.js";
+import { sniffKind, convertImage, convertAudio } from "./media.js";
 import { toast as sonnerToast } from "svelte-sonner";
 
 const CHAT_PAGE = 30;
@@ -31,8 +31,20 @@ const CHAT_PAGE = 30;
 // exactly what lands in the database. Everything else is judged by content in
 // lib/text-sniff.js, so there is no text-extension list to keep in sync.
 // Fallbacks if /api/config limits haven't loaded yet.
+// Client-side limits come from /api/config. These two need a fallback because
+// staging cannot work without them; the stored-size cap does not — it falls
+// back to 0, which skips the client check and leaves the server authoritative.
 const FALLBACK_MAX_FILES = 8; // internal/api maxUploadFiles
 const FALLBACK_MAX_RAW_UPLOAD_BYTES = 64 * 1024 * 1024; // attach.MaxRawUploadBytes
+
+// classifyFile is one file's whole client-side verdict: a media kind by magic
+// bytes, "text" by content, "empty", or "" for anything the server would refuse.
+async function classifyFile(file) {
+  if (file.size === 0) return "empty";
+  const kind = await sniffKind(file).catch(() => "");
+  if (kind) return kind;
+  return (await looksText(file).catch(() => false)) ? "text" : "";
+}
 
 let pendingSeq = 0;
 const pendingId = () => `pending-${Date.now()}-${++pendingSeq}`;
@@ -856,14 +868,10 @@ class AppState {
   // and `converting` is true until they exist, which is what the composer's
   // send button waits on.
   async addAttachments(files) {
-    // Sniffed up front so the staging loop below stays synchronous: reading
+    // Classified up front so the staging loop below stays synchronous: reading
     // and writing pendingAttachments in the same tick is what keeps two
     // overlapping calls (paste, then drop) from clobbering each other.
-    const readable = await Promise.all(
-      files.map((f) =>
-        mediaKind(f.name) ? true : looksText(f).catch(() => false),
-      ),
-    );
+    const kinds = await Promise.all(files.map(classifyFile));
     const key = this.activeChatId ?? "";
     const list = this.pendingAttachments[key] ?? [];
     const limits = this.config?.limits ?? {};
@@ -879,17 +887,18 @@ class AppState {
         break;
       }
       const name = file.name || "file";
-      const media = mediaKind(name); // "image" | "audio" | "pdf" | ""
-      // Only images and recordings are converted; a PDF is stored as picked.
-      const converts = media === "image" || media === "audio";
-      if (!readable[i]) {
-        this.toast("error", `${name}: unsupported file type`);
-        continue;
-      }
-      if (file.size === 0) {
+      // "image" | "audio" | "pdf" | "text" | "empty" | "" (refused)
+      const kind = kinds[i];
+      if (kind === "empty") {
         this.toast("error", `${name}: empty file`);
         continue;
       }
+      if (!kind) {
+        this.toast("error", `${name}: unsupported file type`);
+        continue;
+      }
+      // Only images and recordings are converted; a PDF is stored as picked.
+      const converts = kind === "image" || kind === "audio";
       // The raw cap is the server's read limit and applies to everything. The
       // stored cap applies to what ends up in the database: directly for text
       // and PDF, and for media once the conversion lands (see convertPending).
@@ -905,9 +914,9 @@ class AppState {
         file,
         filename: name,
         size: file.size,
-        kind: media === "image" ? "image" : media ? "file" : "text",
+        kind: kind === "image" ? "image" : kind === "text" ? "text" : "file",
         converting: converts,
-        previewUrl: media === "image" ? URL.createObjectURL(file) : "",
+        previewUrl: kind === "image" ? URL.createObjectURL(file) : "",
       });
     }
     if (staged.length) {

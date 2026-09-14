@@ -17,6 +17,7 @@
   import { longPress } from '../lib/longpress.js';
   import { downloadAttachment } from '../lib/attach-actions.js';
   import { isPdf } from '../lib/pdf.js';
+  import { isAudio, canPlayAudio } from '../lib/media.js';
   import { FileText, Info, Paperclip, Pencil, RotateCcw, Workflow, X } from '@lucide/svelte';
   import CollapsibleStatus from './CollapsibleStatus.svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
@@ -75,10 +76,12 @@
   // since the binary kind is shared with every other file, and a staged one
   // carries no mime yet — so it stays a chip until the send round-trips.
   let pdfFiles = $derived(attachments.filter(isPdf));
-  const isAudio = (att) => att?.mime?.startsWith('audio/');
-  let audioFiles = $derived(attachments.filter(isAudio));
+  // A player this browser cannot decode is a dead button, so an unsupported
+  // recording falls through to the download chip like any other binary.
+  const playable = (att) => isAudio(att) && canPlayAudio(att);
+  let audioFiles = $derived(attachments.filter(playable));
   let files = $derived(
-    attachments.filter((a) => a.kind !== 'image' && !isPdf(a) && !isAudio(a)),
+    attachments.filter((a) => a.kind !== 'image' && !isPdf(a) && !playable(a)),
   );
 
   // ---- streaming markdown ----

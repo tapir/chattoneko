@@ -32,8 +32,12 @@ func makeJPEG(t *testing.T, w, h int) []byte {
 }
 
 // webmHeader is the EBML magic plus a "webm" DocType — enough for the sniffer,
-// which never parses the container.
-var webmHeader = []byte{0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x84, 'w', 'e', 'b', 'm'}
+// which never parses the container. mkvHeader is the same magic with the
+// Matroska DocType, which the sniffer has to tell apart.
+var (
+	webmHeader = []byte{0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x84, 'w', 'e', 'b', 'm'}
+	mkvHeader  = []byte{0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x88, 'm', 'a', 't', 'r', 'o', 's', 'k', 'a'}
+)
 
 // Headers for the formats the sniffer has to recognize. Each is only as long as
 // classification needs — nothing here is decoded, so a payload never is.
@@ -45,16 +49,14 @@ var (
 	id3Header  = append([]byte("ID3\x04\x00\x00\x00\x00\x00\x00"), make([]byte, 20)...)
 	mp3Frame   = append([]byte{0xff, 0xfb, 0x90, 0x00}, make([]byte, 60)...) // sync, MPEG1 layer III, 128k/44.1k
 	flacHeader = append([]byte("fLaC\x00\x00\x00\x22"), make([]byte, 40)...)
-	m4aHeader  = append([]byte("\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00M4A isom"), make([]byte, 20)...)
-	mp4Header  = append([]byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"), make([]byte, 20)...)
 	oggHeader  = append([]byte("OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00"), make([]byte, 30)...)
 	pdfHeader  = []byte("%PDF-1.7 fake")
 	zipHeader  = []byte{0x50, 0x4b, 0x03, 0x04, 0x00, 0x01}
-	// Media the app cannot show: an ISOBMFF photo brand and a TIFF header, both
-	// of which Go's sniffer reports as octet-stream.
+	// Video and image formats the app does not support: an ISO-BMFF file and an
+	// ISOBMFF photo brand, both of which a tool may still hand over.
+	mp4Header  = append([]byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"), make([]byte, 20)...)
 	avifHeader = append([]byte("\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1"), make([]byte, 20)...)
 	tiffHeader = []byte{0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00}
-	qtHeader   = append([]byte("\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "), make([]byte, 20)...)
 )
 
 func sampleWebP(t *testing.T) []byte {
@@ -129,8 +131,8 @@ func TestProcessNameFollowsMime(t *testing.T) {
 	}
 }
 
-// A tool's file is stored exactly as fetched: every format a browser can render
-// unaided becomes a preview under its own mime, and nothing is converted.
+// A tool's file is stored exactly as fetched: every supported media format
+// becomes a preview under its own mime, and nothing is converted.
 func TestProcessAnyToolMedia(t *testing.T) {
 	jpg := makeJPEG(t, 8, 6)
 	for _, tc := range []struct {
@@ -149,9 +151,6 @@ func TestProcessAnyToolMedia(t *testing.T) {
 		{"tagged mp3", "song.mp3", id3Header, KindFile, MimeMP3},
 		{"bare-frame mp3", "song.mp3", mp3Frame, KindFile, MimeMP3},
 		{"flac", "track.flac", flacHeader, KindFile, MimeFLAC},
-		{"m4a", "memo.m4a", m4aHeader, KindFile, MimeMP4},
-		{"mp4 video", "clip.mp4", mp4Header, KindFile, MimeMP4}, // soundtrack only: no video player
-		{"m4v keeps its name", "clip.m4v", mp4Header, KindFile, MimeMP4},
 		{"ogg", "track.ogg", oggHeader, KindFile, MimeOGG},
 		{"opus", "voice.opus", oggHeader, KindFile, MimeOGG},
 		{"webm", "rec.webm", webmHeader, KindFile, MimeAudio},
@@ -181,39 +180,48 @@ func TestProcessAnyToolMedia(t *testing.T) {
 	}
 }
 
-// Media the app cannot show is refused by name rather than stored as a download
-// that looks like it should have been a picture — and a name that lies about
-// its bytes is refused too. A genuine non-media binary is still kept.
-func TestProcessAnyRefusesUnshowableMedia(t *testing.T) {
+// A format no policy supports is still stored for a tool, as a download: the
+// model found a file on the web and the user can have it whatever it is. Video
+// containers are labelled as themselves, so the client shows a chip and not a
+// player that cannot play them.
+func TestProcessAnyKeepsUnsupportedAsDownload(t *testing.T) {
 	for _, tc := range []struct {
 		filename string
 		data     []byte
+		wantMime string
 	}{
-		{"photo.avif", avifHeader},
-		{"photo.heic", avifHeader}, // same ISOBMFF shape, different brand
-		{"scan.tiff", tiffHeader},
-		{"clip.mov", qtHeader},   // a real QuickTime file: unrecognized bytes
-		{"photo.jpg", zipHeader}, // the bytes are a zip
+		{"clip.mp4", mp4Header, "video/mp4"},
+		{"movie.mkv", mkvHeader, "video/x-matroska"},
+		{"photo.avif", avifHeader, "application/octet-stream"},
+		{"scan.tiff", tiffHeader, "application/octet-stream"},
+		{"archive.zip", zipHeader, "application/zip"},
+		{"photo.jpg", zipHeader, "application/zip"}, // a name that lies: the bytes win
 	} {
-		if _, err := ProcessAny(tc.filename, tc.data, 1<<20); !errors.Is(err, ErrUnsupported) {
-			t.Errorf("ProcessAny(%q) = %v, want ErrUnsupported", tc.filename, err)
+		res, err := ProcessAny(tc.filename, tc.data, 1<<20)
+		if err != nil {
+			t.Fatalf("ProcessAny(%q): %v", tc.filename, err)
+		}
+		if res.Kind != KindFile || res.Mime != tc.wantMime {
+			t.Errorf("ProcessAny(%q) = %s/%s, want file/%s", tc.filename, res.Kind, res.Mime, tc.wantMime)
+		}
+		if !bytes.Equal(res.Data, tc.data) {
+			t.Errorf("ProcessAny(%q) changed the bytes", tc.filename)
+		}
+		// No preview: none of these is audio, so the client shows a download.
+		if got := Type(res.Kind, res.Mime); got != KindFile {
+			t.Errorf("Type(%q) = %q, want file", res.Mime, got)
 		}
 	}
-	// The refusal names the tool-side list, so the model can pick another file.
-	_, err := ProcessAny("photo.avif", avifHeader, 1<<20)
-	if !strings.Contains(err.Error(), ToolAccepted) {
-		t.Fatalf("error %q should list what a tool may attach", err)
-	}
-	// A zip is not media: tools keep it as a download.
-	res, err := ProcessAny("archive.zip", zipHeader, 1<<20)
-	if err != nil || res.Kind != KindFile || res.Mime != "application/zip" {
-		t.Fatalf("zip = %+v, %v", res, err)
+	// Matroska shares the EBML magic with WebM: only the DocType tells them
+	// apart, and getting it wrong would hand the client an unplayable player.
+	if res, err := ProcessAny("rec.webm", webmHeader, 1<<20); err != nil || res.Mime != MimeAudio {
+		t.Fatalf("webm = %+v, %v", res, err)
 	}
 }
 
-// An upload only ever carries what the browser produced, so a raw JPEG is
-// refused there even though a tool may attach one: the client's conversion step
-// is the rule, not an option.
+// An upload only ever carries what the browser produced, so anything else is
+// refused there even when a tool may attach it: the client's conversion step is
+// the rule, not an option.
 func TestProcessUploadStaysStrict(t *testing.T) {
 	_, err := Process("photo.jpg", makeJPEG(t, 8, 6), 1<<20)
 	if !errors.Is(err, ErrUnsupported) {
@@ -229,6 +237,9 @@ func TestProcessUploadStaysStrict(t *testing.T) {
 		{"track.flac", flacHeader},
 		{"song.mp3", id3Header},
 		{"anim.gif", gifHeader},
+		{"clip.mp4", mp4Header},
+		{"movie.mkv", mkvHeader},
+		{"archive.zip", zipHeader},
 	} {
 		if _, err := Process(tc.filename, tc.data, 1<<20); !errors.Is(err, ErrUnsupported) {
 			t.Errorf("Process(%q) = %v, want ErrUnsupported", tc.filename, err)
@@ -236,13 +247,15 @@ func TestProcessUploadStaysStrict(t *testing.T) {
 	}
 }
 
-// Only the image mimes inside the image_url contract may be sent to a model: a
-// BMP previews fine but would 400 the provider, and history is rebuilt every
-// turn, so one such attachment would break that chat for good.
+// Only PNG and WebP may go to a model as an image: they are what a browser
+// converts an upload to, and history is rebuilt every turn, so a mime the
+// provider rejects would break that chat for good. Everything else previews in
+// the browser but takes the <file> reference path.
 func TestSendsAsImage(t *testing.T) {
 	for mime, want := range map[string]bool{
-		MimePNG: true, MimeJPEG: true, MimeWebP: true, MimeGIF: true,
-		MimeBMP: false, MimeICO: false, MimePDF: false, MimeAudio: false, "": false,
+		MimePNG: true, MimeWebP: true,
+		MimeJPEG: false, MimeGIF: false, MimeBMP: false, MimeICO: false,
+		MimePDF: false, MimeAudio: false, "": false,
 	} {
 		if got := SendsAsImage(mime); got != want {
 			t.Errorf("SendsAsImage(%q) = %v, want %v", mime, got, want)
@@ -337,9 +350,8 @@ func TestAudioFormat(t *testing.T) {
 	if got := AudioFormat(MimeAudio); got != "webm" {
 		t.Fatalf("AudioFormat(%q) = %q, want webm", MimeAudio, got)
 	}
-	// Anything else — including a recording stored before WebM was the only
-	// container — is "" so the agent tool refuses it in-band instead of
-	// guessing a format the provider would misread.
+	// Anything else — a recording a tool fetched — is "" so the agent tool
+	// refuses it in-band instead of guessing a format the provider would misread.
 	for _, mime := range []string{"audio/wav", "audio/mpeg", "audio/ogg", "", "image/png"} {
 		if got := AudioFormat(mime); got != "" {
 			t.Fatalf("AudioFormat(%q) = %q, want empty", mime, got)
@@ -354,9 +366,10 @@ func TestType(t *testing.T) {
 		{KindText, "text/markdown", "text"},
 		{KindText, "application/json", "text"}, // the kind decides, not the mime
 		{KindFile, MimeAudio, "audio"},
-		{KindFile, "audio/mpeg", "audio"}, // a legacy row: still audio, so the agent refuses it in-band
+		{KindFile, "audio/mpeg", "audio"}, // a tool's recording: audio, but not one a specialist takes
 		{KindFile, MimePDF, "document"},
 		{KindFile, "application/zip", "file"},
+		{KindFile, "video/mp4", "file"},
 		{KindFile, "application/octet-stream", "file"},
 	}
 	for _, tc := range cases {
@@ -435,8 +448,9 @@ func TestExtForMime(t *testing.T) {
 		{MimeJPEG, ".jpg"},
 		{MimeWebP, ".webp"},
 		{MimeAudio, ".webm"},
-		{MimeMP4, ".m4a"},
+		{MimeOGG, ".ogg"}, // shortest of ogg/opus
 		{MimePDF, ".pdf"},
+		{"video/mp4", ""},              // unsupported: no suffix is invented
 		{"application/vnd.custom", ""}, // unknown: no invented suffix
 		{"", ""},
 		{"text/plain", ""},

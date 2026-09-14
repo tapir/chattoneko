@@ -22,11 +22,12 @@ type Tool struct {
 	Schema      json.RawMessage // JSON Schema for the arguments object
 }
 
-// Image is an image attached to a user message. Data MUST be PNG-encoded:
-// it is sent verbatim as a data:image/png URL (the engine re-encodes all
-// uploaded images to PNG before handing them to the provider).
+// Image is an image attached to a user message, sent verbatim as a data URL.
+// Mime is the stored one, and only the mimes attach.SendsAsImage accepts ever
+// get here — the rest ride along as a file reference instead.
 type Image struct {
-	Data []byte // PNG-encoded bytes
+	Data []byte
+	Mime string
 }
 
 // ToolCall is a tool invocation requested by the assistant.

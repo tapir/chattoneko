@@ -101,7 +101,7 @@ func textResult(body string) string {
 }
 
 // ctypeHint names the Content-Type the server actually sent, so failures
-// like "the server sent image/avif" (a format our pipeline can't decode),
+// like "the server sent image/avif" (not one of the accepted image formats),
 // "application/pdf" (binary, refused) or "text/html" (a bot interstitial
 // where an image was expected) are self-explanatory to the model.
 func ctypeHint(ctype string) string {

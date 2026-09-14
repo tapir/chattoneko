@@ -13,7 +13,7 @@ It is extremely small. Everything is one static Go binary with the web UI embedd
 - Chat with any model through an OpenAI-compatible (chat completions) API. Keep a list of favorites and switch per chat.
 - Replies stream in as they are written, and can be stopped at any time.
 - Models that reason out loud show their thinking in collapsible blocks, one per step of a tool-using reply, each next to the tool calls it produced.
-- Send images, text files, audio and PDFs as attachments. A file the picked model can't read is kept anyway and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that CAN read it (the `agent` tool), once you flag one in settings.
+- Send images, text files, audio and PDFs as attachments. Pictures and recordings are converted in your browser as you attach them (images to WebP at most 1280px wide, and never shrunk by more than half; audio to WebM/Opus), so the server never has to decode anything. A file the picked model can't read is kept anyway and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that CAN read it (the `agent` tool), once you flag one in settings.
 - Tools the model can call, plus any MCP server you add.
 - The model can hand you files back as download links, and show images inline.
 - Chats are saved and titled automatically; search, rename, delete.
@@ -118,6 +118,10 @@ Probably not. There is no standard API for it: OpenAI has one, no other provider
 **What about transcription and speech?**
 
 That will probably happen, yes. Speech-to-text and text-to-speech have de facto standard shapes that many providers implement, unlike generation.
+
+**Why does attaching a recording fail in my browser?**
+
+Audio is transcoded in the browser (to WebM/Opus), which needs the WebCodecs `AudioEncoder`: Chrome and Edge 94+, Firefox on desktop 130+, Safari 26+. Firefox for Android and Safari 18 and older have none, and WebCodecs also requires a secure context — so opening the app over plain HTTP at a LAN address (`http://192.168.1.20:8080`) has no audio encoder either, in any browser. Use `http://localhost:8080`, put the server behind HTTPS, or use the Android app. Images are unaffected: canvas encoding works everywhere and needs no secure context.
 
 **iOS?**
 

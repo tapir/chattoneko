@@ -245,10 +245,16 @@ func contentPart(att *store.Attachment, kind string) (openai.ChatCompletionConte
 	b64 := base64.StdEncoding.EncodeToString(att.Data)
 	switch kind {
 	case "image":
-		// Stored image bytes are always re-encoded PNG (internal/attach), so
-		// the data URL's mime is fixed.
+		// The stored mime is the sniffed one — nothing is re-encoded server-side,
+		// so the data URL must carry it. A tool can hand over a BMP or an ICO,
+		// which previews fine but sits outside the image_url contract: refuse
+		// in-band, the same way an unroutable recording is refused.
+		if !attach.SendsAsImage(att.Mime) {
+			return openai.ChatCompletionContentPartUnionParam{}, fmt.Errorf(
+				"%q is stored as %s, which no image input takes", att.Filename, att.Mime)
+		}
 		return openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-			URL: "data:image/png;base64," + b64,
+			URL: "data:" + att.Mime + ";base64," + b64,
 		}), nil
 	case "document":
 		return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
@@ -256,13 +262,14 @@ func contentPart(att *store.Attachment, kind string) (openai.ChatCompletionConte
 			Filename: openai.String(att.Filename),
 		}), nil
 	case "audio":
-		// The format name comes from the upload allow-list itself (attach), so
-		// the specialist is offered exactly what a user could have uploaded.
+		// The format name comes from the one audio container the app stores
+		// (attach), so the specialist is offered exactly what a user could have
+		// uploaded.
 		format := attach.AudioFormat(att.Mime)
 		if format == "" {
 			return openai.ChatCompletionContentPartUnionParam{}, fmt.Errorf(
 				"%q is stored as %s, which no audio input takes (%s only)",
-				att.Filename, att.Mime, attach.AudioFormats())
+				att.Filename, att.Mime, attach.MimeAudio)
 		}
 		return openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
 			Data:   b64,

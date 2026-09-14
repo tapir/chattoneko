@@ -1000,10 +1000,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.chatExists(w, r.Context(), id) {
 		return
 	}
-	// The raw multipart body can exceed the per-file stored cap because images
-	// are downscaled to a compact PNG during processing; the real cap is
-	// enforced on the converted bytes inside attach.Process. This ceiling only
-	// guards against pathological upload sizes (per-file raw cap + overhead).
+	// Nothing is re-encoded any more, so the per-file stored cap
+	// (upload_max_file_bytes, enforced inside attach.Process) is also the real
+	// per-file body cost. This ceiling only guards the whole multipart read
+	// against pathological sizes (per-file raw cap + overhead).
 	maxTotal := int64(attach.MaxRawUploadBytes)*maxUploadFiles + 64*1024
 	r.Body = http.MaxBytesReader(w, r.Body, maxTotal)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -1069,7 +1069,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, name+": "+err.Error())
 			return
 		}
-		meta, err := s.store.CreateAttachment(r.Context(), id, name, res.Kind, res.Mime, res.Size, res.Data)
+		meta, err := s.store.CreateAttachment(r.Context(), id, res.Name, res.Kind, res.Mime, res.Size, res.Data)
 		if err != nil {
 			rollback()
 			internalError(w, "store attachment", err)
@@ -1085,7 +1085,10 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Images are stored as re-encoded PNG. Text attachments are served as
+	// Images are served inline under their stored mime — the closed set in
+	// attach's media tables (png, webp, jpeg, gif, bmp, ico), none of which can
+	// carry script; an SVG never reaches this branch because it classifies as
+	// text. Text attachments are served as
 	// text/plain regardless of their detected mime so an HTML/SVG upload can
 	// never execute in the app's origin, and binary ones as octet-stream for
 	// the same reason — which also makes the browser download rather than
@@ -1094,7 +1097,7 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	ctype := "text/plain; charset=utf-8"
 	switch att.Kind {
 	case attach.KindImage:
-		ctype = "image/png"
+		ctype = att.Mime
 	case attach.KindFile:
 		// Audio is the one binary that keeps its stored mime: it cannot
 		// execute, and the chat's inline <audio> player needs the real type

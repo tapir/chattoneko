@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"image"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -220,6 +219,33 @@ func TestCreateFileLinkFailure(t *testing.T) {
 
 func TestCreateFileFromURLImage(t *testing.T) {
 	allowWebFetchLoopback(t)
+	ts := serve(t, "image/png", testPNG(t, 40, 30))
+
+	fs := &fakeFileStore{}
+	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
+	out, isErr := callTool(t, fs, "create_file", `{"url":"`+ts.URL+`/pics/cat.png"}`, meta)
+	if isErr {
+		t.Fatalf("unexpected tool error: %q", out)
+	}
+	c := shownOn(t, fs, "m1")
+	// Stored verbatim (same rule as uploads — nothing is re-encoded) and the
+	// name follows the bytes, not the URL.
+	if c.kind != "image" || c.mime != "image/png" || c.filename != "cat.png" {
+		t.Fatalf("wrong attachment: kind=%q mime=%q name=%q", c.kind, c.mime, c.filename)
+	}
+	if c.size != int64(len(c.data)) {
+		t.Fatalf("size %d != len(data) %d", c.size, len(c.data))
+	}
+	if !strings.Contains(out, ts.URL) || !strings.Contains(out, "inline as an image") {
+		t.Fatalf("result should carry the source and how it shows: %q", out)
+	}
+}
+
+// A JPEG a tool fetches is a picture, not a download: tools store what they got
+// (nothing is converted server-side) and every format a browser can render
+// unaided previews inline. The upload path is stricter — see attach's tests.
+func TestCreateFileFromURLJPEGIsAnImage(t *testing.T) {
+	allowWebFetchLoopback(t)
 	ts := serve(t, "image/jpeg", testJPEG(t, 40, 30))
 
 	fs := &fakeFileStore{}
@@ -229,22 +255,38 @@ func TestCreateFileFromURLImage(t *testing.T) {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
 	c := shownOn(t, fs, "m1")
-	// The JPEG source is converted to PNG (same routine as uploads) and the
-	// name follows the bytes, not the URL.
-	if c.kind != "image" || c.mime != "image/png" || c.filename != "cat.png" {
-		t.Fatalf("wrong attachment: %+v", c)
+	if c.kind != "image" || c.mime != "image/jpeg" || c.filename != "cat.jpg" {
+		t.Fatalf("wrong attachment: kind=%q mime=%q name=%q", c.kind, c.mime, c.filename)
 	}
-	// Independent decode of the stored bytes: the result's dims must match
-	// what was actually persisted, not just what the tool claimed.
-	if cfg, _, err := image.DecodeConfig(bytes.NewReader(c.data)); err != nil || cfg.Width != 40 || cfg.Height != 30 {
-		t.Fatalf("stored PNG is %+v (err %v), want 40x30", cfg, err)
+	if !strings.Contains(out, "inline as an image") {
+		t.Fatalf("result should say how the user will see it: %q", out)
 	}
-	if c.size != int64(len(c.data)) {
-		t.Fatalf("size %d != len(data) %d", c.size, len(c.data))
+}
+
+// Media no browser here can show is refused in-band, so the model hears it and
+// can pick another file instead of handing the user a dead download.
+func TestCreateFileFromURLRefusesUnshowableMedia(t *testing.T) {
+	allowWebFetchLoopback(t)
+	ts := serve(t, "image/avif", avifBody())
+
+	fs := &fakeFileStore{}
+	out, isErr := callTool(t, fs, "create_file", `{"url":"`+ts.URL+`/pics/cat.avif"}`,
+		mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
+	if !isErr {
+		t.Fatalf("want an in-band error, got %q", out)
 	}
-	if !strings.Contains(out, "40x30") || !strings.Contains(out, ts.URL) || !strings.Contains(out, "inline as an image") {
-		t.Fatalf("result should carry dims, source and how it shows: %q", out)
+	if !strings.Contains(out, "not accepted media") {
+		t.Fatalf("error should say why: %q", out)
 	}
+	if len(fs.files) != 0 {
+		t.Fatal("store must not be called")
+	}
+}
+
+// avifBody is an ISOBMFF file with the avif brand: Go's sniffer reports it as
+// octet-stream, so only the name says it was meant to be a picture.
+func avifBody() []byte {
+	return append([]byte("\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1"), make([]byte, 20)...)
 }
 
 func TestCreateFileFromURLText(t *testing.T) {
@@ -302,11 +344,11 @@ func TestCreateFileFromURLExtension(t *testing.T) {
 
 func TestCreateFileFromURLFilename(t *testing.T) {
 	allowWebFetchLoopback(t)
-	jpg := testJPEG(t, 5, 5)
-	ts := serveTextOrImage(t, jpg)
+	ts := serveTextOrImage(t, testPNG(t, 5, 5))
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 
-	// Image names get .png forced on (stored bytes are PNG regardless of source).
+	// Media names get the extension their sniffed mime implies (stored bytes
+	// are never re-encoded, so the suffix simply has to match what came in).
 	cases := []struct{ name, args, want string }{
 		{"jpg source", `{"url":"` + ts.URL + `/a/photo.jpeg"}`, "photo.png"},
 		{"webp source", `{"url":"` + ts.URL + `/a/sticker.webp"}`, "sticker.png"},
@@ -368,23 +410,24 @@ func TestCreateFileFromURLBinary(t *testing.T) {
 	}
 }
 
-// Bytes that claim to be an image but don't decode are refused rather than
-// stored: a corrupt picture is neither a preview nor a useful download.
-func TestCreateFileFromURLCorruptImage(t *testing.T) {
+// The server never decodes pixels: bytes with a real PNG magic are stored
+// verbatim even when the payload after the header is nonsense. Validating the
+// decode was the old pipeline's job and died with it — the browser that
+// produced the file is the only converter.
+func TestCreateFileFromURLUndecodablePNGIsStoredVerbatim(t *testing.T) {
 	allowWebFetchLoopback(t)
-	ts := serve(t, "image/png", append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...))
+	body := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	ts := serve(t, "image/png", body)
 
 	fs := &fakeFileStore{}
 	out, isErr := callTool(t, fs, "create_file", `{"url":"`+ts.URL+`/x.png"}`,
 		mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
-	if !isErr {
-		t.Fatalf("want an error, got %q", out)
+	if isErr {
+		t.Fatalf("want it stored, got error %q", out)
 	}
-	if !strings.Contains(out, "corrupt png image") {
-		t.Fatalf("error should name the format: %q", out)
-	}
-	if len(fs.files) != 0 {
-		t.Fatal("store must not be called")
+	c := shownOn(t, fs, "m1")
+	if c.kind != "image" || !bytes.Equal(c.data, body) {
+		t.Fatalf("stored kind=%q, %d bytes; want the same %d bytes verbatim", c.kind, len(c.data), len(body))
 	}
 }
 

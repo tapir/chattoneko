@@ -198,7 +198,7 @@ func TestAgentSendsFileToItsSpecialist(t *testing.T) {
 	const answer = "The invoice totals 42 EUR."
 	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 	pdf := []byte("%PDF-1.7 fake")
-	wav := []byte("RIFF....WAVEfmt ")
+	webm := []byte{0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x84, 'w', 'e', 'b', 'm'}
 
 	for _, tc := range []struct {
 		name       string
@@ -238,7 +238,7 @@ func TestAgentSendsFileToItsSpecialist(t *testing.T) {
 			},
 		},
 		{
-			name: "audio", filename: "memo.wav", kind: "file", mime: "audio/wav", data: wav,
+			name: "audio", filename: "memo.webm", kind: "file", mime: "audio/webm", data: webm,
 			model:     "audio-model",
 			designate: func(m *config.ModelsConfig) { m.DefaultAudioModel = "audio-model" },
 			prompt:    "audio specialist", partType: "input_audio", partKey: "input_audio",
@@ -246,8 +246,8 @@ func TestAgentSendsFileToItsSpecialist(t *testing.T) {
 				if got := p["data"]; got != base64.StdEncoding.EncodeToString(data) {
 					t.Fatalf("audio data = %v", got)
 				}
-				if got := p["format"]; got != "wav" {
-					t.Fatalf("format = %v, want wav", got)
+				if got := p["format"]; got != "webm" {
+					t.Fatalf("format = %v, want webm", got)
 				}
 			},
 		},
@@ -310,7 +310,7 @@ func TestAgentRefusals(t *testing.T) {
 	fs := &fakeFileStore{}
 	seedAttachment(fs, "img", agentChat, "photo.png", "image", "image/png", []byte("png"))
 	seedAttachment(fs, "notes", agentChat, "notes.md", "text", "text/markdown", []byte("hello"))
-	seedAttachment(fs, "voice", agentChat, "memo.ogg", "file", "audio/ogg", []byte("ogg")) // a mime off today's allow-list
+	seedAttachment(fs, "voice", agentChat, "memo.ogg", "file", "audio/ogg", []byte("ogg")) // a mime the app no longer stores
 	seedAttachment(fs, "foreign", "other-chat", "photo.png", "image", "image/png", []byte("png"))
 
 	for _, tc := range []struct {
@@ -324,7 +324,7 @@ func TestAgentRefusals(t *testing.T) {
 		{"another chat's id", `{"id":"foreign","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no attachment with id"},
 		{"no question", `{"id":"img"}`, mcphub.CallMeta{ChatID: agentChat}, all, "required"},
 		{"text file", `{"id":"notes","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "already part of this conversation"},
-		{"unroutable audio", `{"id":"voice","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "mp3/wav only"},
+		{"unroutable audio", `{"id":"voice","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "audio/webm only"},
 		{"no model designated", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "no model is designated for images"},
 		{"only some designated", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, visionOnly, ""},
 	} {

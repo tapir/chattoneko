@@ -9,7 +9,6 @@ require (
 	github.com/iceisfun/golua v1.1.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/openai/openai-go/v3 v3.55.0
-	golang.org/x/image v0.45.0
 	golang.org/x/net v0.57.0
 	modernc.org/sqlite v1.58.0
 )

@@ -840,19 +840,28 @@ func TestUploadValidation(t *testing.T) {
 	if rec.Code != 415 {
 		t.Fatalf("binary upload: %d", rec.Code)
 	}
-	// Allow-listed binary (audio, PDF) → 200, stored verbatim as kind=file.
-	rec = upload(map[string][]byte{"song.mp3": {0x00, 0x01, 0x02}})
+	// Supported audio (WebM magic) → 200, stored verbatim as kind=file under
+	// its own mime, which the inline player needs.
+	rec = upload(map[string][]byte{"song.webm": {
+		0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x84, 'w', 'e', 'b', 'm',
+	}})
 	if rec.Code != 200 {
-		t.Fatalf("mp3 upload: %d %s", rec.Code, rec.Body)
+		t.Fatalf("webm upload: %d %s", rec.Code, rec.Body)
 	}
 	var kind, mime string
 	if err := ts.db.QueryRow(
-		"SELECT kind, mime FROM attachments WHERE chat_id = ? AND filename = 'song.mp3'", chatID,
+		"SELECT kind, mime FROM attachments WHERE chat_id = ? AND filename = 'song.webm'", chatID,
 	).Scan(&kind, &mime); err != nil {
 		t.Fatal(err)
 	}
-	if kind != "file" || mime != "audio/mpeg" {
-		t.Fatalf("mp3 stored as kind=%q mime=%q, want file/audio/mpeg", kind, mime)
+	if kind != "file" || mime != "audio/webm" {
+		t.Fatalf("webm stored as kind=%q mime=%q, want file/audio/webm", kind, mime)
+	}
+	// A format the app no longer takes (an MP3 the client did not convert) →
+	// 415, by content: the extension says nothing any more.
+	rec = upload(map[string][]byte{"song.mp3": []byte("ID3\x04\x00\x00\x00\x00\x00\x00")})
+	if rec.Code != 415 {
+		t.Fatalf("mp3 upload: %d %s", rec.Code, rec.Body)
 	}
 	// Too many files → 400.
 	files := map[string][]byte{}
@@ -928,13 +937,13 @@ func TestGetAttachmentServing(t *testing.T) {
 	// Audio is the one binary served under its stored mime: the chat's inline
 	// <audio> player needs a real type (Safari refuses octet-stream). It stays
 	// a download by disposition.
-	aud, err := ts.store.CreateAttachment(context.Background(), chatID, "voice.wav", "file", "audio/wav", 4, []byte("RIFF"))
+	aud, err := ts.store.CreateAttachment(context.Background(), chatID, "voice.webm", "file", "audio/webm", 4, []byte{0x1a, 0x45, 0xdf, 0xa3})
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec = ts.do(t, "GET", "/api/attachments/"+aud.ID, nil, nil)
-	if ct := rec.Header().Get("Content-Type"); ct != "audio/wav" {
-		t.Fatalf("audio content-type = %q, want audio/wav", ct)
+	if ct := rec.Header().Get("Content-Type"); ct != "audio/webm" {
+		t.Fatalf("audio content-type = %q, want audio/webm", ct)
 	}
 	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") {
 		t.Fatalf("audio content-disposition = %q, want an attachment", cd)

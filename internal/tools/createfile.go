@@ -113,11 +113,13 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 			// wants a suffix in the UI: take the one the served Content-Type
 			// implies, from the same table attach derives the stored mime from, so
 			// the two always agree. Types that table doesn't know leave the name
-			// bare; images get .png forced on below, once ProcessAny says so.
+			// bare; media get their real suffix forced on below, once ProcessAny
+			// has sniffed the bytes.
 			name += attach.ExtForMime(contentType)
 		}
-		// Per-file stored-size cap comes from the live upload limit (same as user
-		// uploads); for images it applies to the converted PNG, with downscaling.
+		// Per-file stored-size cap comes from the live upload limit (same as
+		// user uploads), and applies to the bytes as downloaded — nothing here
+		// is re-encoded.
 		limit = int64(config.DefaultUploadMaxFileBytes)
 		if limits != nil {
 			limit = limits.Get().Limits.UploadMaxFileBytes
@@ -134,8 +136,8 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 	}
 
 	// Same content rules as user uploads, plus the binary kind they refuse:
-	// images are re-encoded to PNG, text is validated, anything else is kept
-	// verbatim as a download-only file.
+	// supported media is recognised by magic bytes and stored verbatim, text is
+	// validated, anything else is kept as a download-only file.
 	res, err := attach.ProcessAny(name, data, limit)
 	if errors.Is(err, attach.ErrTooLarge) {
 		return "", fmt.Errorf("content exceeds the %s file size limit", humanSize(limit))
@@ -143,12 +145,9 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 	if err != nil {
 		return "", fmt.Errorf("content rejected: %v", err)
 	}
-	// Stored image bytes are always a re-encoded PNG, so the name must say so;
-	// the verdict comes from ProcessAny itself, never from a second sniff.
-	if res.Kind == attach.KindImage {
-		name = ensureExt(name, ".png")
-	}
-	name = capName(name)
+	// The stored name comes from ProcessAny (media get the extension their
+	// sniffed mime implies), never from a second sniff here.
+	name = capName(res.Name)
 	m, err := files.CreateAttachment(ctx, meta.ChatID, name, res.Kind, res.Mime, res.Size, res.Data)
 	if err != nil {
 		return "", fmt.Errorf("store file: %v", err)
@@ -158,13 +157,9 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 	if err := files.LinkAttachmentToMessage(ctx, m.ID, meta.MessageID, meta.ChatID); err != nil {
 		return "", fmt.Errorf("the file was stored but could not be shown: %v", err)
 	}
-	dims := ""
-	if res.Width > 0 && res.Height > 0 {
-		dims = fmt.Sprintf("%dx%d, ", res.Width, res.Height)
-	}
-	return fmt.Sprintf("Created %q%s (%s, %s%s) — it is now shown on your reply, where it %s. "+
+	return fmt.Sprintf("Created %q%s (%s, %s) — it is now shown on your reply, where it %s. "+
 		"Say what it is instead of repeating its content.",
-		m.Filename, from, m.Mime, dims, humanSize(m.Size), kindLabel(m.Kind)), nil
+		m.Filename, from, m.Mime, humanSize(m.Size), kindLabel(m.Kind)), nil
 }
 
 // fileBytes resolves the exactly-one-of content/content_base64 pair. Whitespace
@@ -234,15 +229,4 @@ func capName(name string) string {
 		ext = ""
 	}
 	return strings.ToValidUTF8(name[:200-len(ext)], "") + ext
-}
-
-// ensureExt rewrites name's extension to ext (appended when missing).
-func ensureExt(name, ext string) string {
-	if strings.HasSuffix(strings.ToLower(name), ext) {
-		return name
-	}
-	if i := strings.LastIndexByte(name, '.'); i > 0 {
-		name = name[:i]
-	}
-	return name + ext
 }

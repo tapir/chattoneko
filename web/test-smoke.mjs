@@ -293,6 +293,31 @@ console.log('OK streaming parity');
   console.log('OK attachment text sniff');
 }
 
+// --- client-side media policy (what the server no longer decides) ---
+{
+  const { mediaKind, scaleToFit } = await import('./src/lib/media.js');
+  assert(mediaKind('photo.JPG') === 'image' && mediaKind('sticker.webp') === 'image',
+    'image extensions recognized');
+  assert(mediaKind('memo.m4a') === 'audio' && mediaKind('recording.webm') === 'audio',
+    'audio extensions recognized');
+  assert(mediaKind('invoice.pdf') === 'pdf' && mediaKind('notes.md') === '',
+    'pdf is its own kind; text is judged by content');
+  assert(mediaKind('scan.tiff') === '', 'tiff is no longer an image — no engine decodes it');
+  // The LONGEST side is capped at 1280, whichever way the image is oriented —
+  // but never by more than 2x, so a huge shot keeps half its size instead.
+  const land = scaleToFit(5000, 3000, 1280);
+  assert(land.width === 2500 && land.height === 1500, '5000x3000 stops at 2x (2500), not at 1280');
+  const port = scaleToFit(3000, 5000, 1280);
+  assert(port.height === 2500 && port.width === 1500, 'portrait capped by height, same 2x floor');
+  const mid = scaleToFit(2000, 1000, 1280);
+  assert(mid.width === 1280 && mid.height === 640, '2000x1000 is inside the 2x floor, so 1280 wins');
+  const exact = scaleToFit(2560, 1440, 1280);
+  assert(exact.width === 1280 && exact.height === 720, 'exactly 2x lands on the cap');
+  const same = scaleToFit(800, 600, 1280);
+  assert(same.width === 800 && same.height === 600, 'smaller images are never upscaled');
+  console.log('OK media conversion policy');
+}
+
 // --- long press (the attachment action sheet's trigger) ---
 // The whole point is what it does NOT do: message text keeps the browser's
 // long press, and a desktop right-click keeps the native menu.

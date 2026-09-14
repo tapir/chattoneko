@@ -74,8 +74,11 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 				}
 				if att.Kind == attach.KindText {
 					content += "\n\n" + attach.SerializeText(att.Filename, att.ID, string(att.Data))
-				} else if att.Kind == attach.KindImage && vision {
-					images = append(images, provider.Image{Data: att.Data})
+				} else if att.Kind == attach.KindImage && vision && attach.SendsAsImage(att.Mime) {
+					// A BMP or an ICO previews in the browser but is outside the
+					// image_url contract, so it takes the reference path instead —
+					// a provider 400 here would repeat on every turn of the chat.
+					images = append(images, provider.Image{Data: att.Data, Mime: att.Mime})
 				} else {
 					content += "\n\n" + attach.SerializeRef(att.Filename, att.ID, att.Kind, att.Mime, att.Size)
 				}

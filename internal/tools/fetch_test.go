@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image"
 	"image/jpeg"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,6 +32,17 @@ func testJPEG(t *testing.T, w, h int) []byte {
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, img, nil); err != nil {
 		t.Fatalf("encode jpeg: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// testPNG returns a small PNG's bytes — the format the app stores images in
+// (the browser encodes them before upload; nothing server-side converts).
+func testPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h))); err != nil {
+		t.Fatalf("encode png: %v", err)
 	}
 	return buf.Bytes()
 }
@@ -64,14 +76,14 @@ func servePaths(t *testing.T, types map[string]string, body []byte) *httptest.Se
 }
 
 // serveTextOrImage answers .md paths with text and everything else with jpg.
-func serveTextOrImage(t *testing.T, jpg []byte) *httptest.Server {
+func serveTextOrImage(t *testing.T, img []byte) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".md") {
 			w.Write([]byte("# notes"))
 			return
 		}
-		w.Write(jpg)
+		w.Write(img)
 	}))
 	t.Cleanup(ts.Close)
 	return ts

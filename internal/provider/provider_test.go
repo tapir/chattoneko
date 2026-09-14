@@ -157,7 +157,7 @@ data: [DONE]
 
 	p := newChatCompletionsProvider(srv.URL+"/", "test")
 	es, err := p.StreamChat(context.Background(),
-		[]Message{{Role: "user", Content: "look", Images: []Image{{Data: []byte("png-bytes")}}}},
+		[]Message{{Role: "user", Content: "look", Images: []Image{{Data: []byte("png-bytes"), Mime: "image/png"}}}},
 		[]Tool{{Name: "t1", Description: "d", Schema: json.RawMessage(`{"type":"object","properties":{}}`)}},
 		GenParams{Model: "m", ReasoningEffort: "high"})
 	if err != nil {

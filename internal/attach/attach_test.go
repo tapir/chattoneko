@@ -2,33 +2,21 @@ package attach
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
-	"hash/crc32"
 	"image"
-	"image/color"
-	"image/gif"
 	"image/jpeg"
 	"image/png"
 	"os"
 	"strings"
 	"testing"
-
-	"golang.org/x/image/bmp"
-	"golang.org/x/image/tiff"
 )
 
-// makePNG builds a solid-color PNG in memory.
+// ---- payloads ----
+
 func makePNG(t *testing.T, w, h int) []byte {
 	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			img.Set(x, y, color.RGBA{uint8(x), uint8(y), 128, 255})
-		}
-	}
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h))); err != nil {
 		t.Fatalf("encode png: %v", err)
 	}
 	return buf.Bytes()
@@ -36,240 +24,338 @@ func makePNG(t *testing.T, w, h int) []byte {
 
 func makeJPEG(t *testing.T, w, h int) []byte {
 	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			img.Set(x, y, color.RGBA{0, uint8(x), uint8(y), 255})
-		}
-	}
 	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, nil); err != nil {
+	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h)), nil); err != nil {
 		t.Fatalf("encode jpeg: %v", err)
 	}
 	return buf.Bytes()
 }
 
-func makeGIF(t *testing.T, w, h int) []byte {
+// webmHeader is the EBML magic plus a "webm" DocType — enough for the sniffer,
+// which never parses the container.
+var webmHeader = []byte{0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x84, 'w', 'e', 'b', 'm'}
+
+// Headers for the formats the sniffer has to recognize. Each is only as long as
+// classification needs — nothing here is decoded, so a payload never is.
+var (
+	gifHeader  = []byte("GIF89a\x01\x00\x01\x00\x00\x00\x00")
+	bmpHeader  = append([]byte("BM"), make([]byte, 60)...)
+	icoHeader  = []byte{0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10, 0x00, 0x00, 0x01, 0x00, 0x20, 0x00, 0x68, 0x04}
+	wavHeader  = append([]byte("RIFF\x00\x00\x00\x00WAVEfmt "), make([]byte, 20)...)
+	id3Header  = append([]byte("ID3\x04\x00\x00\x00\x00\x00\x00"), make([]byte, 20)...)
+	mp3Frame   = append([]byte{0xff, 0xfb, 0x90, 0x00}, make([]byte, 60)...) // sync, MPEG1 layer III, 128k/44.1k
+	flacHeader = append([]byte("fLaC\x00\x00\x00\x22"), make([]byte, 40)...)
+	m4aHeader  = append([]byte("\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00M4A isom"), make([]byte, 20)...)
+	mp4Header  = append([]byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"), make([]byte, 20)...)
+	oggHeader  = append([]byte("OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00"), make([]byte, 30)...)
+	pdfHeader  = []byte("%PDF-1.7 fake")
+	zipHeader  = []byte{0x50, 0x4b, 0x03, 0x04, 0x00, 0x01}
+	// Media the app cannot show: an ISOBMFF photo brand and a TIFF header, both
+	// of which Go's sniffer reports as octet-stream.
+	avifHeader = append([]byte("\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1"), make([]byte, 20)...)
+	tiffHeader = []byte{0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00}
+	qtHeader   = append([]byte("\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "), make([]byte, 20)...)
+)
+
+func sampleWebP(t *testing.T) []byte {
 	t.Helper()
-	img := image.NewPaletted(image.Rect(0, 0, w, h),
-		[]color.Color{color.RGBA{255, 0, 0, 255}, color.RGBA{0, 255, 0, 255}})
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			img.SetColorIndex(x, y, uint8(x%2))
-		}
-	}
-	var buf bytes.Buffer
-	if err := gif.Encode(&buf, img, nil); err != nil {
-		t.Fatalf("encode gif: %v", err)
-	}
-	return buf.Bytes()
-}
-
-func TestProcessPNGtoPNG(t *testing.T) {
-	payload := makePNG(t, 40, 30)
-	res, err := Process("pic.png", payload, 1<<20)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	if res.Kind != KindImage || res.Mime != "image/png" {
-		t.Fatalf("kind=%q mime=%q", res.Kind, res.Mime)
-	}
-	img, _, err := image.Decode(bytes.NewReader(res.Data))
-	if err != nil {
-		t.Fatalf("decode result: %v", err)
-	}
-	if img.Bounds().Dx() != 40 || img.Bounds().Dy() != 30 {
-		t.Fatalf("size mismatch: %v", img.Bounds())
-	}
-}
-
-func TestProcessJPEGtoPNG(t *testing.T) {
-	payload := makeJPEG(t, 30, 30)
-	res, err := Process("photo.jpg", payload, 1<<20)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	if res.Kind != KindImage {
-		t.Fatalf("kind=%q", res.Kind)
-	}
-	_, format, err := image.Decode(bytes.NewReader(res.Data))
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if format != "png" {
-		t.Fatalf("re-encoded format=%q", format)
-	}
-}
-
-func TestProcessGIFFirstFrame(t *testing.T) {
-	payload := makeGIF(t, 20, 20)
-	res, err := Process("anim.gif", payload, 1<<20)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	if res.Kind != KindImage {
-		t.Fatalf("kind=%q", res.Kind)
-	}
-}
-
-func TestProcessWebP(t *testing.T) {
 	payload, err := os.ReadFile("testdata/sample.webp")
 	if err != nil {
-		t.Skip("no webp fixture:", err)
+		t.Fatalf("read sample: %v", err)
 	}
-	res, err := Process("sample.webp", payload, 1<<20)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	if res.Kind != KindImage {
-		t.Fatalf("kind=%q", res.Kind)
-	}
-	img, format, err := image.Decode(bytes.NewReader(res.Data))
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if format != "png" {
-		t.Fatalf("format=%q", format)
-	}
-	t.Logf("webp converted to png: %d bytes, %dx%d",
-		len(res.Data), img.Bounds().Dx(), img.Bounds().Dy())
+	return payload
 }
 
-// BMP and TIFF decode through the registered x/image decoders and re-encode
-// to PNG like every other image kind.
-func TestProcessBmpAndTiffToPNG(t *testing.T) {
-	img := image.NewRGBA(image.Rect(0, 0, 24, 18))
-	for y := 0; y < 18; y++ {
-		for x := 0; x < 24; x++ {
-			img.Set(x, y, color.RGBA{uint8(x * 8), uint8(y * 8), 64, 255})
-		}
-	}
-	cases := []struct {
-		name string
-		enc  func(*bytes.Buffer) error
+// ---- classification: magic bytes only, nothing decoded, nothing converted ----
+
+func TestProcessMediaStoredVerbatim(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		filename       string
+		data           []byte
+		wantKind       string
+		wantMime       string
+		wantName       string
+		allowedAsImage bool
 	}{
-		{"pic.bmp", func(b *bytes.Buffer) error { return bmp.Encode(b, img) }},
-		{"pic.tiff", func(b *bytes.Buffer) error { return tiff.Encode(b, img, nil) }},
+		{"png", "pic.png", makePNG(t, 8, 6), KindImage, MimePNG, "pic.png", true},
+		{"webp", "sticker.webp", sampleWebP(t), KindImage, MimeWebP, "sticker.webp", true},
+		{"audio webm", "memo.webm", webmHeader, KindFile, MimeAudio, "memo.webm", false},
+		{"pdf", "invoice.pdf", []byte("%PDF-1.7 fake"), KindFile, MimePDF, "invoice.pdf", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := Process(tc.filename, tc.data, 1<<20)
+			if err != nil {
+				t.Fatalf("process: %v", err)
+			}
+			if res.Kind != tc.wantKind || res.Mime != tc.wantMime || res.Name != tc.wantName {
+				t.Fatalf("got kind=%q mime=%q name=%q, want %q/%q/%q",
+					res.Kind, res.Mime, res.Name, tc.wantKind, tc.wantMime, tc.wantName)
+			}
+			// Verbatim: the bytes come back untouched and the size agrees.
+			if !bytes.Equal(res.Data, tc.data) || res.Size != int64(len(tc.data)) {
+				t.Fatalf("data changed (%d -> %d bytes)", len(tc.data), res.Size)
+			}
+		})
 	}
-	for _, c := range cases {
-		var buf bytes.Buffer
-		if err := c.enc(&buf); err != nil {
-			t.Fatalf("encode %s: %v", c.name, err)
-		}
-		res, err := Process(c.name, buf.Bytes(), 1<<20)
+}
+
+// The stored name follows the bytes, not the upload: a stale or lying client
+// cannot keep WebP bytes stored under a .jpg name. Text is the exception — its
+// mime comes FROM the extension.
+func TestProcessNameFollowsMime(t *testing.T) {
+	webp := sampleWebP(t)
+	for _, tc := range []struct {
+		filename string
+		data     []byte
+		want     string
+	}{
+		{"photo.jpg", webp, "photo.webp"},
+		{"photo", webp, "photo.webp"},
+		{"a.b.c.PNG", webp, "a.b.c.webp"},            // the bytes win over the name
+		{"a.b.c.PNG", makePNG(t, 4, 4), "a.b.c.PNG"}, // a matching suffix is left alone
+		{"photo.jpg", makePNG(t, 4, 4), "photo.png"},
+		{"memo.mp3", webmHeader, "memo.webm"},
+		{"invoice.txt", []byte("%PDF-1.7 fake"), "invoice.pdf"},
+		{"notes.md", []byte("# hi\n"), "notes.md"},
+	} {
+		res, err := Process(tc.filename, tc.data, 1<<20)
 		if err != nil {
-			t.Fatalf("%s: process: %v", c.name, err)
+			t.Fatalf("Process(%q): %v", tc.filename, err)
 		}
-		if res.Kind != KindImage || res.Mime != "image/png" {
-			t.Fatalf("%s: kind=%q mime=%q", c.name, res.Kind, res.Mime)
+		if res.Name != tc.want {
+			t.Errorf("Process(%q) name = %q, want %q", tc.filename, res.Name, tc.want)
 		}
-		if _, format, err := image.Decode(bytes.NewReader(res.Data)); err != nil || format != "png" {
-			t.Fatalf("%s: decode: format=%q err=%v", c.name, format, err)
+	}
+}
+
+// A tool's file is stored exactly as fetched: every format a browser can render
+// unaided becomes a preview under its own mime, and nothing is converted.
+func TestProcessAnyToolMedia(t *testing.T) {
+	jpg := makeJPEG(t, 8, 6)
+	for _, tc := range []struct {
+		name               string
+		filename           string
+		data               []byte
+		wantKind, wantMime string
+	}{
+		{"jpeg", "photo.jpg", jpg, KindImage, MimeJPEG},
+		{"jpeg keeps its spelling", "photo.jpeg", jpg, KindImage, MimeJPEG},
+		{"misnamed jpeg", "photo", jpg, KindImage, MimeJPEG}, // gains .jpg
+		{"gif", "anim.gif", gifHeader, KindImage, MimeGIF},
+		{"bmp", "bitmap.bmp", bmpHeader, KindImage, MimeBMP},
+		{"ico", "favicon.ico", icoHeader, KindImage, MimeICO},
+		{"wav", "rec.wav", wavHeader, KindFile, MimeWAV},
+		{"tagged mp3", "song.mp3", id3Header, KindFile, MimeMP3},
+		{"bare-frame mp3", "song.mp3", mp3Frame, KindFile, MimeMP3},
+		{"flac", "track.flac", flacHeader, KindFile, MimeFLAC},
+		{"m4a", "memo.m4a", m4aHeader, KindFile, MimeMP4},
+		{"mp4 video", "clip.mp4", mp4Header, KindFile, MimeMP4}, // soundtrack only: no video player
+		{"m4v keeps its name", "clip.m4v", mp4Header, KindFile, MimeMP4},
+		{"ogg", "track.ogg", oggHeader, KindFile, MimeOGG},
+		{"opus", "voice.opus", oggHeader, KindFile, MimeOGG},
+		{"webm", "rec.webm", webmHeader, KindFile, MimeAudio},
+		{"pdf", "doc.pdf", pdfHeader, KindFile, MimePDF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := ProcessAny(tc.filename, tc.data, 1<<20)
+			if err != nil {
+				t.Fatalf("ProcessAny: %v", err)
+			}
+			if res.Kind != tc.wantKind || res.Mime != tc.wantMime {
+				t.Fatalf("got kind=%q mime=%q, want %q/%q", res.Kind, res.Mime, tc.wantKind, tc.wantMime)
+			}
+			if !bytes.Equal(res.Data, tc.data) || res.Size != int64(len(tc.data)) {
+				t.Fatal("bytes must be stored verbatim")
+			}
+			// The name keeps whatever suffix already agrees with the bytes; only an
+			// extension-less one gains a suffix.
+			wantName := tc.filename
+			if !strings.Contains(tc.filename, ".") {
+				wantName = tc.filename + ExtForMime(tc.wantMime)
+			}
+			if res.Name != wantName {
+				t.Fatalf("name = %q, want %q", res.Name, wantName)
+			}
+		})
+	}
+}
+
+// Media the app cannot show is refused by name rather than stored as a download
+// that looks like it should have been a picture — and a name that lies about
+// its bytes is refused too. A genuine non-media binary is still kept.
+func TestProcessAnyRefusesUnshowableMedia(t *testing.T) {
+	for _, tc := range []struct {
+		filename string
+		data     []byte
+	}{
+		{"photo.avif", avifHeader},
+		{"photo.heic", avifHeader}, // same ISOBMFF shape, different brand
+		{"scan.tiff", tiffHeader},
+		{"clip.mov", qtHeader},   // a real QuickTime file: unrecognized bytes
+		{"photo.jpg", zipHeader}, // the bytes are a zip
+	} {
+		if _, err := ProcessAny(tc.filename, tc.data, 1<<20); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("ProcessAny(%q) = %v, want ErrUnsupported", tc.filename, err)
 		}
+	}
+	// The refusal names the tool-side list, so the model can pick another file.
+	_, err := ProcessAny("photo.avif", avifHeader, 1<<20)
+	if !strings.Contains(err.Error(), ToolAccepted) {
+		t.Fatalf("error %q should list what a tool may attach", err)
+	}
+	// A zip is not media: tools keep it as a download.
+	res, err := ProcessAny("archive.zip", zipHeader, 1<<20)
+	if err != nil || res.Kind != KindFile || res.Mime != "application/zip" {
+		t.Fatalf("zip = %+v, %v", res, err)
+	}
+}
+
+// An upload only ever carries what the browser produced, so a raw JPEG is
+// refused there even though a tool may attach one: the client's conversion step
+// is the rule, not an option.
+func TestProcessUploadStaysStrict(t *testing.T) {
+	_, err := Process("photo.jpg", makeJPEG(t, 8, 6), 1<<20)
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("jpeg upload accepted: %v", err)
+	}
+	if !strings.Contains(err.Error(), Accepted) || strings.Contains(err.Error(), ToolAccepted) {
+		t.Fatalf("error %q should name the upload list", err)
+	}
+	for _, tc := range []struct {
+		filename string
+		data     []byte
+	}{
+		{"track.flac", flacHeader},
+		{"song.mp3", id3Header},
+		{"anim.gif", gifHeader},
+	} {
+		if _, err := Process(tc.filename, tc.data, 1<<20); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("Process(%q) = %v, want ErrUnsupported", tc.filename, err)
+		}
+	}
+}
+
+// Only the image mimes inside the image_url contract may be sent to a model: a
+// BMP previews fine but would 400 the provider, and history is rebuilt every
+// turn, so one such attachment would break that chat for good.
+func TestSendsAsImage(t *testing.T) {
+	for mime, want := range map[string]bool{
+		MimePNG: true, MimeJPEG: true, MimeWebP: true, MimeGIF: true,
+		MimeBMP: false, MimeICO: false, MimePDF: false, MimeAudio: false, "": false,
+	} {
+		if got := SendsAsImage(mime); got != want {
+			t.Errorf("SendsAsImage(%q) = %v, want %v", mime, got, want)
+		}
+	}
+}
+
+func TestProcessBinaryNeedsAllowList(t *testing.T) {
+	junk := []byte{0x00, 0x01, 0x02, 0xff, 0xfe}
+	if _, err := Process("x.bin", junk, 1<<20); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("upload: want ErrUnsupported, got %v", err)
+	}
+	res, err := ProcessAny("x.bin", junk, 1<<20)
+	if err != nil {
+		t.Fatalf("ProcessAny: %v", err)
+	}
+	if res.Kind != KindFile || !bytes.Equal(res.Data, junk) {
+		t.Fatalf("ProcessAny = %+v", res)
 	}
 }
 
 func TestProcessText(t *testing.T) {
-	res, err := Process("notes.md", []byte("# hello\nsome text\n"), 1<<20)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	if res.Kind != KindText {
-		t.Fatalf("kind=%q", res.Kind)
-	}
-	if res.Mime != "text/markdown" {
-		t.Fatalf("mime=%q", res.Mime)
-	}
-	// extension is only a hint: no-ext names default to text/plain
-	res2, err := Process("Makefile", []byte("all:\n\techo hi\n"), 1<<20)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	if res2.Kind != KindText || res2.Mime != "text/plain" {
-		t.Fatalf("kind=%q mime=%q", res2.Kind, res2.Mime)
-	}
-}
-
-func TestProcessRejectsBinary(t *testing.T) {
-	// NUL bytes
-	if _, err := Process("x.bin", []byte("abc\x00def"), 1<<20); err == nil {
-		t.Fatal("accepted binary with NUL")
-	}
-	// invalid UTF-8
-	if _, err := Process("y.txt", []byte{0xff, 0xfe, 0x01, 0x02}, 1<<20); err == nil {
-		t.Fatal("accepted invalid utf-8")
-	}
-	// corrupt image that looks like png
-	if _, err := Process("broken.png", []byte("\x89PNG\r\n\x1a\nbogus"), 1<<20); err == nil {
-		t.Fatal("accepted corrupt png")
-	}
-}
-
-// TestProcessBinaryAllowList: audio and PDF reach user uploads by extension
-// (their bytes sniff as octet-stream, so content cannot decide), while any
-// other binary is still refused at the door — except for the tools, which go
-// through ProcessAny.
-func TestProcessBinaryAllowList(t *testing.T) {
-	bin := []byte("ID3\x04not really a frame\x00\x01")
-	wantMime := map[string]string{
-		"song.mp3": "audio/mpeg", "clip.wav": "audio/wav", "doc.pdf": "application/pdf",
-	}
-	for name, mime := range wantMime {
-		res, err := Process(name, bin, 1<<20)
+	for _, tc := range []struct {
+		filename, mime string
+	}{
+		{"notes.md", "text/markdown"},
+		{"notes.markdown", "text/markdown"},
+		{"data.json", "application/json"},
+		{"log", "text/plain"},       // extension-less
+		{"main.go", "text/plain"},   // an extension the table doesn't know
+		{"weird.bin", "text/plain"}, // the CONTENT decides, not the name
+	} {
+		res, err := Process(tc.filename, []byte("hello\n"), 1<<20)
 		if err != nil {
-			t.Fatalf("%s: %v", name, err)
+			t.Fatalf("Process(%q): %v", tc.filename, err)
 		}
-		if res.Kind != KindFile || res.Mime != mime || res.Size != int64(len(bin)) {
-			t.Fatalf("%s: kind=%q mime=%q size=%d", name, res.Kind, res.Mime, res.Size)
-		}
-	}
-	for _, name := range []string{"evil.zip", "evil.exe", "evil", "a.ogg", "b.flac", "c.opus"} {
-		if _, err := Process(name, bin, 1<<20); !errors.Is(err, ErrUnsupported) {
-			t.Fatalf("%s: want ErrUnsupported, got %v", name, err)
+		if res.Kind != KindText || res.Mime != tc.mime || res.Name != tc.filename {
+			t.Fatalf("Process(%q) = kind=%q mime=%q name=%q, want text/%s",
+				tc.filename, res.Kind, res.Mime, res.Name, tc.mime)
 		}
 	}
-	// One list: every allowed audio extension is the format name its mime
-	// reports, and a dropped one reports none.
-	for ext, mime := range binaryExts {
-		if !strings.HasPrefix(mime, "audio/") {
-			continue
-		}
-		if got := AudioFormat(mime); got != ext {
-			t.Fatalf("AudioFormat(%q) = %q, want %q", mime, got, ext)
-		}
-	}
-	if got := AudioFormat("audio/ogg"); got != "" {
-		t.Fatalf("AudioFormat(audio/ogg) = %q, want empty", got)
-	}
-	if res, err := ProcessAny("evil.zip", bin, 1<<20); err != nil || res.Kind != KindFile {
-		t.Fatalf("ProcessAny zip: %+v %v", res, err)
+	// Binary-looking text (a NUL byte) is not text.
+	if _, err := Process("x.txt", []byte("a\x00b"), 1<<20); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("NUL byte accepted: %v", err)
 	}
 }
 
-func TestSerializeRef(t *testing.T) {
-	out := SerializeRef("we<\"ird.pdf", "att-9", KindFile, "application/pdf", 42)
-	for _, want := range []string{"att-9", "application/pdf", "42 bytes", `type="document"`} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("missing %q in %s", want, out)
+func TestProcessTooLarge(t *testing.T) {
+	payload := []byte("hello world")
+	if _, err := Process("x.txt", payload, 4); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("want ErrTooLarge, got %v", err)
+	}
+	// The cap applies to media too — nothing is downscaled to fit any more.
+	if _, err := Process("pic.png", makePNG(t, 200, 200), 64); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("image over the cap accepted: %v", err)
+	}
+	if _, err := Process("x.txt", payload, 1024); err != nil {
+		t.Fatalf("rejected within limit: %v", err)
+	}
+	// maxBytes <= 0 means "only the raw ceiling".
+	if _, err := Process("x.txt", payload, 0); err != nil {
+		t.Fatalf("no cap: %v", err)
+	}
+}
+
+func TestProcessRejectsEmpty(t *testing.T) {
+	if _, err := Process("empty.txt", nil, 1<<20); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("want ErrUnsupported for empty file, got %v", err)
+	}
+}
+
+func TestProcessSizeMatchesData(t *testing.T) {
+	for _, tc := range []struct {
+		filename string
+		data     []byte
+	}{
+		{"pic.png", makePNG(t, 50, 40)},
+		{"notes.md", []byte("# hi\n")},
+		{"memo.webm", webmHeader},
+	} {
+		res, err := Process(tc.filename, tc.data, 1<<20)
+		if err != nil {
+			t.Fatalf("process %q: %v", tc.filename, err)
+		}
+		if res.Size != int64(len(res.Data)) {
+			t.Fatalf("%s: size %d != len(data) %d", tc.filename, res.Size, len(res.Data))
 		}
 	}
-	if strings.Contains(out, "we<\"ird.pdf") {
-		t.Fatalf("filename not escaped: %s", out)
+}
+
+func TestAudioFormat(t *testing.T) {
+	if got := AudioFormat(MimeAudio); got != "webm" {
+		t.Fatalf("AudioFormat(%q) = %q, want webm", MimeAudio, got)
 	}
-	// The closing tag repeats the id, same envelope as SerializeText.
-	if !strings.HasSuffix(out, "</file id=\"att-9\">") {
-		t.Fatalf("bad envelope: %s", out)
+	// Anything else — including a recording stored before WebM was the only
+	// container — is "" so the agent tool refuses it in-band instead of
+	// guessing a format the provider would misread.
+	for _, mime := range []string{"audio/wav", "audio/mpeg", "audio/ogg", "", "image/png"} {
+		if got := AudioFormat(mime); got != "" {
+			t.Fatalf("AudioFormat(%q) = %q, want empty", mime, got)
+		}
 	}
 }
 
 func TestType(t *testing.T) {
 	cases := []struct{ kind, mime, want string }{
-		{KindImage, "image/png", "image"},
+		{KindImage, MimePNG, "image"},
+		{KindImage, MimeWebP, "image"},
 		{KindText, "text/markdown", "text"},
 		{KindText, "application/json", "text"}, // the kind decides, not the mime
-		{KindFile, "audio/mpeg", "audio"},
-		{KindFile, "audio/opus", "audio"}, // a pre-drop upload: still audio, so the agent refuses it in-band
-		{KindFile, "application/pdf", "document"},
+		{KindFile, MimeAudio, "audio"},
+		{KindFile, "audio/mpeg", "audio"}, // a legacy row: still audio, so the agent refuses it in-band
+		{KindFile, MimePDF, "document"},
 		{KindFile, "application/zip", "file"},
 		{KindFile, "application/octet-stream", "file"},
 	}
@@ -277,36 +363,6 @@ func TestType(t *testing.T) {
 		if got := Type(tc.kind, tc.mime); got != tc.want {
 			t.Errorf("Type(%q, %q) = %q, want %q", tc.kind, tc.mime, got, tc.want)
 		}
-	}
-}
-
-func TestProcessTooLarge(t *testing.T) {
-	payload := []byte("hello world")
-	if _, err := Process("x.txt", payload, 4); err == nil {
-		t.Fatal("accepted oversized file")
-	}
-	if _, err := Process("x.txt", payload, 1024); err != nil {
-		t.Fatalf("rejected within limit: %v", err)
-	}
-}
-
-func TestDownscale(t *testing.T) {
-	payload := makePNG(t, 3000, 2000)
-	res, err := Process("big.png", payload, 1<<30)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	img, _, err2 := image.Decode(bytes.NewReader(res.Data))
-	if err2 != nil {
-		t.Fatalf("decode: %v", err2)
-	}
-	b := img.Bounds()
-	if b.Dx() > maxImageSide || b.Dy() > maxImageSide {
-		t.Fatalf("not downscaled: %dx%d", b.Dx(), b.Dy())
-	}
-	// aspect ratio preserved
-	if b.Dx() != 2048 {
-		t.Fatalf("aspect wrong: %dx%d", b.Dx(), b.Dy())
 	}
 }
 
@@ -328,73 +384,19 @@ func TestSerializeText(t *testing.T) {
 	}
 }
 
-// fakePNGHeader builds a minimal structurally-valid PNG (signature + IHDR
-// only, no pixel data) claiming the given dimensions.
-func fakePNGHeader(t testing.TB, w, h uint32) []byte {
-	t.Helper()
-	ihdr := make([]byte, 13)
-	binary.BigEndian.PutUint32(ihdr[0:], w)
-	binary.BigEndian.PutUint32(ihdr[4:], h)
-	ihdr[8] = 8 // bit depth
-	ihdr[9] = 2 // color type: truecolor
-	var b bytes.Buffer
-	b.WriteString("\x89PNG\r\n\x1a\n")
-	writePNGChunk(&b, "IHDR", ihdr)
-	return b.Bytes()
-}
-
-func writePNGChunk(b *bytes.Buffer, typ string, data []byte) {
-	var lenb [4]byte
-	binary.BigEndian.PutUint32(lenb[:], uint32(len(data)))
-	b.Write(lenb[:])
-	b.WriteString(typ)
-	b.Write(data)
-	crc := crc32.NewIEEE()
-	crc.Write([]byte(typ))
-	crc.Write(data)
-	var cb [4]byte
-	binary.BigEndian.PutUint32(cb[:], crc.Sum32())
-	b.Write(cb[:])
-}
-
-func TestProcessRejectsHugeDimensions(t *testing.T) {
-	// "Decompression bomb": a few dozen bytes claiming 100k x 100k pixels
-	// must be rejected from the header alone, without decoding any pixels.
-	_, err := Process("bomb.png", fakePNGHeader(t, 100000, 100000), 1<<20)
-	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("want ErrUnsupported, got %v", err)
+func TestSerializeRef(t *testing.T) {
+	out := SerializeRef("we<\"ird.pdf", "att-9", KindFile, MimePDF, 42)
+	for _, want := range []string{"att-9", MimePDF, "42 bytes", `type="document"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in %s", want, out)
+		}
 	}
-}
-
-func TestProcessRejectsCorruptPixels(t *testing.T) {
-	// Header parses (DecodeConfig succeeds) but the pixel stream is garbage.
-	payload := append(fakePNGHeader(t, 64, 64), 0xde, 0xad)
-	_, err := Process("broken.png", payload, 1<<20)
-	if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "corrupt png") {
-		t.Fatalf("want corrupt png, got %v", err)
+	if strings.Contains(out, "we<\"ird.pdf") {
+		t.Fatalf("filename not escaped: %s", out)
 	}
-}
-
-func TestProcessRejectsEmpty(t *testing.T) {
-	if _, err := Process("empty.txt", nil, 1<<20); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("want ErrUnsupported for empty file, got %v", err)
-	}
-}
-
-func TestProcessSizeMatchesData(t *testing.T) {
-	res, err := Process("pic.png", makePNG(t, 50, 40), 1<<20)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	if res.Size != int64(len(res.Data)) {
-		t.Fatalf("size %d != len(data) %d", res.Size, len(res.Data))
-	}
-	res2, err := Process("notes.md", []byte("# hi\n"), 1<<20)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	if res2.Size != int64(len(res2.Data)) {
-		t.Fatalf("size %d != len(data) %d", res2.Size, len(res2.Data))
+	// The closing tag repeats the id, same envelope as SerializeText.
+	if !strings.HasSuffix(out, "</file id=\"att-9\">") {
+		t.Fatalf("bad envelope: %s", out)
 	}
 }
 
@@ -427,8 +429,14 @@ func TestExtForMime(t *testing.T) {
 		{"application/json", ".json"},
 		{"application/json; charset=utf-8", ".json"},
 		{" TEXT/HTML ", ".html"},
-		{"text/markdown", ".md"},       // shortest of md/markdown, stable across runs
-		{"text/yaml", ".yml"},          // shortest of yaml/yml
+		{"text/markdown", ".md"}, // shortest of md/markdown, stable across runs
+		{"text/yaml", ".yml"},    // shortest of yaml/yml
+		{MimePNG, ".png"},        // media are in the same table
+		{MimeJPEG, ".jpg"},
+		{MimeWebP, ".webp"},
+		{MimeAudio, ".webm"},
+		{MimeMP4, ".m4a"},
+		{MimePDF, ".pdf"},
 		{"application/vnd.custom", ""}, // unknown: no invented suffix
 		{"", ""},
 		{"text/plain", ""},
@@ -443,6 +451,22 @@ func TestExtForMime(t *testing.T) {
 	for _, mime := range textExts {
 		if got := ExtForMime(mime); got != "" && textExts[strings.TrimPrefix(got, ".")] != mime {
 			t.Errorf("%q -> %q -> a different mime", mime, got)
+		}
+	}
+}
+
+func TestIsText(t *testing.T) {
+	if IsText(nil) {
+		t.Fatal("empty data reported as text (callers reject it first)")
+	}
+	for _, yes := range []string{"hello", "a\tb\nc", "# markdown\n"} {
+		if !IsText([]byte(yes)) {
+			t.Errorf("%q should be text", yes)
+		}
+	}
+	for _, no := range []string{"a\x00b", "\xff\xfe binary", strings.Repeat("\x01", 20)} {
+		if IsText([]byte(no)) {
+			t.Errorf("%q should not be text", no)
 		}
 	}
 }

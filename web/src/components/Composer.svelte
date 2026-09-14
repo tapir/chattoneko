@@ -88,8 +88,13 @@
     }
   }
 
+  // Send waits on any media still converting: the staged file is replaced by
+  // the converted one, so sending early would upload bytes the server rejects.
+  let converting = $derived(pending.some((a) => a.converting));
   let canSend = $derived(
-    (app.draftFor().trim().length > 0 || pending.length > 0) && !sending,
+    (app.draftFor().trim().length > 0 || pending.length > 0) &&
+      !sending &&
+      !converting,
   );
 
   function autoGrow() {
@@ -202,7 +207,13 @@
         <div class="flex flex-wrap items-center gap-1.5 px-3 pt-3">
           {#each pending as att (att.id)}
             <span class="inline-flex h-7 items-center gap-1.5 rounded-full bg-accent px-2.5 text-xs">
-              {#if att.kind === 'image' && att.previewUrl}
+              {#if att.converting}
+                <!-- Media is converted client-side before it can be sent
+                     (lib/media.js): spin until the bytes that will actually be
+                     uploaded exist. -->
+                <Spinner class="size-3" label={`Converting ${att.filename}`} />
+                <span class="max-w-40 truncate">{att.filename}</span>
+              {:else if att.kind === 'image' && att.previewUrl}
                 <!-- Everything but ✕ opens the lightbox: a staged image only
                      has a local object URL, which is what AttachmentViewer
                      prefers, so this works before the file is uploaded.
@@ -286,6 +297,8 @@
           >
             {#if sending}
               <Spinner class="size-4" label="Sending" />
+            {:else if converting}
+              <Spinner class="size-4" label="Converting attachments" />
             {:else}
               <SendHorizontal class="size-4" strokeWidth={1.75} aria-hidden="true" />
             {/if}

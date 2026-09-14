@@ -19,27 +19,20 @@ import {
 } from "./server.js";
 import { Typewriter } from "./typewriter.js";
 import { looksText } from "./text-sniff.js";
+import { mediaKind, convertImage, convertAudio } from "./media.js";
 import { toast as sonnerToast } from "svelte-sonner";
 
 const CHAT_PAGE = 30;
 
 // Client-side staging rules for attachments, mirroring the server's
-// (internal/attach + internal/api limits, exposed via /api/config). Rejects
-// surface at attach time; the server re-validates at send time. Images are
-// picked by extension (the server sniffs their magic bytes); everything else
-// is judged by content in lib/text-sniff.js, so there is no text-extension
-// list to keep in sync.
-// tif/tiff stage as images because the server converts them; browsers cannot
-// render TIFF, so those get no local preview (chip shows the paperclip).
-const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"];
-// Binary uploads the server accepts (internal/attach binaryExts): stored
-// verbatim and shown to the model as a database reference, never inline.
-const BINARY_EXTS = ["wav", "mp3", "ogg", "opus", "flac", "pdf"];
-const extOf = (name) =>
-  name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+// (internal/attach + internal/api limits, exposed via /api/config). Media is
+// recognized by extension and CONVERTED before upload (lib/media.js): the
+// server stores what it gets verbatim, so the converted bytes staged here are
+// exactly what lands in the database. Everything else is judged by content in
+// lib/text-sniff.js, so there is no text-extension list to keep in sync.
 // Fallbacks if /api/config limits haven't loaded yet.
 const FALLBACK_MAX_FILES = 8; // internal/api maxUploadFiles
-const FALLBACK_MAX_RAW_IMAGE_BYTES = 64 * 1024 * 1024; // attach.MaxRawUploadBytes
+const FALLBACK_MAX_RAW_UPLOAD_BYTES = 64 * 1024 * 1024; // attach.MaxRawUploadBytes
 
 let pendingSeq = 0;
 const pendingId = () => `pending-${Date.now()}-${++pendingSeq}`;
@@ -858,27 +851,26 @@ class AppState {
   }
 
   // Stage files for the next send entirely client-side: no chat is created
-  // and nothing is uploaded until send(). Validation mirrors the server's
-  // rules so rejects surface immediately at attach time.
+  // and nothing is uploaded until send(). Media is converted first, so a
+  // staged entry's `file` is always the bytes that will actually be stored —
+  // and `converting` is true until they exist, which is what the composer's
+  // send button waits on.
   async addAttachments(files) {
     // Sniffed up front so the staging loop below stays synchronous: reading
     // and writing pendingAttachments in the same tick is what keeps two
     // overlapping calls (paste, then drop) from clobbering each other.
     const readable = await Promise.all(
-      files.map((f) => {
-        const ext = extOf(f.name || "");
-        return IMAGE_EXTS.includes(ext) || BINARY_EXTS.includes(ext)
-          ? true
-          : looksText(f).catch(() => false);
-      }),
+      files.map((f) =>
+        mediaKind(f.name) ? true : looksText(f).catch(() => false),
+      ),
     );
     const key = this.activeChatId ?? "";
     const list = this.pendingAttachments[key] ?? [];
     const limits = this.config?.limits ?? {};
     const maxFiles = limits.max_upload_files ?? FALLBACK_MAX_FILES;
-    const maxTextBytes = limits.upload_max_file_bytes ?? 0;
-    const maxRawImageBytes =
-      limits.max_raw_upload_bytes ?? FALLBACK_MAX_RAW_IMAGE_BYTES;
+    const maxBytes = limits.upload_max_file_bytes ?? 0;
+    const maxRawBytes =
+      limits.max_raw_upload_bytes ?? FALLBACK_MAX_RAW_UPLOAD_BYTES;
 
     const staged = [];
     for (const [i, file] of files.entries()) {
@@ -887,9 +879,9 @@ class AppState {
         break;
       }
       const name = file.name || "file";
-      const ext = extOf(name);
-      const isImage = IMAGE_EXTS.includes(ext);
-      const isBinary = BINARY_EXTS.includes(ext);
+      const media = mediaKind(name); // "image" | "audio" | "pdf" | ""
+      // Only images and recordings are converted; a PDF is stored as picked.
+      const converts = media === "image" || media === "audio";
       if (!readable[i]) {
         this.toast("error", `${name}: unsupported file type`);
         continue;
@@ -898,13 +890,13 @@ class AppState {
         this.toast("error", `${name}: empty file`);
         continue;
       }
-      // Images are downscaled into the stored cap server-side, so the raw
-      // bytes cap is the meaningful client check for them; text and binary
-      // files are stored as-is and hit the stored cap directly.
-      const tooLarge = isImage
-        ? file.size > maxRawImageBytes
-        : maxTextBytes > 0 && file.size > maxTextBytes;
-      if (tooLarge) {
+      // The raw cap is the server's read limit and applies to everything. The
+      // stored cap applies to what ends up in the database: directly for text
+      // and PDF, and for media once the conversion lands (see convertPending).
+      if (
+        file.size > maxRawBytes ||
+        (!converts && maxBytes > 0 && file.size > maxBytes)
+      ) {
         this.toast("error", `${name}: file too large`);
         continue;
       }
@@ -913,11 +905,9 @@ class AppState {
         file,
         filename: name,
         size: file.size,
-        kind: isImage ? "image" : isBinary ? "file" : "text",
-        previewUrl:
-          isImage && ext !== "tif" && ext !== "tiff"
-            ? URL.createObjectURL(file)
-            : "",
+        kind: media === "image" ? "image" : media ? "file" : "text",
+        converting: converts,
+        previewUrl: media === "image" ? URL.createObjectURL(file) : "",
       });
     }
     if (staged.length) {
@@ -926,20 +916,73 @@ class AppState {
         [key]: [...list, ...staged],
       };
     }
+    // Conversions start only once the entries are visible, so their chips can
+    // spin. Fire and forget: each one patches or drops its own entry by id.
+    for (const entry of staged) {
+      if (entry.converting) this.convertPending(key, entry);
+    }
     return staged;
+  }
+
+  // One staged media file's conversion: swap in the converted bytes (with the
+  // name and size the browser actually produced), or drop the entry and say
+  // why. Keyed by the chat it was staged in, which is not necessarily the
+  // active one by the time this lands.
+  async convertPending(key, entry) {
+    const convert = entry.kind === "image" ? convertImage : convertAudio;
+    let file;
+    try {
+      file = await convert(entry.file);
+    } catch (err) {
+      this.dropPending(key, entry.id);
+      this.toast("error", `${entry.filename}: ${err?.message ?? "conversion failed"}`);
+      return;
+    }
+    const maxBytes = this.config?.limits?.upload_max_file_bytes ?? 0;
+    if (maxBytes > 0 && file.size > maxBytes) {
+      this.dropPending(key, entry.id);
+      this.toast("error", `${file.name}: still too large after conversion`);
+      return;
+    }
+    const previewUrl = entry.kind === "image" ? URL.createObjectURL(file) : "";
+    if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+    const landed = this.patchPending(key, entry.id, {
+      file,
+      filename: file.name,
+      size: file.size,
+      previewUrl,
+      converting: false,
+    });
+    if (!landed && previewUrl) URL.revokeObjectURL(previewUrl); // removed meanwhile
+  }
+
+  // Patch one staged entry by id and report whether it was still there.
+  // Always against the LIVE list: conversions land in any order, and other
+  // calls (or the chip's ✕) may have changed it in between.
+  patchPending(key, id, patch) {
+    const all = this.pendingAttachments[key] ?? [];
+    if (!all.some((a) => a.id === id)) return false;
+    this.pendingAttachments = {
+      ...this.pendingAttachments,
+      [key]: all.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+    };
+    return true;
+  }
+
+  dropPending(key, id) {
+    const all = this.pendingAttachments[key] ?? [];
+    const att = all.find((a) => a.id === id);
+    if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
+    this.pendingAttachments = {
+      ...this.pendingAttachments,
+      [key]: all.filter((a) => a.id !== id),
+    };
   }
 
   // Explicit removal revokes the preview object URL; clearPendingAttachments
   // (send-time) does NOT — the failure path restores the same entries.
   removePendingAttachment(attachmentId) {
-    const key = this.activeChatId ?? "";
-    const all = this.pendingAttachments[key] ?? [];
-    const att = all.find((a) => a.id === attachmentId);
-    if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
-    this.pendingAttachments = {
-      ...this.pendingAttachments,
-      [key]: all.filter((a) => a.id !== attachmentId),
-    };
+    this.dropPending(this.activeChatId ?? "", attachmentId);
   }
 
   restorePendingAttachment(att) {

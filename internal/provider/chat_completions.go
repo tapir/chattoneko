@@ -39,10 +39,10 @@ func newChatCompletionsProvider(baseURL, apiKey string) *chatCompletionsProvider
 	return &chatCompletionsProvider{client: &client, idleTimeout: defaultStreamIdleTimeout}
 }
 
-// dataURL encodes PNG bytes as a data URL. The MIME type is fixed to
-// image/png by contract: the engine guarantees PNG (see Image).
-func dataURL(data []byte) string {
-	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
+// dataURL encodes stored image bytes as a data URL under their own mime
+// (image/png or image/webp; see provider.Image).
+func dataURL(img Image) string {
+	return "data:" + img.Mime + ";base64," + base64.StdEncoding.EncodeToString(img.Data)
 }
 
 // functionTools converts normalized tool definitions to the SDK shape. An
@@ -89,7 +89,7 @@ func buildChatMessages(msgs []Message) ([]openai.ChatCompletionMessageParamUnion
 			parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(m.Images)+1)
 			for _, img := range m.Images {
 				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-					URL: dataURL(img.Data),
+					URL: dataURL(img),
 				}))
 			}
 			if m.Content != "" {

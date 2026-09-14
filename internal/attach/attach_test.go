@@ -13,6 +13,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"golang.org/x/image/bmp"
+	"golang.org/x/image/tiff"
 )
 
 // makePNG builds a solid-color PNG in memory.
@@ -130,6 +133,40 @@ func TestProcessWebP(t *testing.T) {
 	}
 	t.Logf("webp converted to png: %d bytes, %dx%d",
 		len(res.Data), img.Bounds().Dx(), img.Bounds().Dy())
+}
+
+// BMP and TIFF decode through the registered x/image decoders and re-encode
+// to PNG like every other image kind.
+func TestProcessBmpAndTiffToPNG(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 24, 18))
+	for y := 0; y < 18; y++ {
+		for x := 0; x < 24; x++ {
+			img.Set(x, y, color.RGBA{uint8(x * 8), uint8(y * 8), 64, 255})
+		}
+	}
+	cases := []struct {
+		name string
+		enc  func(*bytes.Buffer) error
+	}{
+		{"pic.bmp", func(b *bytes.Buffer) error { return bmp.Encode(b, img) }},
+		{"pic.tiff", func(b *bytes.Buffer) error { return tiff.Encode(b, img, nil) }},
+	}
+	for _, c := range cases {
+		var buf bytes.Buffer
+		if err := c.enc(&buf); err != nil {
+			t.Fatalf("encode %s: %v", c.name, err)
+		}
+		res, err := Process(c.name, buf.Bytes(), 1<<20)
+		if err != nil {
+			t.Fatalf("%s: process: %v", c.name, err)
+		}
+		if res.Kind != KindImage || res.Mime != "image/png" {
+			t.Fatalf("%s: kind=%q mime=%q", c.name, res.Kind, res.Mime)
+		}
+		if _, format, err := image.Decode(bytes.NewReader(res.Data)); err != nil || format != "png" {
+			t.Fatalf("%s: decode: format=%q err=%v", c.name, format, err)
+		}
+	}
 }
 
 func TestProcessText(t *testing.T) {

@@ -1,5 +1,5 @@
 // Package attach processes file uploads: content sniffing, image -> PNG
-// conversion (GIF first frame, WebP via x/image/webp), text validation, the
+// conversion (GIF first frame; WebP/TIFF/BMP via x/image), text validation, the
 // binary upload allow-list (audio, PDF), and filename sanitization.
 package attach
 
@@ -18,7 +18,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	_ "golang.org/x/image/bmp"  // register bmp decoder
 	"golang.org/x/image/draw"
+	_ "golang.org/x/image/tiff" // register tiff decoder
 	_ "golang.org/x/image/webp" // register webp decoder
 )
 
@@ -198,7 +200,7 @@ const MaxRawUploadBytes = 64 * 1024 * 1024 // 64 MiB
 
 // Process sniffs and converts one uploaded file.
 // Content-based validation: extension is only a hint for mime. Images are
-// always re-encoded to PNG (JPEG/GIF/WebP sources live only in memory during
+// always re-encoded to PNG (JPEG/GIF/WebP/TIFF/BMP sources live only in memory during
 // this call); the per-file cap is enforced on the *converted PNG*, downscaling
 // as needed, so typical large phone photos are accepted and only the compact
 // PNG is stored. Text and binary files are enforced against the cap directly.

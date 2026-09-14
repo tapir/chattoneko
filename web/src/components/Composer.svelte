@@ -20,7 +20,9 @@
   // you swipe through the others before sending (as with a sent message).
   // Text files stay out: they have no server copy yet, and the viewer reads
   // those by id.
-  let stagedImages = $derived(pending.filter((a) => a.kind === 'image'));
+  let stagedImages = $derived(
+  pending.filter((a) => a.kind === 'image' && a.previewUrl),
+);
   let sending = $state(false);
   let fileInput = $state(null);
   let textArea = $state(null);

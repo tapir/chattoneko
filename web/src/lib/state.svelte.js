@@ -29,7 +29,9 @@ const CHAT_PAGE = 30;
 // picked by extension (the server sniffs their magic bytes); everything else
 // is judged by content in lib/text-sniff.js, so there is no text-extension
 // list to keep in sync.
-const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp"];
+// tif/tiff stage as images because the server converts them; browsers cannot
+// render TIFF, so those get no local preview (chip shows the paperclip).
+const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"];
 // Binary uploads the server accepts (internal/attach binaryExts): stored
 // verbatim and shown to the model as a database reference, never inline.
 const BINARY_EXTS = ["wav", "mp3", "ogg", "opus", "flac", "pdf"];
@@ -912,7 +914,10 @@ class AppState {
         filename: name,
         size: file.size,
         kind: isImage ? "image" : isBinary ? "file" : "text",
-        previewUrl: isImage ? URL.createObjectURL(file) : "",
+        previewUrl:
+          isImage && ext !== "tif" && ext !== "tiff"
+            ? URL.createObjectURL(file)
+            : "",
       });
     }
     if (staged.length) {

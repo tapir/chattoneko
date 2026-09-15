@@ -38,8 +38,14 @@ type tool struct {
 	// ("Coding…"). Hardcoded here like the rest of the tool's text; the
 	// model never sees it. Empty falls back to Name in the UI.
 	Title string
+	// Modality is the chat-model input modality that makes the tool pointless,
+	// because the model takes that input itself ("image" for vision). Empty for
+	// every other tool: it is always offered. The engine leaves such a tool out
+	// of the request and the chat UI greys it out.
+	Modality string
 	// Timeout bounds one call, overriding callTimeout. Only a handler doing
-	// remote I/O needs it (agent waits on another model); 0 keeps the default.
+	// remote I/O needs it (the specialists wait on another model); 0 keeps the
+	// default.
 	Timeout time.Duration
 	Handler handler
 }
@@ -92,6 +98,7 @@ func (r *registry) Tools() []mcphub.Entry {
 			Schema:         t.Schema,
 			DefaultEnabled: t.DefaultEnabled,
 			Title:          t.Title,
+			Modality:       t.Modality,
 		})
 	}
 	return out

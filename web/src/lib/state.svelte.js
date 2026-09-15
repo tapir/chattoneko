@@ -329,6 +329,21 @@ class AppState {
     await this.loadConfig();
   }
 
+  // Input modalities a model claims (from /api/config model_info). Empty for an
+  // unknown id, which counts as text-only everywhere else too.
+  inputModalitiesFor(modelId) {
+    if (!modelId) return [];
+    const mods = this.modelInfo.find((m) => m.model_id === modelId)?.input_modality;
+    return Array.isArray(mods) ? mods : [];
+  }
+
+  // A specialist tool the picked chat model makes pointless — it takes that
+  // input itself, so the backend leaves the tool out of the request too. The
+  // row is shown greyed out and dead rather than hidden.
+  toolUnavailable(tool, modelId) {
+    return !!tool?.requires_modality && this.inputModalitiesFor(modelId).includes(tool.requires_modality);
+  }
+
   // Context window (tokens) for a model id; 0 = unknown.
   contextWindowFor(modelId) {
     if (!modelId) return 0;

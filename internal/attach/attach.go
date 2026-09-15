@@ -399,7 +399,7 @@ func IsText(data []byte) bool {
 // the rows stored before uploads became WebP-only, which a Safari browser
 // encoded. A JPEG, GIF or BMP survives in an attachment stored before
 // create_file started converting, previews fine but takes the <file> reference
-// path instead, and the agent tool refuses it in-band. History is rebuilt every
+// path instead, and the vision tool refuses it in-band. History is rebuilt every
 // turn, so a mime the provider rejects would break that chat for good.
 func SendsAsImage(mime string) bool {
 	return mime == MimePNG || mime == MimeWebP

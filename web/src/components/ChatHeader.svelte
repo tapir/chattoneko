@@ -120,7 +120,12 @@
     >
       <div class="flex flex-col gap-0.5">
         {#each config?.tools ?? [] as tool (tool.name)}
-          <ToolToggleRow {tool} checked={app.toolEnabled(tool)} onToggle={(checked) => app.toggleTool(tool.name, checked)} />
+          <ToolToggleRow
+            {tool}
+            checked={app.toolEnabled(tool)}
+            disabled={app.toolUnavailable(tool, currentModel)}
+            onToggle={(checked) => app.toggleTool(tool.name, checked)}
+          />
         {:else}
           <p class="py-6 text-center text-sm text-muted-foreground">
             No tools available. Add MCP servers in the Settings overlay to give the assistant tools.

@@ -8,18 +8,31 @@
   // cards only — integrated titles are hardcoded in the backend). Its
   // placeholder is the title the tool already has, so an empty box shows what
   // the chat will display.
+  //
+  // Passing disabled greys the row out and kills the switch: the per-chat
+  // panel does that for a specialist tool the picked chat model makes
+  // pointless. Everything else about the row stays as it is.
   import { Switch } from '$lib/components/ui/switch';
   import { Input } from '$lib/components/ui/input';
 
-  let { tool, checked, onToggle, titleValue = '', onTitle = null } = $props();
+  let { tool, checked, onToggle, titleValue = '', onTitle = null, disabled = false } = $props();
 
   // Tap the name/description to unclamp and read the full description.
   let expanded = $state(false);
 </script>
 
-<div class="flex items-center gap-3 rounded-md p-2 transition-colors hover:bg-accent/50">
+<div
+  class="flex items-center gap-3 rounded-md p-2 transition-colors hover:bg-accent/50 {disabled
+    ? 'opacity-50'
+    : ''}"
+>
   <div class="flex shrink-0 items-center">
-    <Switch checked={checked} aria-label="{tool.name} enabled" onCheckedChange={onToggle} />
+    <Switch
+      checked={checked}
+      {disabled}
+      aria-label="{tool.name} enabled"
+      onCheckedChange={onToggle}
+    />
   </div>
   <button
     type="button"

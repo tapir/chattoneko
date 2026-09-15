@@ -204,19 +204,20 @@ func TestFetchErrors(t *testing.T) {
 	}
 }
 
-// The catalog the engine actually runs: the two file paths and the two local
-// tools. attach_file is gone — create_file shows what it creates.
+// The catalog the engine actually runs: the two file paths, the two local
+// tools and one specialist per file type. attach_file is gone — create_file
+// shows what it creates — and so is the single `agent` tool it replaced.
 func TestBuiltinFileTools(t *testing.T) {
 	names := map[string]bool{}
 	for _, e := range Builtin(&fakeFileStore{}, nil).Tools() {
 		names[e.Display] = true
 	}
-	for _, want := range []string{"create_file", "fetch", "code", "time", "agent"} {
+	for _, want := range []string{"create_file", "fetch", "code", "time", "vision", "document", "transcription"} {
 		if !names[want] {
 			t.Fatalf("catalog is missing %q: %v", want, names)
 		}
 	}
-	for _, gone := range []string{"attach_file", "text_file"} {
+	for _, gone := range []string{"attach_file", "text_file", "agent"} {
 		if names[gone] {
 			t.Fatalf("%q should be gone from the catalog", gone)
 		}

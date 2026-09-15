@@ -97,11 +97,12 @@ type ModelsConfig struct {
 	// DefaultTaskModel is the model id used by background tasks (title
 	// generation). It talks to the same provider as chat.
 	DefaultTaskModel string `json:"default_task_model"`
-	// The remaining designations are the specialist models the agent tool
-	// hands files to when the chat model cannot read them itself (vision
-	// needs image input, the document model needs "file" input). None of them is
-	// required by Complete() — a missing one just leaves that file type
-	// unreadable, which the tool reports in-band; all talk to the same
+	// The remaining designations are the specialist models the vision,
+	// document and transcription tools hand files to when the chat model
+	// cannot read them itself (vision needs image input, the document model
+	// needs "file" input). None of them is required by Complete() — a missing
+	// one just leaves that file type unreadable, which the tool reports
+	// in-band; all talk to the same
 	// provider as chat. The transcription model is the odd one out: it is an
 	// EndpointTranscription model posted to /audio/transcriptions, so it has
 	// no input modalities to check and no chat metadata at all.

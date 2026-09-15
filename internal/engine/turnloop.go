@@ -213,8 +213,8 @@ func (e *Engine) runGeneration(ag *activeGen) {
 	}
 	// Read once per generation: the model cannot change mid-run, and the
 	// metadata lookup is a DB read we don't want inside the tool loop. The
-	// modalities decide both how attachments reach the prompt and what the
-	// agent tool has left to offer.
+	// modalities decide both how attachments reach the prompt and which
+	// specialist tools are left to offer.
 	mods := e.inputModalities(ctx, params.Model)
 	vision := slices.Contains(mods, "image")
 

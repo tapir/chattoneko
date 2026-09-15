@@ -12,7 +12,6 @@ import (
 	"chattoneko/internal/attach"
 	"chattoneko/internal/provider"
 	"chattoneko/internal/store"
-	"chattoneko/internal/tools"
 )
 
 // chatParams loads the chat and derives provider.GenParams from its persisted
@@ -159,7 +158,7 @@ func (e *Engine) SystemPrompt() string {
 // enabled tools ∪ tools referenced anywhere in the chat's history (H3 —
 // omitting a tool whose calls exist in history would make chat_completions
 // reject the request with orphan tool_call ids). mods are the chat model's
-// input modalities: they decide what the agent tool offers, if anything.
+// input modalities: they decide which specialist tools are offered at all.
 // History-only tools get a bare placeholder rather than their real definition:
 // they are declared so the provider accepts the old call ids, and
 // re-advertising a disabled or removed tool with its full description reads to
@@ -175,21 +174,19 @@ func (e *Engine) effectiveTools(ctx context.Context, chat *store.Chat, mods []st
 	defs := []provider.Tool{}
 	included := map[string]bool{}
 	for _, name := range slices.Sorted(maps.Keys(enabled)) {
-		if i, ok := byDisplay[name]; ok {
-			t := catalog[i]
-			desc := t.Description
-			// The agent tool speaks for the file types this chat model cannot
-			// take itself; when that is none of them it stays out of the
-			// request entirely.
-			if t.Display == tools.AgentName {
-				var needed bool
-				if desc, needed = tools.AgentDescription(mods); !needed {
-					continue
-				}
-			}
-			defs = append(defs, provider.Tool{Name: t.Display, Description: desc, Schema: t.Schema})
-			included[t.Display] = true
+		i, ok := byDisplay[name]
+		if !ok {
+			continue
 		}
+		t := catalog[i]
+		// A specialist tool the chat model makes pointless — it takes that
+		// input itself — stays out of the request entirely: offering a helper
+		// the model has no use for only invites a pointless round trip.
+		if t.Modality != "" && slices.Contains(mods, t.Modality) {
+			continue
+		}
+		defs = append(defs, provider.Tool{Name: t.Display, Description: t.Description, Schema: t.Schema})
+		included[t.Display] = true
 	}
 
 	// H3: history-referenced tools.

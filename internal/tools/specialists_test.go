@@ -123,12 +123,12 @@ func agentConfig(t *testing.T, srvURL string, models config.ModelsConfig) *confi
 	return cfgs
 }
 
-// callAgent runs one agent call against a config store (the shared callTool
-// helper builds the catalog without one, which the agent tool needs for the
-// designated models).
-func callAgent(t *testing.T, fs fileStore, cfgs *config.Store, args string, meta mcphub.CallMeta) (string, bool) {
+// callSpecialist runs one specialist call against a config store (the shared
+// callTool helper builds the catalog without one, which the specialists need
+// for the designated models).
+func callSpecialist(t *testing.T, fs fileStore, cfgs *config.Store, name, args string, meta mcphub.CallMeta) (string, bool) {
 	t.Helper()
-	out, isErr, err := Builtin(fs, cfgs).Call(context.Background(), AgentName, args, meta)
+	out, isErr, err := Builtin(fs, cfgs).Call(context.Background(), name, args, meta)
 	if err != nil {
 		t.Fatalf("transport error: %v", err)
 	}
@@ -185,68 +185,72 @@ func userParts(t *testing.T, body map[string]any) []map[string]any {
 	return parts
 }
 
-// TestAgentDescriptionOffersOnlyMissingTypes: the description advertises the
-// file types the chat model cannot take itself, and the tool drops out
-// entirely when it can take all of them. Image input says nothing about PDFs —
-// that is why "file" is its own modality.
-func TestAgentDescriptionOffersOnlyMissingTypes(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		mods   []string
-		offers []string
-		hides  []string
-		needed bool
-	}{
-		{"no metadata", nil, []string{"images", "PDF documents", "audio recordings"}, nil, true},
-		{"text only", []string{"text"}, []string{"images", "PDF documents", "audio recordings"}, nil, true},
-		{"sees images", []string{"text", "image"}, []string{"PDF documents", "audio recordings"}, []string{"images"}, true},
-		{"hears audio", []string{"text", "audio"}, []string{"images", "PDF documents"}, []string{"audio recordings"}, true},
-		{"everything", []string{"text", "image", "file", "audio"}, nil, nil, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			desc, needed := AgentDescription(tc.mods)
-			if needed != tc.needed {
-				t.Fatalf("needed = %v, want %v (desc %q)", needed, tc.needed, desc)
-			}
-			if !needed {
-				return
-			}
-			for _, want := range tc.offers {
-				if !strings.Contains(desc, want) {
-					t.Errorf("description does not offer %q: %s", want, desc)
-				}
-			}
-			for _, hide := range tc.hides {
-				if strings.Contains(desc, hide) {
-					t.Errorf("description offers %q the chat model handles itself: %s", hide, desc)
-				}
-			}
-		})
+// TestSpecialistTools: one tool per row of the hand-off table, each carrying
+// the modality that makes it pointless — the engine's gate and the chat UI's
+// greyed-out row both read it, and image input says nothing about PDFs, which
+// is why "file" is its own modality. The description names the accepted
+// formats, so the model hears the limit before it calls instead of from a
+// refusal, and only the readers require a question.
+func TestSpecialistTools(t *testing.T) {
+	byName := map[string]tool{}
+	for _, tl := range Specialists(&fakeFileStore{}, nil) {
+		byName[tl.Name] = tl
+		if tl.Modality == "" || tl.Title == "" || !tl.DefaultEnabled || tl.Timeout == 0 {
+			t.Errorf("%s: modality=%q title=%q enabled=%v timeout=%v",
+				tl.Name, tl.Modality, tl.Title, tl.DefaultEnabled, tl.Timeout)
+		}
 	}
-}
-
-// The description names the accepted formats, so the model hears the limit
-// before it calls instead of from a refusal.
-func TestAgentDescriptionNamesFormats(t *testing.T) {
-	desc, _ := AgentDescription(nil)
-	for _, want := range []string{"images (PNG or WebP only)", "audio recordings (which come back as a transcript", "PDF documents"} {
-		if !strings.Contains(desc, want) {
-			t.Errorf("description does not name %q: %s", want, desc)
+	if len(byName) != len(specialists) {
+		t.Fatalf("got %v, want one tool per specialist", byName)
+	}
+	for _, tc := range []struct {
+		name     string
+		modality string
+		mentions []string
+		required string
+	}{
+		{"vision", "image", []string{"images (PNG or WebP only)"}, `"id", "question"`},
+		{"document", "file", []string{"PDF documents"}, `"id", "question"`},
+		// A transcription model takes no prompt, so the question is optional and
+		// the description says it goes nowhere.
+		{"transcription", "audio", []string{"audio recordings", "ignored"}, `"id"`},
+	} {
+		tl, ok := byName[tc.name]
+		if !ok {
+			t.Fatalf("no %s tool in %v", tc.name, byName)
+		}
+		if tl.Modality != tc.modality {
+			t.Errorf("%s modality = %q, want %q", tc.name, tl.Modality, tc.modality)
+		}
+		for _, want := range tc.mentions {
+			if !strings.Contains(tl.Description, want) {
+				t.Errorf("%s description does not mention %q: %s", tc.name, want, tl.Description)
+			}
+		}
+		got := string(tl.Schema)
+		if !strings.Contains(got, `"required": [`+tc.required+`]`) {
+			t.Errorf("%s schema does not require [%s]: %s", tc.name, tc.required, got)
+		}
+		// A question the tool throws away has to say so in the shape the model
+		// reads, not only in the prose above it.
+		if strings.Contains(got, "ignored") != (tc.name == "transcription") {
+			t.Errorf("%s schema question property: %s", tc.name, got)
 		}
 	}
 }
 
-// TestAgentSendsFileToItsSpecialist: one attachment id in, one question to the
+// TestSpecialistSendsFileToItsModel: one attachment id in, one question to the
 // designated model out, on the wire shape that file type needs — and the
 // specialist's own embedded system prompt over it. Audio is not here: it is
-// transcribed, not asked (TestAgentTranscribesAudio).
-func TestAgentSendsFileToItsSpecialist(t *testing.T) {
+// transcribed, not asked (TestTranscriptionSendsRecording).
+func TestSpecialistSendsFileToItsModel(t *testing.T) {
 	const answer = "The invoice totals 42 EUR."
 	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 	pdf := []byte("%PDF-1.7 fake")
 
 	for _, tc := range []struct {
 		name       string
+		tool       string
 		filename   string
 		kind, mime string
 		data       []byte
@@ -258,7 +262,7 @@ func TestAgentSendsFileToItsSpecialist(t *testing.T) {
 		check      func(t *testing.T, payload map[string]any, data []byte)
 	}{
 		{
-			name: "image", filename: "photo.png", kind: "image", mime: "image/png", data: png,
+			name: "image", tool: "vision", filename: "photo.png", kind: "image", mime: "image/png", data: png,
 			model:     "vision-model",
 			designate: func(m *config.ModelsConfig) { m.DefaultVisionModel = "vision-model" },
 			prompt:    "vision specialist", partType: "image_url", partKey: "image_url",
@@ -269,7 +273,7 @@ func TestAgentSendsFileToItsSpecialist(t *testing.T) {
 			},
 		},
 		{
-			name: "document", filename: "invoice.pdf", kind: "file", mime: "application/pdf", data: pdf,
+			name: "document", tool: "document", filename: "invoice.pdf", kind: "file", mime: "application/pdf", data: pdf,
 			model:     "document-model",
 			designate: func(m *config.ModelsConfig) { m.DefaultDocumentModel = "document-model" },
 			prompt:    "document specialist", partType: "file", partKey: "file",
@@ -290,7 +294,7 @@ func TestAgentSendsFileToItsSpecialist(t *testing.T) {
 			fs := &fakeFileStore{}
 			seedAttachment(fs, "att-1", agentChat, tc.filename, tc.kind, tc.mime, tc.data)
 
-			out, isErr := callAgent(t, fs, agentConfig(t, srv.URL, models),
+			out, isErr := callSpecialist(t, fs, agentConfig(t, srv.URL, models), tc.tool,
 				`{"id":"att-1","question":"What does it say?"}`,
 				mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg})
 			if isErr {
@@ -329,20 +333,22 @@ func TestAgentSendsFileToItsSpecialist(t *testing.T) {
 	}
 }
 
-// TestAgentTranscribesAudio: the audio specialist posts the recording to
+// TestTranscriptionSendsRecording: the transcription tool posts the recording to
 // /audio/transcriptions under its own filename and mime — the endpoint
 // identifies the container from them — and the transcript IS the tool result,
 // whatever the chat model asked. An ogg a TOOL attached goes as readily as an
 // upload's webm.
-func TestAgentTranscribesAudio(t *testing.T) {
+func TestTranscriptionSendsRecording(t *testing.T) {
 	const transcript = "Two eggs and a coffee."
 	srv, recorded := transcriptionServer(t, transcript)
 	fs := &fakeFileStore{}
 	seedAttachment(fs, "att-1", agentChat, "memo.ogg", "file", "audio/ogg", []byte("ogg-bytes"))
 
-	out, isErr := callAgent(t, fs,
+	// No question at all: the endpoint takes no prompt, so the schema does not
+	// require one.
+	out, isErr := callSpecialist(t, fs,
 		agentConfig(t, srv.URL, config.ModelsConfig{DefaultTranscriptionModel: "whisper"}),
-		`{"id":"att-1","question":"What did they order?"}`,
+		"transcription", `{"id":"att-1"}`,
 		mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg})
 	if isErr {
 		t.Fatalf("call failed: %s", out)
@@ -367,14 +373,14 @@ func TestAgentTranscribesAudio(t *testing.T) {
 
 // Silence and unintelligible speech both come back empty from the endpoint:
 // say so in-band rather than handing the chat model nothing.
-func TestAgentReportsUntranscribableAudio(t *testing.T) {
+func TestTranscriptionReportsSilence(t *testing.T) {
 	srv, _ := transcriptionServer(t, "  ")
 	fs := &fakeFileStore{}
 	seedAttachment(fs, "att-1", agentChat, "memo.webm", "file", "audio/webm", []byte("webm"))
 
-	out, isErr := callAgent(t, fs,
+	out, isErr := callSpecialist(t, fs,
 		agentConfig(t, srv.URL, config.ModelsConfig{DefaultTranscriptionModel: "whisper"}),
-		`{"id":"att-1","question":"?"}`,
+		"transcription", `{"id":"att-1"}`,
 		mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg})
 	if isErr {
 		t.Fatalf("an empty transcript is not an error: %s", out)
@@ -384,9 +390,9 @@ func TestAgentReportsUntranscribableAudio(t *testing.T) {
 	}
 }
 
-// TestAgentRefusals: everything that must come back as an in-band tool error
+// TestSpecialistRefusals: everything that must come back as an in-band tool error
 // (the chat model reads it and can react) rather than killing the generation.
-func TestAgentRefusals(t *testing.T) {
+func TestSpecialistRefusals(t *testing.T) {
 	srv, _ := completionServer(t, "unused")
 	all := config.ModelsConfig{
 		DefaultVisionModel: "v", DefaultDocumentModel: "d", DefaultTranscriptionModel: "a",
@@ -395,30 +401,37 @@ func TestAgentRefusals(t *testing.T) {
 
 	fs := &fakeFileStore{}
 	seedAttachment(fs, "img", agentChat, "photo.png", "image", "image/png", []byte("png"))
+	seedAttachment(fs, "pdf", agentChat, "invoice.pdf", "file", "application/pdf", []byte("pdf"))
+	seedAttachment(fs, "zip", agentChat, "box.zip", "file", "application/zip", []byte("zip"))
 	seedAttachment(fs, "notes", agentChat, "notes.md", "text", "text/markdown", []byte("hello"))
 	seedAttachment(fs, "jpg", agentChat, "photo.jpg", "image", "image/jpeg", []byte("jpg")) // previews, but outside the wire contract
 	seedAttachment(fs, "foreign", "other-chat", "photo.png", "image", "image/png", []byte("png"))
 
 	for _, tc := range []struct {
 		name string
+		tool string
 		args string
 		meta mcphub.CallMeta
 		cfgs config.ModelsConfig
 		want string
 	}{
-		{"unknown id", `{"id":"nope","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no attachment with id"},
-		{"another chat's id", `{"id":"foreign","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no attachment with id"},
-		{"no question", `{"id":"img"}`, mcphub.CallMeta{ChatID: agentChat}, all, "required"},
-		{"text file", `{"id":"notes","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "already part of this conversation"},
-		{"unroutable image", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "PNG and WebP only"},
+		{"unknown id", "vision", `{"id":"nope","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no attachment with id"},
+		{"another chat's id", "vision", `{"id":"foreign","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no attachment with id"},
+		{"no question", "vision", `{"id":"img"}`, mcphub.CallMeta{ChatID: agentChat}, all, "required"},
+		{"text file", "vision", `{"id":"notes","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "already part of this conversation"},
+		// Each tool reads one type, so a file another specialist wants names that
+		// tool instead of failing mute.
+		{"another specialist's file", "vision", `{"id":"pdf","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "the document tool can"},
+		{"nobody's file", "document", `{"id":"zip","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no specialist can read"},
+		{"unroutable image", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "PNG and WebP only"},
 		// The format is checked first: an unsupported file must not be reported
 		// as a missing server setting.
-		{"format beats missing model", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "PNG and WebP only"},
-		{"no model designated", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "no model is designated for images"},
-		{"only some designated", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, visionOnly, ""},
+		{"format beats missing model", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "PNG and WebP only"},
+		{"no model designated", "vision", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "no model is designated for images"},
+		{"only some designated", "vision", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, visionOnly, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, isErr := callAgent(t, fs, agentConfig(t, srv.URL, tc.cfgs), tc.args, tc.meta)
+			out, isErr := callSpecialist(t, fs, agentConfig(t, srv.URL, tc.cfgs), tc.tool, tc.args, tc.meta)
 			if tc.want == "" { // the positive control: this one goes through
 				if isErr {
 					t.Fatalf("call failed: %s", out)
@@ -435,17 +448,17 @@ func TestAgentRefusals(t *testing.T) {
 	}
 }
 
-// TestAgentReportsEmptyAnswer: an answer truncated to nothing (a reasoning
+// TestSpecialistReportsEmptyAnswer: an answer truncated to nothing (a reasoning
 // model spending the whole max_tokens budget on hidden reasoning) must come
 // back as an error naming the provider's own diagnostics, not as silence.
-func TestAgentReportsEmptyAnswer(t *testing.T) {
+func TestSpecialistReportsEmptyAnswer(t *testing.T) {
 	srv, _ := completionServer(t, "   ")
 	fs := &fakeFileStore{}
 	seedAttachment(fs, "img", agentChat, "photo.png", "image", "image/png", []byte("png"))
 
-	out, isErr := callAgent(t, fs,
+	out, isErr := callSpecialist(t, fs,
 		agentConfig(t, srv.URL, config.ModelsConfig{DefaultVisionModel: "v"}),
-		`{"id":"img","question":"?"}`,
+		"vision", `{"id":"img","question":"?"}`,
 		mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg})
 	if !isErr {
 		t.Fatalf("want an in-band error, got %q", out)

@@ -48,6 +48,13 @@ type Entry struct {
 	// ("Coding…" for code). Empty means "no title" — the UI falls back
 	// to Display. Never sent to the model, which only ever sees Display.
 	Title string `json:"title"`
+	// Modality is the chat-model input modality that makes the tool pointless,
+	// because the model takes that input itself ("image", "file", "audio").
+	// Empty means "always offered"; only integrated specialist tools set it. The
+	// engine leaves such a tool out of the request for a model that has the
+	// modality, and /api/config passes it on so the chat UI can grey the row out
+	// for the model the user picked.
+	Modality string `json:"requires_modality,omitempty"`
 }
 
 // connectTimeout bounds dialing + tool listing for one MCP server so a dead

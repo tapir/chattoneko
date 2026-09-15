@@ -74,7 +74,10 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
+      # No android-actions/setup-android: the ubuntu-latest image already ships
+      # the SDK (ANDROID_HOME + platform-tools + build-tools 36 + android-36,
+      # which is all variables.gradle asks for) and gradle finds it. v3 broke
+      # the release by 404ing on its hardcoded cmdline-tools download.
       - uses: gradle/actions/setup-gradle@v4
 
       # Same shared debug keystore as before, so CI APKs stay update-installable

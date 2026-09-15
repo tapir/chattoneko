@@ -85,6 +85,10 @@
   }
 
   function togglePin() {
+    // Dismiss the reveal: the row survives a pin (it moves to the other
+    // section) and would otherwise come back with its icons still showing.
+    // A delete gets this for free because the row unmounts.
+    onreveal?.(null);
     app.setPinned(chat, !chat.pinned);
   }
 </script>

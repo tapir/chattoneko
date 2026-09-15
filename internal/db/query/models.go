@@ -24,6 +24,7 @@ type Chat struct {
 	ToolsJson      string
 	CreatedAt      int64
 	UpdatedAt      int64
+	Pinned         int64
 }
 
 type Config struct {

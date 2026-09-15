@@ -1,6 +1,6 @@
 <script>
   import { app } from '../lib/state.svelte.js';
-  import { Trash2 } from '@lucide/svelte';
+  import { Pin, PinOff, Trash2 } from '@lucide/svelte';
   import IconButton from './IconButton.svelte';
   import Confirm from './Confirm.svelte';
 
@@ -80,17 +80,23 @@
     return chat.title || 'New Chat';
   }
 
-  function openDelete(e) {
-    e.preventDefault();
-    e.stopPropagation();
+  function openDelete() {
     confirmingDelete = true;
+  }
+
+  function togglePin() {
+    app.setPinned(chat, !chat.pinned);
   }
 </script>
 
-<li>
+<!-- group + relative live on the <li>: the action icons are a SIBLING of the
+     link, not a child. A <button> nested in an <a> is invalid HTML and mobile
+     browsers hand the tap to the link instead, so the icons were untappable
+     on a phone. Covering the whole row with oncontextmenu keeps Android's
+     native menu off a long press that lands on an icon. -->
+<li class="group relative" oncontextmenu={onContextMenu}>
   <a
     href="#/c/{chat.id}"
-    oncontextmenu={onContextMenu}
     ontouchstart={lpTouchStart}
     ontouchmove={lpTouchMove}
     ontouchend={lpCancel}
@@ -99,7 +105,7 @@
     class={[
       // select-none + no callout: without them a long-press also triggers
       // text selection / the iOS link preview on top of our reveal.
-      'group relative flex select-none items-center gap-1 rounded-md px-2.5 py-2 text-sm transition-colors [-webkit-touch-callout:none]',
+      'flex select-none items-center gap-1 rounded-md px-2.5 py-2 text-sm transition-colors [-webkit-touch-callout:none]',
       active
         ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
         : // The revealed row takes the accent background too: touch browsers
@@ -110,37 +116,40 @@
           : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
     ]}
   >
-    <!-- The delete icon below is an absolute overlay that takes no layout
-         space, so reserve its width (right-1 + size-6 + gap-1 = pr-5.5) in
-         exactly the states it is visible: the title then ellipsizes like it
-         does on a narrower sidebar instead of sliding under the icon. -->
+    <!-- The pin + delete icons are an absolute overlay that takes no layout
+         space, so reserve their width (right-1 + two size-6 icons + gap =
+         pr-12) in exactly the states they are visible: the title then
+         ellipsizes like it does on a narrower sidebar instead of sliding
+         under the icons. -->
     <span
       class={[
         'min-w-0 flex-1 truncate',
         isGenerating && 'breathing',
         revealed
-          ? 'pr-5.5'
-          : '[@media(hover:hover)]:group-hover:pr-5.5 group-focus-within:pr-5.5'
+          ? 'pr-12'
+          : '[@media(hover:hover)]:group-hover:pr-12 group-focus-within:pr-12'
       ]}>{displayTitle()}</span>
-    <!-- Absolutely positioned overlay so the row itself never reflows when
-         the actions appear on hover (only the title's padding, above). No
-         background/gradient here: the row itself carries the hover color,
-         and a separate overlay background would lag behind the row's color
-         transition and show as a patch. -->
-    <span
-      class={[
-        'absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-md transition-opacity',
-        // Hover reveal only on devices with a real pointer: touch browsers
-        // leave :hover stuck after a tap, which would pin the icon open on
-        // the last-touched row. On touch the long-press reveal governs.
-        revealed
-          ? 'opacity-100'
-          : 'opacity-0 [@media(hover:hover)]:group-hover:opacity-100 group-focus-within:opacity-100'
-      ]}
-    >
-      <IconButton icon={Trash2} label="Delete" size="sm" danger onclick={openDelete} />
-    </span>
   </a>
+  <!-- Absolutely positioned so the row never reflows when the actions appear
+       (only the title's padding, above). No background/gradient here: the row
+       itself carries the hover color, and a separate overlay background would
+       lag behind the row's color transition and show as a patch.
+       pointer-events follow the visibility: an invisible overlay sitting on
+       top of the link would swallow taps on the row's right edge. -->
+  <span
+    class={[
+      'absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-md transition-opacity',
+      // Hover reveal only on devices with a real pointer: touch browsers
+      // leave :hover stuck after a tap, which would pin the icon open on
+      // the last-touched row. On touch the long-press reveal governs.
+      revealed
+        ? 'opacity-100 pointer-events-auto'
+        : 'opacity-0 pointer-events-none [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto'
+    ]}
+  >
+    <IconButton icon={chat.pinned ? PinOff : Pin} label={chat.pinned ? 'Unpin' : 'Pin'} size="sm" onclick={togglePin} />
+    <IconButton icon={Trash2} label="Delete" size="sm" danger onclick={openDelete} />
+  </span>
 </li>
 
 {#if confirmingDelete}

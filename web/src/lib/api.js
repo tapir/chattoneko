@@ -91,7 +91,14 @@ export function normalizeChat(c) {
   if (!c) return null;
   const params = parseMaybeJson(c.params ?? c.params_json, {});
   const tools = parseMaybeJson(c.tools ?? c.tools_json, {});
-  return { ...c, params, tools, title: c.title ?? "", model: c.model ?? "" };
+  return {
+    ...c,
+    params,
+    tools,
+    title: c.title ?? "",
+    model: c.model ?? "",
+    pinned: !!c.pinned,
+  };
 }
 
 export function normalizeMessage(m) {
@@ -153,7 +160,12 @@ export const api = {
     if (beforeId) q.set("before_id", beforeId);
     const data = await request("GET", `/chats?${q}`);
     const arr = Array.isArray(data) ? data : (data?.chats ?? []);
-    return arr.map(normalizeChat);
+    return {
+      chats: arr.map(normalizeChat),
+      // The COMPLETE pinned list, sent with the first page only (a cursor
+      // page has nothing to add to it).
+      pinned: (data?.pinned ?? []).map(normalizeChat),
+    };
   },
   createChat: async (model, params, tools) => {
     const body = {};

@@ -22,6 +22,19 @@ WHERE (updated_at < ?)
 ORDER BY updated_at DESC, id DESC
 LIMIT ?;
 
+-- Pinned chats: the sidebar's top section, most-recently-active first (the
+-- same rule as the recents). Unpaginated on purpose: it is a hand-curated
+-- list, and a page of pins is a list the user cannot see all of.
+-- name: ListPinnedChats :many
+SELECT * FROM chats
+WHERE pinned = 1
+ORDER BY updated_at DESC, id DESC;
+
+-- Pin/unpin. Deliberately does NOT touch updated_at: pinning is not
+-- conversation activity and must not reorder the recents list.
+-- name: SetChatPinned :exec
+UPDATE chats SET pinned = ? WHERE id = ?;
+
 -- Manual rename: also flips title_generated so the background title task
 -- never overwrites a user-chosen title (user takes ownership of the title).
 -- name: UpdateChatTitle :exec

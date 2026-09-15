@@ -740,6 +740,48 @@ func readSSE(body io.Reader, want string) string {
 	return got
 }
 
+func TestPinChat(t *testing.T) {
+	ts := newTestServer(t, quickProvider{}, false)
+	chatID := ts.createChat(t)
+
+	// Subscribe first so the pin broadcast is captured.
+	resp := ts.sse(t, "/api/stream")
+	defer resp.Body.Close()
+
+	listPinned := func() []store.Chat {
+		t.Helper()
+		rec := ts.do(t, "GET", "/api/chats", nil, nil)
+		var out struct {
+			Pinned []store.Chat `json:"pinned"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Pinned
+	}
+
+	// Pin: broadcast carries the full chat (pinned:true) and the list moves it
+	// into the pinned section.
+	if rec := ts.do(t, "PATCH", "/api/chats/"+chatID, map[string]any{"pinned": true}, nil); rec.Code != 200 {
+		t.Fatalf("pin: %d %s", rec.Code, rec.Body)
+	}
+	got := readSSE(resp.Body, `"type":"chat_updated"`)
+	if !strings.Contains(got, `"chat_id":"`+chatID+`"`) || !strings.Contains(got, `"pinned":true`) {
+		t.Fatalf("pin broadcast missing chat_id/pinned: %q", got)
+	}
+	if p := listPinned(); len(p) != 1 || p[0].ID != chatID || !p[0].Pinned {
+		t.Fatalf("pinned list wrong after pin: %+v", p)
+	}
+
+	// Unpin: gone from the pinned section.
+	if rec := ts.do(t, "PATCH", "/api/chats/"+chatID, map[string]any{"pinned": false}, nil); rec.Code != 200 {
+		t.Fatalf("unpin: %d %s", rec.Code, rec.Body)
+	}
+	if p := listPinned(); len(p) != 0 {
+		t.Fatalf("pinned list should be empty after unpin: %+v", p)
+	}
+}
+
 func TestSSEIdleEvent(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 	chatID := ts.createChat(t)

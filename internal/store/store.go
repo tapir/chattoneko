@@ -38,6 +38,7 @@ type Chat struct {
 	Model     string          `json:"model"`
 	Params    GenParams       `json:"params"`
 	Tools     map[string]bool `json:"tools"`
+	Pinned    bool            `json:"pinned"`
 	CreatedAt int64           `json:"created_at"`
 	UpdatedAt int64           `json:"updated_at"`
 }
@@ -150,6 +151,7 @@ func chatFromRow(c query.Chat) (*Chat, error) {
 		Model:     c.Model,
 		Params:    params,
 		Tools:     tools,
+		Pinned:    c.Pinned != 0,
 		CreatedAt: c.CreatedAt,
 		UpdatedAt: c.UpdatedAt,
 	}, nil
@@ -316,6 +318,26 @@ func (s *Store) ListChats(ctx context.Context, limit int64, beforeUpdatedAt int6
 		return nil, err
 	}
 	return chatsFromRows(rows)
+}
+
+// ListPinnedChats returns every pinned chat, most-recently-active first.
+// Unpaginated: it is a hand-curated list.
+func (s *Store) ListPinnedChats(ctx context.Context) ([]*Chat, error) {
+	rows, err := s.q.ListPinnedChats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return chatsFromRows(rows)
+}
+
+// SetChatPinned pins or unpins a chat. It does NOT bump updated_at: pinning
+// is not conversation activity, so it must not reorder the recents list.
+func (s *Store) SetChatPinned(ctx context.Context, id string, pinned bool) error {
+	var v int64
+	if pinned {
+		v = 1
+	}
+	return s.q.SetChatPinned(ctx, query.SetChatPinnedParams{Pinned: v, ID: id})
 }
 
 // UpdateChatTitle sets the title (manual rename). Also marks the title as

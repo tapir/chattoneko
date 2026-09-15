@@ -483,7 +483,18 @@ func (s *Server) handleListChats(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "list chats", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"chats": s.annotateGenerating(chats)})
+	// The pinned section rides along on the FIRST page only (no cursor): it
+	// is the complete list, so later pages have nothing to add to it.
+	out := map[string]any{"chats": s.annotateGenerating(chats)}
+	if before == 0 && beforeID == "" {
+		pinned, err := s.store.ListPinnedChats(r.Context())
+		if err != nil {
+			internalError(w, "list pinned chats", err)
+			return
+		}
+		out["pinned"] = s.annotateGenerating(pinned)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // chatListItem is a chat plus its live generation state (used by the sidebar
@@ -573,6 +584,7 @@ func (s *Server) handlePatchChat(w http.ResponseWriter, r *http.Request) {
 		Model  *string          `json:"model"`
 		Params *store.GenParams `json:"params"`
 		Tools  *map[string]bool `json:"tools"`
+		Pinned *bool            `json:"pinned"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeBodyError(w, err)
@@ -585,6 +597,12 @@ func (s *Server) handlePatchChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.engine.BroadcastChat(id, engine.WireEvent{Type: "chat_updated", Title: *body.Title})
+	}
+	if body.Pinned != nil {
+		if err := s.store.SetChatPinned(r.Context(), id, *body.Pinned); err != nil {
+			internalError(w, "set chat pinned", err)
+			return
+		}
 	}
 	if body.Model != nil || body.Params != nil || body.Tools != nil {
 		model := chat.Model
@@ -613,6 +631,12 @@ func (s *Server) handlePatchChat(w http.ResponseWriter, r *http.Request) {
 		// Broadcast carries the fresh chat so other clients apply settings
 		// without a refetch.
 		s.engine.BroadcastChat(id, engine.WireEvent{Type: "settings_updated", Chat: updated})
+	}
+	if body.Pinned != nil {
+		// Full chat on the wire: a client that never loaded this row (an old
+		// chat beyond its first page) can still materialize it in the pinned
+		// section instead of waiting for a refetch.
+		s.engine.BroadcastChat(id, engine.WireEvent{Type: "chat_updated", Chat: updated})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"chat": updated})
 }

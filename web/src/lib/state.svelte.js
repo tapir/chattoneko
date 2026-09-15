@@ -96,6 +96,10 @@ class AppState {
 
   // sidebar
   chats = $state([]);
+  // Pinned chats: the full pinned list (the server sends it with the first
+  // page). A pinned chat also stays in `chats` when it falls inside the
+  // recency window — the Sidebar filters it out of Recent and shows it here.
+  pinnedChats = $state([]);
   chatsHasMore = $state(false);
   chatsLoading = $state(false);
 
@@ -387,10 +391,12 @@ class AppState {
   async loadChats() {
     this.chatsLoading = true;
     try {
-      const page = await api.listChats({ limit: CHAT_PAGE });
-      this.chats = page;
-      this.chatsHasMore = page.length >= CHAT_PAGE;
-      this.reconcileGeneratingFlags(page);
+      const { chats, pinned } = await api.listChats({ limit: CHAT_PAGE });
+      this.chats = chats;
+      this.pinnedChats = pinned;
+      this.chatsHasMore = chats.length >= CHAT_PAGE;
+      this.reconcileGeneratingFlags(chats);
+      this.reconcileGeneratingFlags(pinned);
     } catch (e) {
       this.toast("error", `Failed to load chats: ${e.message}`);
     } finally {
@@ -404,7 +410,7 @@ class AppState {
     const last = this.chats[this.chats.length - 1];
     this.chatsLoading = true;
     try {
-      const page = await api.listChats({
+      const { chats: page } = await api.listChats({
         limit: CHAT_PAGE,
         before: last.updated_at,
         beforeId: last.id,
@@ -429,10 +435,64 @@ class AppState {
       return;
     }
     this.chats = this.chats.filter((c) => c.id !== id);
+    this.pinnedChats = this.pinnedChats.filter((c) => c.id !== id);
     if (this.activeChatId === id) {
       this.closeChat();
       location.hash = "#/";
     }
+  }
+
+  // ---- pinning ----
+
+  // Update a chat's title across every list that may hold a copy (recents,
+  // search results, pinned) plus the open chat, so a rename or an
+  // auto-generated title never leaves a stale label in the pinned section.
+  _setTitle(id, title) {
+    if (title == null) return;
+    for (const list of [this.chats, this.searchResults, this.pinnedChats]) {
+      if (!list) continue;
+      const c = list.find((x) => x.id === id);
+      if (c) c.title = title;
+    }
+    if (this.chat && this.chat.id === id) this.chat.title = title;
+  }
+
+  // Reconcile a pin toggle into the sidebar lists. `src` is an authoritative
+  // chat object (the clicked row, or a broadcast's full chat) used to
+  // materialize the pinned row when this client never loaded it. Idempotent:
+  // the optimistic apply and the server broadcast both run through here.
+  _applyPin(id, pinned, src) {
+    for (const list of [this.chats, this.searchResults, this.pinnedChats]) {
+      if (!list) continue;
+      const c = list.find((x) => x.id === id);
+      if (c) c.pinned = pinned;
+    }
+    if (this.chat && this.chat.id === id) this.chat.pinned = pinned;
+    const i = this.pinnedChats.findIndex((c) => c.id === id);
+    if (pinned && i < 0) {
+      const row = src ?? this.chats.find((c) => c.id === id);
+      if (row) {
+        this.pinnedChats = [...this.pinnedChats, row].sort(
+          (a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0),
+        );
+      }
+    } else if (!pinned && i >= 0) {
+      this.pinnedChats.splice(i, 1);
+    }
+  }
+
+  // Pin/unpin from the sidebar: optimistic, reverted if the server refuses.
+  // The chat_updated broadcast (which reaches every client, this one
+  // included) re-applies the same state idempotently.
+  setPinned(chat, pinned) {
+    this._applyPin(chat.id, pinned, chat);
+    api.patchChat(chat.id, { pinned }).catch((e) => {
+      this._applyPin(chat.id, !pinned, chat);
+      this.toast(
+        "error",
+        `Failed to ${pinned ? "pin" : "unpin"} chat: ${e.message}`,
+      );
+    });
   }
 
   // ---- the stream: sidebar state for background chats (#3) + titles ----
@@ -444,13 +504,7 @@ class AppState {
       case "title": {
         // The title task's final auto-generated title.
         if (!ev.chat_id || ev.title == null) break;
-        // Sidebar entry.
-        const c = this.chats.find((c) => c.id === ev.chat_id);
-        if (c) c.title = ev.title;
-        // Open chat (header, document title).
-        if (this.chat && this.chat.id === ev.chat_id) {
-          this.chat = { ...this.chat, title: ev.title };
-        }
+        this._setTitle(ev.chat_id, ev.title);
         break;
       }
       case "generating_snapshot": {
@@ -481,9 +535,17 @@ class AppState {
         break;
       }
       case "chat_updated": {
-        if (!ev.chat_id || ev.title == null) break;
-        const c = this.chats.find((c) => c.id === ev.chat_id);
-        if (c) c.title = ev.title;
+        const id = ev.chat_id;
+        if (!id) break;
+        if (ev.chat) {
+          // A pin toggle broadcasts the full chat.
+          const c = normalizeChat(ev.chat);
+          this._setTitle(id, c.title);
+          this._applyPin(id, c.pinned, c);
+        } else {
+          // A rename broadcasts the title only.
+          this._setTitle(id, ev.title);
+        }
         break;
       }
       case "config_changed": {
@@ -630,9 +692,9 @@ class AppState {
       if (JSON.stringify(messages) !== JSON.stringify(this.messages))
         this.messages = messages;
       if (usage) this.chatUsage = usage;
-      // Keep the sidebar entry in sync with the freshly fetched title.
-      const c = this.chats.find((c) => c.id === id);
-      if (c && chat.title && c.title !== chat.title) c.title = chat.title;
+      // Keep the sidebar entries (recents + pinned) in sync with the
+      // freshly fetched title.
+      this._setTitle(id, chat.title);
       const still = messages.find(
         (m) => m.role === "assistant" && m.status === "generating",
       );
@@ -794,11 +856,13 @@ class AppState {
   }
 
   bumpChatInList(chatId) {
-    const idx = this.chats.findIndex((c) => c.id === chatId);
-    if (idx > 0) {
-      const [c] = this.chats.splice(idx, 1);
-      c.updated_at = Date.now();
-      this.chats.unshift(c);
+    for (const list of [this.chats, this.pinnedChats]) {
+      const idx = list.findIndex((c) => c.id === chatId);
+      if (idx > 0) {
+        const [c] = list.splice(idx, 1);
+        c.updated_at = Date.now();
+        list.unshift(c);
+      }
     }
   }
 
@@ -1296,10 +1360,14 @@ class AppState {
         break;
       }
       case "chat_updated": {
-        if (this.chat && ev.title != null)
-          this.chat = { ...this.chat, title: ev.title };
-        const c = this.chats.find((c) => c.id === this.activeChatId);
-        if (c && ev.title != null) c.title = ev.title;
+        const id = ev.chat_id || this.activeChatId;
+        if (ev.chat) {
+          const c = normalizeChat(ev.chat);
+          this._setTitle(id, c.title);
+          this._applyPin(id, c.pinned, c);
+        } else {
+          this._setTitle(id, ev.title);
+        }
         break;
       }
       case "settings_updated": {

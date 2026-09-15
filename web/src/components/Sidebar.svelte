@@ -29,8 +29,14 @@ import logoUrl from '$lib/logo.svg';
     app.clearSearch();
   }
   // Which list to show: search results while a query is active, else recents.
-  let displayedChats = $derived(app.searchResults ?? app.chats);
   let searching = $derived(app.searchResults !== null);
+  // Pinned section: hidden while searching (search is one flat result list).
+  let pinnedChats = $derived(searching ? [] : app.pinnedChats);
+  // Recent excludes pinned chats (they render in their own section above);
+  // search results show every match regardless of pinned state.
+  let displayedChats = $derived(
+    searching ? app.searchResults : app.chats.filter((c) => !c.pinned),
+  );
   // First load of either list: skeletons instead of the empty message.
   let loadingList = $derived(
     searching ? app.searchLoading : app.chatsLoading && app.chats.length === 0,
@@ -61,6 +67,12 @@ import logoUrl from '$lib/logo.svg';
   let touchStartY = null;
   const PTR_THRESHOLD = 56; // pull distance that commits a refresh on release
   const PTR_MAX = 96; // rubber-band cap
+  // Downward drift before the pull claims the gesture (matches the row's
+  // long-press tolerance). Under it the touch is still a tap: claiming it
+  // would preventDefault the touchmove — cancelling the click the browser
+  // synthesizes — and shift the list out from under the finger, so a row's
+  // revealed pin/delete icons could never be hit.
+  const PTR_SLOP = 10;
 
   function ptrStart(e) {
     touchStartY = listEl && listEl.scrollTop === 0 ? e.touches[0].clientY : null;
@@ -68,10 +80,10 @@ import logoUrl from '$lib/logo.svg';
   function ptrMove(e) {
     if (touchStartY == null || refreshing) return;
     const dy = e.touches[0].clientY - touchStartY;
-    if (dy > 0 && listEl.scrollTop === 0) {
+    if (dy > PTR_SLOP && listEl.scrollTop === 0) {
       e.preventDefault(); // we own the gesture; the list must not scroll
       pulling = true;
-      pull = Math.min(dy * 0.45, PTR_MAX);
+      pull = Math.min((dy - PTR_SLOP) * 0.45, PTR_MAX);
     } else {
       pulling = false;
       pull = 0;
@@ -104,6 +116,23 @@ import logoUrl from '$lib/logo.svg';
   });
   let version = $derived(app.nativeApp ? apkVersion : app.serverVersion);
 </script>
+
+{#snippet sectionHeading(text)}
+  <div class="px-2.5 py-2.5 text-sm font-semibold tracking-wider text-sidebar-foreground">{text}</div>
+{/snippet}
+
+{#snippet chatList(list)}
+  <ul class="flex flex-col gap-0.5">
+    {#each list as chat (chat.id)}
+      <SidebarItem
+        {chat}
+        active={chat.id === app.activeChatId}
+        revealed={deleteRevealId === chat.id}
+        onreveal={(id) => (deleteRevealId = id)}
+      />
+    {/each}
+  </ul>
+{/snippet}
 
 <!-- border-r only on lg+ (desktop inline sidebar). In the mobile sheet the
      sidebar is fullscreen, where a right border rendered as a stray 1px
@@ -176,21 +205,11 @@ import logoUrl from '$lib/logo.svg';
     </div>
   </div>
 
-  <!-- Section heading: Recent conversations vs. Search results.
-       Brighter than the chat titles (which render at /80 opacity). -->
-  <div class="px-[18px] py-2.5 text-sm font-semibold tracking-wider text-sidebar-foreground">
-    {#if searching}
-      Search Results
-    {:else}
-      Recent Conversations
-    {/if}
-  </div>
-
   <!-- [contain:inline-size] excludes the (unbounded-length) chat titles from
        the sidebar's intrinsic width, so only the header row defines the
        content-derived min-width enforced in App.svelte. Safe here: the
        Confirm dialog is top-layer (showModal) and the hover overlay is
-       anchored to its relative <a> parent, neither relies on nav as a
+       anchored to its row's relative <li>, neither relies on nav as a
        containing block. -->
   <nav
     bind:this={listEl}
@@ -219,21 +238,31 @@ import logoUrl from '$lib/logo.svg';
       </div>
     </div>
     {#if loadingList}
+      {@render sectionHeading(searching ? 'Search Results' : 'Recent Conversations')}
       <div class="loading-delay flex flex-col gap-1.5 px-1 pt-1">
         {#each Array(searching ? 2 : 3) as _, i (i)}
           <Skeleton class="h-8 bg-sidebar-accent/60" />
         {/each}
       </div>
-    {:else if displayedChats.length === 0}
-      <p class="px-3 py-8 text-center text-sm text-muted-foreground">{searching
-        ? `No chats match “${app.searchQuery}”`
-        : 'No chats yet'}</p>
     {:else}
-      <ul class="flex flex-col gap-0.5">
-        {#each displayedChats as chat (chat.id)}
-          <SidebarItem {chat} active={chat.id === app.activeChatId} revealed={deleteRevealId === chat.id} onreveal={(id) => (deleteRevealId = id)} />
-        {/each}
-      </ul>
+      {#if pinnedChats.length}
+        {@render sectionHeading('Pinned')}
+        {@render chatList(pinnedChats)}
+      {/if}
+
+      {#if displayedChats.length || !pinnedChats.length}
+        {@render sectionHeading(searching ? 'Search Results' : 'Recent Conversations')}
+      {/if}
+
+      {#if displayedChats.length === 0}
+        {#if searching}
+          <p class="px-3 py-8 text-center text-sm text-muted-foreground">No chats match “{app.searchQuery}”</p>
+        {:else if !pinnedChats.length}
+          <p class="px-3 py-8 text-center text-sm text-muted-foreground">No chats yet</p>
+        {/if}
+      {:else}
+        {@render chatList(displayedChats)}
+      {/if}
     {/if}
   </nav>
 

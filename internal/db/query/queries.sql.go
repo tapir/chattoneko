@@ -328,7 +328,7 @@ func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, err
 }
 
 const getChat = `-- name: GetChat :one
-SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at FROM chats WHERE id = ?
+SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at, pinned FROM chats WHERE id = ?
 `
 
 func (q *Queries) GetChat(ctx context.Context, id string) (Chat, error) {
@@ -343,6 +343,7 @@ func (q *Queries) GetChat(ctx context.Context, id string) (Chat, error) {
 		&i.ToolsJson,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Pinned,
 	)
 	return i, err
 }
@@ -522,7 +523,7 @@ func (q *Queries) ListAttachmentsByMessage(ctx context.Context, messageID string
 }
 
 const listChats = `-- name: ListChats :many
-SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at FROM chats
+SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at, pinned FROM chats
 ORDER BY updated_at DESC, id DESC
 LIMIT ?
 `
@@ -545,6 +546,7 @@ func (q *Queries) ListChats(ctx context.Context, limit int64) ([]Chat, error) {
 			&i.ToolsJson,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Pinned,
 		); err != nil {
 			return nil, err
 		}
@@ -560,7 +562,7 @@ func (q *Queries) ListChats(ctx context.Context, limit int64) ([]Chat, error) {
 }
 
 const listChatsBefore = `-- name: ListChatsBefore :many
-SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at FROM chats
+SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at, pinned FROM chats
 WHERE (updated_at < ?)
    OR (updated_at = ? AND id < ?)
 ORDER BY updated_at DESC, id DESC
@@ -597,6 +599,7 @@ func (q *Queries) ListChatsBefore(ctx context.Context, arg ListChatsBeforeParams
 			&i.ToolsJson,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Pinned,
 		); err != nil {
 			return nil, err
 		}
@@ -685,7 +688,7 @@ func (q *Queries) ListDanglingToolCalls(ctx context.Context, messageID string) (
 }
 
 const listEmptyChatsOlderThan = `-- name: ListEmptyChatsOlderThan :many
-SELECT c.id, c.title, c.title_generated, c.model, c.params_json, c.tools_json, c.created_at, c.updated_at FROM chats c
+SELECT c.id, c.title, c.title_generated, c.model, c.params_json, c.tools_json, c.created_at, c.updated_at, c.pinned FROM chats c
 WHERE c.created_at < ?
   AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = c.id)
 `
@@ -708,6 +711,7 @@ func (q *Queries) ListEmptyChatsOlderThan(ctx context.Context, createdAt int64) 
 			&i.ToolsJson,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Pinned,
 		); err != nil {
 			return nil, err
 		}
@@ -812,6 +816,48 @@ func (q *Queries) ListMessagesByChat(ctx context.Context, chatID string) ([]Mess
 	return items, nil
 }
 
+const listPinnedChats = `-- name: ListPinnedChats :many
+SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at, pinned FROM chats
+WHERE pinned = 1
+ORDER BY updated_at DESC, id DESC
+`
+
+// Pinned chats: the sidebar's top section, most-recently-active first (the
+// same rule as the recents). Unpaginated on purpose: it is a hand-curated
+// list, and a page of pins is a list the user cannot see all of.
+func (q *Queries) ListPinnedChats(ctx context.Context) ([]Chat, error) {
+	rows, err := q.db.QueryContext(ctx, listPinnedChats)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Chat
+	for rows.Next() {
+		var i Chat
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.TitleGenerated,
+			&i.Model,
+			&i.ParamsJson,
+			&i.ToolsJson,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Pinned,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listToolCallsByMessage = `-- name: ListToolCallsByMessage :many
 SELECT id, message_id, provider_call_id, name, arguments, position, turn FROM tool_calls WHERE message_id = ? ORDER BY position ASC
 `
@@ -897,7 +943,7 @@ func (q *Queries) MarkTitleGenerated(ctx context.Context, id string) error {
 }
 
 const searchChats = `-- name: SearchChats :many
-SELECT c.id, c.title, c.title_generated, c.model, c.params_json, c.tools_json, c.created_at, c.updated_at FROM chats c
+SELECT c.id, c.title, c.title_generated, c.model, c.params_json, c.tools_json, c.created_at, c.updated_at, c.pinned FROM chats c
 WHERE c.id IN (SELECT id FROM chats ORDER BY updated_at DESC, id DESC LIMIT ?)
   AND (
     instr(lower(c.title), lower(?)) > 0
@@ -946,6 +992,7 @@ func (q *Queries) SearchChats(ctx context.Context, arg SearchChatsParams) ([]Cha
 			&i.ToolsJson,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Pinned,
 		); err != nil {
 			return nil, err
 		}
@@ -958,6 +1005,22 @@ func (q *Queries) SearchChats(ctx context.Context, arg SearchChatsParams) ([]Cha
 		return nil, err
 	}
 	return items, nil
+}
+
+const setChatPinned = `-- name: SetChatPinned :exec
+UPDATE chats SET pinned = ? WHERE id = ?
+`
+
+type SetChatPinnedParams struct {
+	Pinned int64
+	ID     string
+}
+
+// Pin/unpin. Deliberately does NOT touch updated_at: pinning is not
+// conversation activity and must not reorder the recents list.
+func (q *Queries) SetChatPinned(ctx context.Context, arg SetChatPinnedParams) error {
+	_, err := q.db.ExecContext(ctx, setChatPinned, arg.Pinned, arg.ID)
+	return err
 }
 
 const setGeneratedTitle = `-- name: SetGeneratedTitle :execrows

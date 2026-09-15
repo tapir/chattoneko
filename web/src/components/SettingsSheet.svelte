@@ -1,7 +1,7 @@
 <script>
   import { app } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
-  import { AudioLines, Download, Eye, EyeOff, FileText, MessageCircle, Trash2, X, Zap } from '@lucide/svelte';
+  import { AudioLines, ChevronDown, Download, Eye, EyeOff, FileText, MessageCircle, Trash2, X, Zap } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
   import ToolToggleRow from './ToolToggleRow.svelte';
   import { Button } from '$lib/components/ui/button';
@@ -140,6 +140,12 @@
   // what the backend checks on save.
   const rolesFor = (card) => ROLES.filter((r) => r.endpoint === card.endpoint);
   const endpointLabel = (value) => ENDPOINTS.find((e) => e.value === value)?.label ?? value;
+  // The list below is grouped by the endpoint each model was added on, in
+  // ENDPOINTS order; an endpoint with no models gets no group. The server
+  // sanitizes an unknown endpoint to "chat", so a card can never fall out.
+  let modelGroups = $derived(
+    ENDPOINTS.map((e) => ({ ...e, cards: modelCards.filter((c) => c.endpoint === e.value) })).filter((g) => g.cards.length)
+  );
   const DEFAULT_EFFORTS = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
   const DEFAULT_EFFORT = 'medium';
   const DEFAULT_CONTEXT = 131072;
@@ -623,116 +629,126 @@
               <p class={hint}>No models configured.</p>
             {:else}
               <div class="space-y-3">
-                {#each modelCards as card (card.id)}
-                  <div class="space-y-3 rounded-lg border p-3">
-                    <!-- Card header: id, default flags, fetch data, delete -->
-                    <div class="flex flex-wrap items-center gap-2">
-                      <!-- Own line on mobile: the role flags would squeeze the
-                           id into an unreadable sliver. -->
-                      <span class="w-full break-all font-mono text-sm sm:w-auto sm:min-w-0 sm:flex-1 sm:break-normal sm:truncate">{card.id}</span>
-                      <!-- Role flags: icon buttons (see ROLES), only the ones
-                           this card's endpoint can fill. -->
-                      {#each rolesFor(card) as role (role.key)}
-                        {@const Icon = role.icon}
-                        <button
-                          type="button"
-                          title={role.label}
-                          aria-label={role.label}
-                          aria-pressed={roleModels[role.key] === card.id}
-                          class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors {roleModels[role.key] === card.id
-                            ? 'border-primary/50 bg-primary/10 text-primary'
-                            : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-                          onclick={() => toggleRole(role.key, card.id)}
-                        >
-                          <Icon class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-                        </button>
-                      {/each}
-                      <div class="ml-auto flex items-center gap-2 sm:ml-0">
+                {#each modelGroups as group (group.value)}
+                  <details open class="space-y-3 open:[&>summary_.chevron]:rotate-180">
+                    <summary class="flex list-none cursor-pointer items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase select-none [&::-webkit-details-marker]:hidden">
+                      <ChevronDown class="chevron size-3.5 shrink-0 transition-transform" strokeWidth={1.75} aria-hidden="true" />
+                      {group.label}
+                    </summary>
+                    <div class="space-y-3">
+                      {#each group.cards as card (card.id)}
+                      <div class="space-y-3 rounded-lg border p-3">
+                        <!-- Card header: id, default flags, fetch data, delete -->
+                        <div class="flex flex-wrap items-center gap-2">
+                          <!-- Own line on mobile: the role flags would squeeze the
+                               id into an unreadable sliver. -->
+                          <span class="w-full break-all font-mono text-sm sm:w-auto sm:min-w-0 sm:flex-1 sm:break-normal sm:truncate">{card.id}</span>
+                          <!-- Role flags: icon buttons (see ROLES), only the ones
+                               this card's endpoint can fill. -->
+                          {#each rolesFor(card) as role (role.key)}
+                            {@const Icon = role.icon}
+                            <button
+                              type="button"
+                              title={role.label}
+                              aria-label={role.label}
+                              aria-pressed={roleModels[role.key] === card.id}
+                              class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors {roleModels[role.key] === card.id
+                                ? 'border-primary/50 bg-primary/10 text-primary'
+                                : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+                              onclick={() => toggleRole(role.key, card.id)}
+                            >
+                              <Icon class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+                            </button>
+                          {/each}
+                          <div class="ml-auto flex items-center gap-2 sm:ml-0">
+                            {#if card.endpoint === 'chat'}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                class="h-7 gap-1 px-2 text-xs"
+                                onclick={() => fetchModelData(card.id)}
+                                disabled={!providerReady || fetchingId === card.id}
+                              >
+                                {#if fetchingId === card.id}<Spinner class="size-3" />{:else}<Download class="size-3" strokeWidth={1.75} aria-hidden="true" />{/if}
+                                Fetch
+                              </Button>
+                            {/if}
+                            <button
+                              type="button"
+                              class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              aria-label="Remove {card.id}"
+                              onclick={() => removeModel(card.id)}
+                            >
+                              <Trash2 class="size-4" strokeWidth={1.75} aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+
                         {#if card.endpoint === 'chat'}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            class="h-7 gap-1 px-2 text-xs"
-                            onclick={() => fetchModelData(card.id)}
-                            disabled={!providerReady || fetchingId === card.id}
-                          >
-                            {#if fetchingId === card.id}<Spinner class="size-3" />{:else}<Download class="size-3" strokeWidth={1.75} aria-hidden="true" />{/if}
-                            Fetch
-                          </Button>
+                          <!-- Metadata -->
+                          <div class="grid gap-3 sm:grid-cols-2">
+                            <div class="space-y-1.5">
+                              <Label class={labelCls}>Context window (tokens)</Label>
+                              <Input type="number" min="1" class="h-8 font-mono text-xs" bind:value={card.contextLength} />
+                            </div>
+                            <div class="space-y-1.5">
+                              <Label class={labelCls}>Default reasoning effort</Label>
+                              {#if card.reasoningEfforts.length > 0}
+                                <Select.Root type="single" value={card.reasoningDefault} onValueChange={(v) => (card.reasoningDefault = v)}>
+                                  <Select.Trigger class="h-8 w-full text-sm">
+                                    <span class="truncate">{card.reasoningDefault || 'select'}</span>
+                                  </Select.Trigger>
+                                  <Select.Content>
+                                    {#each card.reasoningEfforts as e (e)}
+                                      <Select.Item value={e} label={e} class="text-sm" />
+                                    {/each}
+                                  </Select.Content>
+                                </Select.Root>
+                              {/if}
+                            </div>
+                          </div>
+
+                          <div class="space-y-1.5">
+                            <Label class={labelCls}>Input modalities</Label>
+                            <ToggleGroup.Root
+                              type="multiple"
+                              size="sm"
+                              variant="outline"
+                              value={card.inputModality}
+                              onValueChange={(v) => {
+                                // At least one modality must stay selected: an
+                                // empty change is rejected by re-pushing the
+                                // current value (new reference) into the group.
+                                card.inputModality = (v ?? []).length ? v : [...card.inputModality];
+                              }}
+                              class="w-full flex-wrap justify-start"
+                            >
+                              {#each INPUT_MODALITIES as mod (mod)}
+                                <ToggleGroup.Item value={mod}>{mod}</ToggleGroup.Item>
+                              {/each}
+                            </ToggleGroup.Root>
+                          </div>
+
+                          <div class="space-y-1.5">
+                            <Label class={labelCls}>Reasoning effort levels</Label>
+                            <ToggleGroup.Root
+                              type="multiple"
+                              size="sm"
+                              variant="outline"
+                              value={card.reasoningEfforts}
+                              onValueChange={(v) => setEfforts(card, v ?? [])}
+                              class="w-full flex-wrap justify-start"
+                            >
+                              {#each effortOptionsFor(card) as e (e)}
+                                <ToggleGroup.Item value={e}>{e}</ToggleGroup.Item>
+                              {/each}
+                            </ToggleGroup.Root>
+                          </div>
                         {/if}
-                        <button
-                          type="button"
-                          class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                          aria-label="Remove {card.id}"
-                          onclick={() => removeModel(card.id)}
-                        >
-                          <Trash2 class="size-4" strokeWidth={1.75} aria-hidden="true" />
-                        </button>
                       </div>
+                      {/each}
                     </div>
-
-                    {#if card.endpoint === 'chat'}
-                      <!-- Metadata -->
-                      <div class="grid gap-3 sm:grid-cols-2">
-                        <div class="space-y-1.5">
-                          <Label class={labelCls}>Context window (tokens)</Label>
-                          <Input type="number" min="1" class="h-8 font-mono text-xs" bind:value={card.contextLength} />
-                        </div>
-                        <div class="space-y-1.5">
-                          <Label class={labelCls}>Default reasoning effort</Label>
-                          {#if card.reasoningEfforts.length > 0}
-                            <Select.Root type="single" value={card.reasoningDefault} onValueChange={(v) => (card.reasoningDefault = v)}>
-                              <Select.Trigger class="h-8 w-full text-sm">
-                                <span class="truncate">{card.reasoningDefault || 'select'}</span>
-                              </Select.Trigger>
-                              <Select.Content>
-                                {#each card.reasoningEfforts as e (e)}
-                                  <Select.Item value={e} label={e} class="text-sm" />
-                                {/each}
-                              </Select.Content>
-                            </Select.Root>
-                          {/if}
-                        </div>
-                      </div>
-
-                      <div class="space-y-1.5">
-                        <Label class={labelCls}>Input modalities</Label>
-                        <ToggleGroup.Root
-                          type="multiple"
-                          size="sm"
-                          variant="outline"
-                          value={card.inputModality}
-                          onValueChange={(v) => {
-                            // At least one modality must stay selected: an
-                            // empty change is rejected by re-pushing the
-                            // current value (new reference) into the group.
-                            card.inputModality = (v ?? []).length ? v : [...card.inputModality];
-                          }}
-                          class="w-full flex-wrap justify-start"
-                        >
-                          {#each INPUT_MODALITIES as mod (mod)}
-                            <ToggleGroup.Item value={mod}>{mod}</ToggleGroup.Item>
-                          {/each}
-                        </ToggleGroup.Root>
-                      </div>
-
-                      <div class="space-y-1.5">
-                        <Label class={labelCls}>Reasoning effort levels</Label>
-                        <ToggleGroup.Root
-                          type="multiple"
-                          size="sm"
-                          variant="outline"
-                          value={card.reasoningEfforts}
-                          onValueChange={(v) => setEfforts(card, v ?? [])}
-                          class="w-full flex-wrap justify-start"
-                        >
-                          {#each effortOptionsFor(card) as e (e)}
-                            <ToggleGroup.Item value={e}>{e}</ToggleGroup.Item>
-                          {/each}
-                        </ToggleGroup.Root>
-                      </div>
-                    {/if}
-                  </div>
+                  </details>
                 {/each}
               </div>
             {/if}

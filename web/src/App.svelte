@@ -60,19 +60,40 @@
     };
   }
 
-  // Crossfade between the fullscreen gates (login / server-down / app). Plain
-  // `fade` isn't enough: the outgoing screen would stay in flow and push the
-  // incoming one below the fold, so the outro pins it out of flow (and
-  // click-through) for the length of the fade. Declared as separate in:/out:
-  // directives because Svelte caches one `transition:` config for both
-  // directions, which would leave us unable to tell them apart here.
+  // Fullscreen gate swaps (login / change-server, server-down, app). Both
+  // helpers pin the OUTGOING screen out of flow (and click-through) for the
+  // length of the move: left in flow it would push the incoming one below the
+  // fold. Declared as separate in:/out: directives because Svelte caches one
+  // `transition:` config for both directions, which would leave us unable to
+  // tell them apart here.
   // ponytail: the spinner branch gets no transition — its .loading-delay
   // animation keeps it invisible for 0.5s, and an outro would force it to
   // opacity 1 and flash it on fast boots.
-  function screenFade(node, { duration = 180 } = {}, { direction } = {}) {
+  const SCREEN_MS = 200; // one timing for every gate swap
+
+  function pinOut(node, direction) {
     if (direction === 'out')
       Object.assign(node.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
-    return { duration, easing: cubicOut, css: (t) => `opacity: ${t}` };
+  }
+
+  // The gates travel the way every other fullscreen overlay here does (Tools,
+  // Settings, the bottom drawers): up from the bottom, back down on the way
+  // out. u is 1 - t, so the one expression covers both directions.
+  function screenRise(node, { duration = SCREEN_MS } = {}, { direction } = {}) {
+    pinOut(node, direction);
+    return {
+      duration,
+      easing: cubicOut,
+      css: (t, u) => `opacity: ${t}; transform: translateY(${u * 100}%)`,
+    };
+  }
+
+  // The app is the layer UNDERNEATH: it fades in on boot, then holds still
+  // (`hold`) while a gate travels over it, so the swap reads as one page over
+  // another instead of crossfading down to the bare background.
+  function screenFade(node, { duration = SCREEN_MS, hold = false } = {}, { direction } = {}) {
+    pinOut(node, direction);
+    return { duration, easing: cubicOut, css: (t) => (hold ? 'opacity: 1' : `opacity: ${t}`) };
   }
 
   function parseHash() {
@@ -193,15 +214,17 @@
 {:else if app.needsServerSetup || (app.authEnabled && !app.authed)}
   <!-- One screen for both gates: native adds the server-address field on
        top; web renders the same card without it. The wrapper carries the
-       crossfade: transitions go on elements, not components. -->
-  <div in:screenFade out:screenFade>
+       rise: transitions go on elements, not components. -->
+  <div in:screenRise out:screenRise>
     <LoginScreen />
   </div>
 {:else if app.serverDown}
+  <!-- bg-background: the rise only reads as a page over a page while the
+       travelling screen is opaque. -->
   <div
-    class="flex min-h-app items-center justify-center p-safe-pad"
-    in:screenFade
-    out:screenFade
+    class="flex min-h-app items-center justify-center bg-background p-safe-pad"
+    in:screenRise
+    out:screenRise
   >
     <div class="flex w-full max-w-md flex-col items-center gap-4 rounded-xl border bg-card p-8 text-center shadow-sm">
       <div class="space-y-1.5">
@@ -224,7 +247,7 @@
     <div
       class="flex h-app overflow-hidden bg-background text-foreground p-safe"
       in:screenFade
-      out:screenFade
+      out:screenFade={{ hold: true }}
     >
     <!-- Desktop sidebar (user-resizable via the right-edge drag handle) -->
     {#if !desktopSidebarCollapsed}

@@ -911,8 +911,9 @@
 
 <style>
   /* Open/close animation, class-driven like the lightbox's: the wrapper fades
-     while the panel zooms 0.96<->1. Exit holds via .ss-closing until the
-     `visible` state drops the block. */
+     while the panel travels — a 0.96<->1 zoom on desktop, a rise from the
+     bottom below sm. Exit holds via .ss-closing until the `visible` state
+     drops the block. */
   .ss-anim { animation: ss-fade-in 180ms ease-out; }
   .ss-anim > .ss-panel { animation: ss-zoom-in 180ms ease-out; }
   .ss-closing { animation: ss-fade-out 150ms ease-in forwards; }
@@ -928,6 +929,19 @@
   }
   @keyframes ss-zoom-out {
     to { transform: scale(0.96); }
+  }
+  /* Below sm the panel is a fullscreen page rather than the centered card it
+     is at ≥sm, so it rises from the bottom like the app's other fullscreen
+     overlays (App.svelte's gates, the Tools panel) instead of zooming. */
+  @media (width < 40rem) {
+    .ss-anim > .ss-panel { animation-name: ss-rise-in; }
+    .ss-closing > .ss-panel { animation-name: ss-rise-out; }
+  }
+  @keyframes ss-rise-in {
+    from { transform: translateY(100%); }
+  }
+  @keyframes ss-rise-out {
+    to { transform: translateY(100%); }
   }
   @media (prefers-reduced-motion: reduce) {
     .ss-anim,

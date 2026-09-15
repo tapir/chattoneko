@@ -640,9 +640,13 @@
                       <div class="space-y-3 rounded-lg border p-3">
                         <!-- Card header: id, default flags, fetch data, delete -->
                         <div class="flex flex-wrap items-center gap-2">
-                          <!-- Own line on mobile: the role flags would squeeze the
-                               id into an unreadable sliver. -->
-                          <span class="w-full break-all font-mono text-sm sm:w-auto sm:min-w-0 sm:flex-1 sm:break-normal sm:truncate">{card.id}</span>
+                          <!-- Own line on mobile for chat cards only: their role
+                               flags + Fetch would squeeze the id into a sliver. -->
+                          <span
+                            class="{card.endpoint === 'chat'
+                              ? 'w-full break-all sm:w-auto sm:min-w-0 sm:flex-1 sm:break-normal sm:truncate'
+                              : 'min-w-0 flex-1 truncate'} font-mono text-sm"
+                            >{card.id}</span>
                           <!-- Role flags: icon buttons (see ROLES), only the ones
                                this card's endpoint can fill. -->
                           {#each rolesFor(card) as role (role.key)}

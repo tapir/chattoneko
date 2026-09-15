@@ -109,4 +109,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" "chattoneko-${TAG#v}.apk" --title "$TAG" --generate-notes
+        # Idempotent: a re-pushed tag or a re-run of this job finds the release
+        # already there, and `gh release create` dies on "release already
+        # exists" — taking the whole release down with it even though the APK
+        # built fine. Replace the asset on the existing release instead.
+        run: |
+          set -euo pipefail
+          apk="chattoneko-${TAG#v}.apk"
+          gh release create "$TAG" "$apk" --title "$TAG" --generate-notes ||
+            gh release upload "$TAG" "$apk" --clobber

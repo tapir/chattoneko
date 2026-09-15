@@ -292,6 +292,10 @@ class AppState {
     // discarding the token IS the logout (same on web and native).
     this.detachStream();
     setToken("");
+    // Native has no same-origin server to fall back to, so logging out also
+    // forgets the address: the reload lands on "Connect to a サーバー" instead
+    // of the login screen of a server the user just left.
+    if (this.nativeApp) setServerUrl("");
     location.reload();
   }
 

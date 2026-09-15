@@ -1,11 +1,11 @@
 <script>
   import { app } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
-  import { AudioLines, ChevronDown, Download, Eye, EyeOff, FileText, MessageCircle, Trash2, X, Zap } from '@lucide/svelte';
+  import { AudioLines, ChevronDown, Download, Eye, FileText, MessageCircle, Trash2, X, Zap } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
   import ToolToggleRow from './ToolToggleRow.svelte';
   import { Button } from '$lib/components/ui/button';
-  import { Input } from '$lib/components/ui/input';
+  import { Input, PasswordInput } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
   import * as Select from '$lib/components/ui/select';
   import * as ToggleGroup from '$lib/components/ui/toggle-group';
@@ -57,7 +57,6 @@
   // Preloaded from the stored config and sent back as-is on save; the box
   // holds the real value, only visually masked until the eye icon reveals it.
   let apiKey = $state('');
-  let showApiKey = $state(false);
   let uploadMaxBytes = $state('');
   let maxToolIter = $state('');
   let mcpTimeout = $state('');
@@ -574,17 +573,7 @@
             </div>
             <div class="space-y-1.5">
               <Label for="set-api-key" class={labelCls}>API key</Label>
-              <div class="relative">
-                <Input id="set-api-key" type={showApiKey ? 'text' : 'password'} class="h-9 pr-9 font-mono text-sm" bind:value={apiKey} placeholder="sk-…" autocomplete="off" />
-                <button
-                  type="button"
-                  class="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-                  aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
-                  onclick={() => (showApiKey = !showApiKey)}
-                >
-                  {#if showApiKey}<EyeOff class="size-4" strokeWidth={1.75} aria-hidden="true" />{:else}<Eye class="size-4" strokeWidth={1.75} aria-hidden="true" />{/if}
-                </button>
-              </div>
+              <PasswordInput id="set-api-key" label="API key" class="h-9 font-mono text-sm" bind:value={apiKey} placeholder="sk-…" autocomplete="off" />
             </div>
           </section>
 

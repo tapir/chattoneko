@@ -7,7 +7,7 @@
   import Spinner from './Spinner.svelte';
   import { fade, slide } from 'svelte/transition';
   import { Button } from '$lib/components/ui/button';
-  import { Input } from '$lib/components/ui/input';
+  import { Input, PasswordInput } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
   import { Switch } from '$lib/components/ui/switch';
 
@@ -158,7 +158,7 @@
           </div>
           <div class="space-y-1.5">
             <Label for="login-password">Password</Label>
-            <Input id="login-password" type="password" class="h-9" bind:value={password} autocomplete="current-password" required />
+            <PasswordInput id="login-password" class="h-9" bind:value={password} autocomplete="current-password" required />
           </div>
         </div>
       {/if}

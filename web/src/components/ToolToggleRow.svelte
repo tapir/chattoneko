@@ -9,9 +9,13 @@
   // placeholder is the title the tool already has, so an empty box shows what
   // the chat will display.
   //
+  // The name/description column carries a chevron so the row reads as
+  // clickable (it expands to the full description).
+  //
   // Passing disabled greys the row out and kills the switch: the per-chat
   // panel does that for a specialist tool the picked chat model makes
   // pointless. Everything else about the row stays as it is.
+  import { ChevronDown } from '@lucide/svelte';
   import { Switch } from '$lib/components/ui/switch';
   import { Input } from '$lib/components/ui/input';
 
@@ -36,14 +40,21 @@
   </div>
   <button
     type="button"
-    class="min-w-0 flex-1 text-left"
+    class="flex min-w-0 flex-1 items-center gap-2 text-left"
     aria-expanded={expanded}
     onclick={() => (expanded = !expanded)}
   >
-    <div class="truncate text-sm leading-5 font-medium">{tool.name}</div>
-    <div class="{expanded ? '' : 'line-clamp-2'} text-xs text-muted-foreground">
-      {tool.description || tool.server}
+    <div class="min-w-0 flex-1">
+      <div class="truncate text-sm leading-5 font-medium">{tool.name}</div>
+      <div class="{expanded ? '' : 'line-clamp-2'} text-xs text-muted-foreground">
+        {tool.description || tool.server}
+      </div>
     </div>
+    <ChevronDown
+      class="size-4 shrink-0 text-muted-foreground transition-transform {expanded ? 'rotate-180' : ''}"
+      strokeWidth={1.75}
+      aria-hidden="true"
+    />
   </button>
   {#if onTitle}
     <div class="w-36 shrink-0">

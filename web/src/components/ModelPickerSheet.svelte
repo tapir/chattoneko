@@ -5,8 +5,8 @@
 
   // Mobile picker: a single centered model chip in the composer bar opens a
   // bottom drawer (vaul) holding both pickers — a segmented reasoning-effort
-  // control and large tappable model rows. The popover Select used on desktop
-  // is too small for touch (targets < 44px). Desktop keeps the popover Select.
+  // control and large tappable model rows. Desktop uses the popover Select,
+  // whose targets are < 44px and too small for touch.
   let {
     models = [],
     currentModel = '',

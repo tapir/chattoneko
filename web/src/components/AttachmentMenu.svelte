@@ -43,9 +43,8 @@
   );
 
   // A row fires and closes at once — the sheet has no business staying up
-  // under the system share dialog. The work then runs on the tap's user
-  // activation, which Chrome keeps for ~5s: enough for a LAN fetch, and
-  // pre-fetching wouldn't help (same clock starts at the tap).
+  // under the system share dialog. The work runs on the tap's user activation,
+  // which Chrome keeps for ~5s: enough for a LAN fetch.
   function run(row) {
     const target = att;
     attachMenu.close();

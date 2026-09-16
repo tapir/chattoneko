@@ -1,12 +1,11 @@
 <script>
   // <img> for an image attachment. Three states, by where the picture is:
   //  - staged (att.previewUrl): only the local file exists; show it.
-  //  - just uploaded (app.previewFor(id)): the local copy is still on screen
-  //    from the pending bubble, so keep painting THAT until the server copy
-  //    is fully decoded, then drop the preview — which flips `src` to the
-  //    server URL by itself. A fresh <img> on that URL would paint
-  //    progressively over a slow link — a picture already on screen visibly
-  //    re-drawing itself.
+  //  - uploaded but still previewed (app.previewFor(id)): keep painting the
+  //    local copy until the server copy is fully decoded, then drop the
+  //    preview, which flips `src` to the server URL by itself. A fresh <img>
+  //    on that URL would paint progressively over a slow link — a picture
+  //    already on screen visibly re-drawing itself.
   //  - persisted: the server URL.
   import { api } from '../lib/api.js';
   import { app } from '../lib/state.svelte.js';

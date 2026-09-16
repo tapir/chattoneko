@@ -9,7 +9,7 @@
   // all of it the app's own chrome. The <audio> element is hidden and only does
   // the decoding: its built-in controls are browser-drawn (their own corners,
   // their own palette, no theme tokens) and their shadow root swallows the
-  // pointer events lib/longpress.js needs, so a long press there went nowhere.
+  // pointer events lib/longpress.js needs.
   import { Pause, Play } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Slider } from '$lib/components/ui/slider';

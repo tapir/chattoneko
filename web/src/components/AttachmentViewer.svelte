@@ -1,19 +1,16 @@
 <script>
-  // Fullscreen attachment lightbox. Text attachments render as inert
-  // monospace; images get a pan/zoom stage. Opened by clicking any
-  // attachment in a message (viewer.open() in lib/viewer.svelte.js) —
-  // App.svelte mounts this once at the root.
+  // Fullscreen attachment lightbox, opened by viewer.open() in
+  // lib/viewer.svelte.js and mounted once at the root by App.svelte. Text
+  // attachments render as inert monospace; images get a pan/zoom stage.
   //
-  // A native <dialog> (the same primitive Confirm uses) puts the
-  // overlay in the browser TOP LAYER: it escapes every stacking context,
-  // traps focus, and closes on Escape for free — no z-index needed.
+  // A native <dialog> puts the overlay in the browser TOP LAYER: it escapes
+  // every stacking context, traps focus and closes on Escape — no z-index.
   //
-  // Colouring splits by pane. The IMAGE viewer is black in both themes — the
-  // deliberate departure from the semantic-token rule that makes pictures pop
-  // — so its chrome is raw white-on-black. The TEXT pane wears the app's own
-  // tokens and follows the theme: `.dark` sits on <html> and the top layer
-  // changes painting, not DOM ancestry, so tokens and `dark:` variants
-  // resolve inside the dialog exactly as they do everywhere else.
+  // Colouring splits by pane. The IMAGE viewer is black in both themes, a
+  // deliberate departure from the semantic-token rule that makes pictures pop,
+  // so its chrome is raw white-on-black. The TEXT pane wears the app's tokens:
+  // `.dark` sits on <html> and the top layer changes painting, not DOM
+  // ancestry, so tokens and `dark:` variants resolve here as everywhere else.
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
   import { formatBytes } from '../lib/format.js';
@@ -34,13 +31,13 @@
   } = $props();
 
   let isImage = $derived(attachment?.kind === 'image');
-  // A PDF is stored under the binary kind, so it is named by its mime — and it
-  // joins the pictures' black media viewer rather than the themed text pane.
+  // A PDF is stored under the binary kind and named by its mime; it uses the
+  // black media pane, not the themed text pane.
   let pdf = $derived(isPdf(attachment));
   let media = $derived(isImage || pdf);
   // <img>/<a> can't carry the Authorization header; attachmentUrl appends
-  // ?token= (the server accepts a token on GETs). Keeping the real URL
-  // visible to the browser also keeps download trivial.
+  // ?token= (the server accepts a token on GETs). A real URL in the browser
+  // also keeps download trivial.
   let url = $derived(
     attachment ? attachment.previewUrl || api.attachmentUrl(attachment.id) : ''
   );
@@ -48,7 +45,7 @@
   // ---- gallery navigation ----
   // `items` is the message's image set. With more than one member the viewer
   // gains prev/next (swipe, arrow keys, side chevrons) plus a position
-  // counter; a text file or a lone image opens exactly as it always did.
+  // counter; a text file or a lone image gets neither.
   let navIndex = $derived(
     Array.isArray(items) ? items.findIndex((a) => a.id === attachment?.id) : -1,
   );
@@ -174,9 +171,8 @@
 
   // The page keeps its rendered size and the stage transform fits it, exactly
   // like a zoomed-out picture — that is what buys the same pinch / wheel /
-  // double-tap gestures and the same pan bounds. Measured once, off the first
-  // painted page: a landscape sheet later in the document keeps the portrait
-  // fit (recompute per page if mixed-orientation docs ever matter).
+  // double-tap gestures and the same pan bounds. Measured once off the first
+  // painted page, so a landscape sheet further in keeps the portrait fit.
   let pdfReady = $state(false);
   $effect(() => {
     if (!pdf || !pdfReady || !img || !stage) return;
@@ -440,7 +436,7 @@
 
     if (pointers.size > 0) return;
     // Capture the flick before the drag bookkeeping is reset: on an unzoomed
-    // picture a horizontal drag is gallery navigation, anything else was a pan.
+    // picture a horizontal drag is gallery navigation, anything else is a pan.
     const flick =
       drag && e.pointerId === drag.id
         ? { dx: e.clientX - drag.x, dy: e.clientY - drag.y }
@@ -708,9 +704,9 @@
               onerror={() => (imgFailed = true)}
             />
           {:else}
-            <!-- The page keeps its rendered size and the stage transform fits
-                 it, exactly like a zoomed-out picture: same gestures, same
-                 pan bounds, same chrome. onready is the first painted page. -->
+            <!-- The stage transform fits the page, so it shares the picture's
+                 gestures, pan bounds and chrome. onready is the first painted
+                 page. -->
             <div bind:this={img} class="shrink-0" style={imageStyle}>
               <PdfPreview
                 att={attachment}
@@ -762,11 +758,7 @@
         {/if}
 
         {#if imgLoaded && scale === minScale}
-          <!-- Touch hint: gestures are invisible, so say them once. Hidden
-               on hover-capable devices, which get the +/- buttons instead,
-               and once zoomed, where it would sit on top of the picture.
-               No nowrap: on narrow phones the sentence wraps to two lines
-               instead of bleeding off both screen edges. -->
+          <!-- Gesture hint slot at fit zoom; renders nothing. -->
         {/if}
       </div>
     {:else}

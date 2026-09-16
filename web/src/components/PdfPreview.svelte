@@ -75,8 +75,8 @@
   class={cn('pdf', natural && 'pdf-natural', ready ? 'ready' : 'animate-pulse bg-muted', cls)}
 >
   {#if Pdf}
-    <!-- currentPage is the controlled prop (pageNum is its legacy alias); with
-         showButtons empty the library renders no navigation of its own. -->
+    <!-- currentPage is the controlled prop; with showButtons empty the
+         library renders no navigation of its own. -->
     <Pdf
       {url}
       {scale}

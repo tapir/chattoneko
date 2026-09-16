@@ -1,15 +1,13 @@
 <script>
-  // Image attachments as a gallery instead of a ragged flex-wrap row: one
-  // picture keeps its natural aspect ratio (nothing to tidy, and cropping a
-  // lone image would be a regression), two or more become a grid of square
-  // thumbnails. Columns come from CONTAINER queries, not viewport
-  // breakpoints, because the chat column width is user-resizable (sidebar
-  // drag handle) and collapses on mobile.
+  // Image attachments as a gallery: one picture keeps its natural aspect
+  // ratio, two or more become a grid of square thumbnails. Columns come from
+  // CONTAINER queries, not viewport breakpoints, because the chat column width
+  // is user-resizable (sidebar drag handle) and collapses on mobile.
   //
-  // Past `cap` images the last cell darkens into a "+N" tile — the message
-  // stays scannable when a tool gathers a dozen pictures, and tapping the
-  // tile opens the lightbox AT that image, where the rest are one swipe /
-  // arrow-key away (viewer.open(att, items) hands the whole set over).
+  // Beyond `cap` images the last cell darkens into a "+N" tile, keeping a
+  // message scannable when a tool gathers a dozen pictures; tapping the tile
+  // opens the lightbox AT that image, where the rest are one swipe / arrow-key
+  // away (viewer.open(att, items) hands the whole set over).
   import { viewer } from '../lib/viewer.svelte.js';
   import { attachMenu } from '../lib/attachmenu.svelte.js';
   import { longPress } from '../lib/longpress.js';

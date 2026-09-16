@@ -28,8 +28,7 @@ import { copyText } from './clipboard.js';
 async function fetchBlob(att) {
   // no-store: an <img> already on screen caches the same URL without CORS
   // headers, and a poisoned cache entry makes this fail ("Failed to fetch")
-  // for a picture that is visibly there. Servers send Vary: Origin now, which
-  // fixes it for good — this keeps working against older ones.
+  // for a picture that is visibly there.
   const res = await fetch(att.previewUrl || api.attachmentUrl(att.id), { cache: 'no-store' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.blob();

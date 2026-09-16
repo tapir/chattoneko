@@ -11,7 +11,7 @@ function base() {
 }
 
 // fetch defaults: the JWT travels as a Bearer token on every request (web
-// and native alike) — there are no cookies or credentials anymore.
+// and native alike); nothing here uses cookies or credentials.
 function baseInit(init = {}) {
   const headers = { ...(init.headers || {}) };
   const token = getToken();
@@ -112,8 +112,8 @@ export function normalizeMessage(m) {
     name: "",
     status: "complete",
     ...m,
-    // Reasoning is one entry per tool-loop turn. A plain string is a pre-002
-    // row (or an old server): show it as the single turn it was.
+    // Reasoning is one entry per tool-loop turn; a non-array value is wrapped
+    // as the single turn it describes.
     reasoning: Array.isArray(m?.reasoning)
       ? m.reasoning
       : m?.reasoning
@@ -184,7 +184,7 @@ export const api = {
     const usage = data?.usage ?? null;
     return { chat, messages, usage };
   },
-  // Search chats by title (#4). Returns [] for empty query.
+  // Search chats by title. Returns [] for empty query.
   searchChats: async (q) => {
     const data = await request("GET", `/chats?q=${encodeURIComponent(q)}`);
     const arr = Array.isArray(data) ? data : (data?.chats ?? []);

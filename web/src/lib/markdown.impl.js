@@ -5,9 +5,8 @@
 // document.
 //
 // Math runs through KaTeX in MathML mode: native <math> rendered with the
-// browser's system math fonts, zero webfont downloads — the same output shape
-// Temml produced before, and incremark handles $$..$$, $..$, \[..\] and \(..\)
-// natively, including mid-stream.
+// browser's system math fonts, zero webfont downloads. incremark handles
+// $$..$$, $..$, \[..\] and \(..\) natively, including mid-stream.
 //
 // This module is ONLY reachable through the dynamic import in markdown.js, so
 // rolldown keeps it in a separate `markdown` chunk fetched after first paint.

@@ -1,9 +1,8 @@
-// Clipboard helper. Prefers the async Clipboard API, but that only exists in
-// secure contexts (HTTPS/localhost) — over plain HTTP (e.g. http://host:8080)
-// navigator.clipboard is undefined, and writeText can also reject (permission
-// denied, focus). Fall back to the legacy textarea+execCommand path in those
-// cases so copy works everywhere. Resolves false instead of throwing only if
-// both paths fail.
+// Clipboard helper. navigator.clipboard exists only in secure contexts
+// (HTTPS/localhost) — over plain HTTP (e.g. http://host:8080) it is undefined,
+// and writeText can also reject (permission denied, no focus). The
+// textarea+execCommand path covers those, so copy works everywhere. Resolves
+// false instead of throwing only if both paths fail.
 
 export async function copyText(text) {
   if (!text) return false;
@@ -12,7 +11,7 @@ export async function copyText(text) {
       await navigator.clipboard.writeText(text);
       return true;
     } catch {
-      // fall through to the legacy path
+      /* fall through */
     }
   }
   return legacyCopy(text);

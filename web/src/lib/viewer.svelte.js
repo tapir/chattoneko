@@ -29,9 +29,7 @@ class ViewerState {
     return this.items.findIndex((a) => a.id === this.attachment.id);
   }
 
-  // Move `delta` steps through the set, wrapping at both ends: a gallery you
-  // had to close and reopen to reach the first picture again is a gallery
-  // nobody browses.
+  // Move `delta` steps through the set, wrapping at both ends.
   step(delta) {
     const n = this.items?.length ?? 0;
     if (n < 2) return;

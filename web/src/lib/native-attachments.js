@@ -120,11 +120,10 @@ function pickedName(f, blob) {
 // by addAttachments().
 //
 // Deliberately NOT @capacitor/camera's chooseFromGallery: that routes through
-// Ionic's ioncameralib, which starts a translucent trampoline activity (the
+// Ionic's ioncameralib, which starts a translucent trampoline activity (a
 // first-run flicker) and then covers the screen with its own dark spinner
-// overlay while it copies the pick. The camera plugin's other gallery path
-// (pickImages) is deprecated, so the photo picker comes from the file-picker
-// plugin the Files row already uses — no new dependency.
+// overlay while it copies the pick. The file-picker plugin the Files row uses
+// goes straight to the system picker.
 export function pickPhotos() {
   return pickVia((FilePicker) => FilePicker.pickImages(), "gallery photo");
 }

@@ -2,10 +2,10 @@
 //
 // The soft keyboard shrinks the viewport in ONE jump — the native WebView is
 // resized outright, mobile browsers do it via interactive-widget=resizes-content
-// (index.html) — so the whole shell snapped upward instantly. `100dvh` cannot
-// be transitioned (viewport units resolve at used-value time, so no computed
-// value ever changes), so the height is mirrored into a px var on <html> for
-// .h-app / .min-h-app to read and CSS animates that instead.
+// (index.html). `100dvh` cannot be transitioned (viewport units resolve at
+// used-value time, so no computed value ever changes), so the height is
+// mirrored into a px var on <html> for .h-app / .min-h-app to read and CSS
+// animates that instead.
 //
 // ponytail: no visualViewport.offsetTop compensation — a platform that PANS
 // for the keyboard (iOS Safari) instead of resizing can leave the shell above

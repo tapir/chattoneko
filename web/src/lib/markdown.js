@@ -10,8 +10,7 @@
 //
 // The split only works because markdown.impl.js is imported dynamically. A
 // static `import ... from './markdown.impl.js'` anywhere in the reachable
-// graph merges it back into the entry chunk — the exact regression this module
-// exists to prevent.
+// graph merges it back into the entry chunk and defeats the split.
 //
 // While the chunk is in flight `createRenderer` returns null and MessageItem
 // shows escaped plain text instead, so a message is readable immediately and

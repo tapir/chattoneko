@@ -2,17 +2,12 @@ import { streamUrl } from "./server.js";
 
 // The app's ONE SSE connection per tab.
 //
-// Browsers cap an origin at 6 concurrent HTTP/1.1 connections. This used to
-// be three persistent streams per tab (per-chat deltas, all-chats lifecycle,
-// titles), so two open tabs saturated the pool and every fetch from the
-// second tab — including the send that starts a generation — queued inside
-// the browser until the first tab happened to free a socket.
-//
-// One multiplexed connection instead: /api/stream always carries the
-// lifecycle + title events of every chat, and ?chat=<id>&after=<seq> adds the
-// open chat's delta half. That half implements the B4 resume contract:
-// events are deduped by seq, reconnects pass ?after=<lastSeq>, and the stream
-// reconnects on a slow poll after clean closes (idle/done).
+// Browsers cap an origin at 6 concurrent HTTP/1.1 connections, so a tab holds
+// a single socket and multiplexes both halves over it: /api/stream always
+// carries the lifecycle + title events of every chat, and
+// ?chat=<id>&after=<seq> adds the open chat's delta half. That half is
+// resumable: events are deduped by seq, reconnects pass ?after=<lastSeq>, and
+// the stream reconnects on a slow poll after clean closes (idle/done).
 
 const RETRY_MS = 1000; // unexpected drop
 const POLL_MS = 4000; // clean close (server sent idle/done)

@@ -1,24 +1,24 @@
-# Chattoねこ
+# ChattoNeko
 
 ![ChattoNeko](ss.png)
 
 Your own cute cat AI assistant, self-hosted.
 
-"Chatto" is the Japanese pronunciation of the English word "chat" and "neko" is Japanese for cat. ChattoNeko is a chat application for large language models that you run on your own machine. It is made for personal self-hosted use, not a SaaS product: no accounts, no multi-tenancy, no billing.
+*Chatto* is the Japanese pronunciation of the English word "chat"; *neko* is Japanese for "cat." ChattoNeko is a chat client for OpenAI-compatible APIs — it plays best with OpenRouter, which exposes extra model metadata, but it works fully with any other OpenAI-compatible provider. You run it on your own server or machine. It is made for personal, self-hosted use, not as a SaaS product: no accounts, no multi-tenancy, no billing.
 
-It is extremely small. Everything is one static Go binary with the web UI embedded, about 7 MB after UPX packing. The Docker image is about 15 MB and the Android APK is about 9 MB. Small as it is, it has what you expect from a chat app: streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login.
+It is extremely small. Everything is one static Go binary with the web UI embedded, about 8 MB after UPX packing. The Docker image is roughly 16 MB and the Android APK about 10 MB. Small as it is, it has what you expect from a chat app — streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login — plus a few unique features.
 
 ## What it does
 
-- Chat with any model through an OpenAI-compatible (chat completions) API. Keep a list of favorites and switch per chat.
-- Replies stream in as they are written, and can be stopped at any time.
-- Models that reason out loud show their thinking in collapsible blocks, one per step of a tool-using reply, each next to the tool calls it produced.
-- Send images, text files, audio and PDFs as attachments. Pictures and recordings are converted in your browser as you attach them (images to WebP at most 1280px wide, and never shrunk by more than half; audio to WebM/Opus), and a picture the model hands you goes through that same image conversion on the server, so both land in the chat in the same shape. A file the picked model can't read is kept anyway and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that CAN read it (the `vision`, `document` and `transcription` tools), once you flag one in settings.
-- Tools the model can call, plus any MCP server you add.
-- The model can hand you files back as download links, and show images inline.
-- Chats are saved and titled automatically; search, rename, delete.
+- Chat with any model through an OpenAI-compatible API (chat completions, speech, transcriptions, images). Keep a list of favorite models and switch per chat.
+- Replies stream in as they are written and can be stopped at any time.
+- Models that reason out loud show their thinking in collapsible blocks — one per step of a tool-using reply, each next to the tool calls it produced.
+- Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted in your browser as you attach them (images to WebP at most 1280px wide, never shrunk by more than half; audio to WebM/Opus), and a picture the model hands back goes through that same image conversion on the server, so both land in the chat in the same shape. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcription` tools), once you flag one in settings.
+- The model can call tools, plus any MCP server (HTTP-only) you add.
+- The model can hand files back to you as download links, or show images, PDFs, and audio inline.
+- Chats are saved and titled automatically; search, rename, and delete.
 - Regenerate a reply, or edit an earlier message and take the conversation elsewhere.
-- Each chat remembers its own model, reasoning effort and tools.
+- Each chat remembers its own model, reasoning effort, and tools.
 - Optional single-user login.
 - A plain JSON API you can script against.
 
@@ -27,10 +27,13 @@ It is extremely small. Everything is one static Go binary with the web UI embedd
 One program plays three parts:
 
 - an API server (REST plus SSE for streaming),
-- a web client, the embedded SPA served at `/`,
-- and the same web client wrapped with Capacitor into an Android app that talks to any ChattoNeko server over the network. Point it at your server address and you have a mobile client for the same instance, same history.
+- the embedded SPA web client served at `/`,
+- and the same web client wrapped with Capacitor into an Android app that talks to any ChattoNeko server over the network. Point it at your server's address and you have a mobile client for the same instance and the same history.
 
 Everything the server keeps — configuration, chats, messages, attachments, model metadata — lives in a single SQLite database file. Backing up means copying that one file; moving servers means moving that one file.
+
+> **IMPORTANT:**
+> Because file conversion happens client-side in the browser, HTTPS is required for certain browser APIs. Put the app behind a reverse proxy (nginx or HAProxy) with your own certificate, or behind Cloudflare's proxy with its SSL certs.
 
 ## Run it
 
@@ -46,7 +49,7 @@ docker run -d --name chattoneko \
 
 Then open http://localhost:8080.
 
-From source. You need [Go](https://go.dev), [Node.js](https://nodejs.org), [sqlc](https://sqlc.dev) and optionally [UPX](https://upx.github.io):
+From source. You need [Go](https://go.dev), [Node.js](https://nodejs.org), [sqlc](https://sqlc.dev), and optionally [UPX](https://upx.github.io):
 
 ```bash
 git clone https://github.com/tapir/chattoneko && cd chattoneko
@@ -57,76 +60,89 @@ make run          # builds the web UI, generates queries, packs the binary, star
 
 The Android APK is built with `make mobile-apk`.
 
-Both artifacts carry a version, shown in the sidebar's footer: `VERSION` (default `1.0.0-local`) is stamped into the binary as `main.version` — served on `/api/meta` — and into the APK as its `versionName`. The release workflow passes the git tag, so `make build VERSION=1.2.3` reproduces what a release ships.
+Both artifacts carry a version, shown in the sidebar's footer. `VERSION` (default `1.0.0-local`) is stamped into the binary as `main.version` — served on `/api/meta` — and into the APK as its `versionName`. The release workflow passes the git tag, so `make build VERSION=1.2.3` reproduces exactly what a release ships.
 
 ## Configuration
 
 There is no config file. On first start the database is seeded with defaults and the server comes up. All configuration happens after your first visit to the page: enter your provider's base URL and API key, pick your models, done. Settings are stored in the database and apply live, no restart needed.
 
-If your provider is OpenRouter, a lot of this is automated. ChattoNeko reads the provider's `/models` endpoint, and OpenRouter reports everything it uses: context length, input modalities, supported reasoning efforts and the default effort. Pick a model and its capabilities are filled in for you, which is also how the app knows whether a model can see images or read PDFs. Other OpenAI-compatible providers report less; missing values fall back to sensible defaults and can be edited by hand.
+If your provider is OpenRouter, much of this is automated. ChattoNeko reads the provider's `/models` endpoint, and OpenRouter reports everything it uses: context length, input modalities, supported reasoning efforts, and the default effort. Pick a model and its capabilities are filled in for you — which is also how the app knows whether a model can see images or read PDFs. Other OpenAI-compatible providers report less; missing values fall back to sensible defaults and can be edited by hand.
+
+### Recommended Configuration
+
+This is my personal config trying to achieve cost-efficiency with good performance. I was uing Gemini, ChatGPT and Claude for my daily assistance and this setup is quite capable compared to them. If you're having multiple conversations a day, it's still cheaper than their lowest tier monthly subscriptions with service like OpenRouter.
+
+| Purpose | Model | Default Reasoning | Info |
+| --- | --- | --- | --- |
+| Chat | DeepSeek 4.0 Flash | low | It's dirt cheap and perfectly capable for everyday assistance, I rarely look for any other model |
+| Chat | Qwen 3.8 2.4T A95B  | xhigh | Relentless thinker. Use only if you need a detailed report or analysis on a subject. It's not super cheap but 10x cheaper than comparable models like Opus etc...  |
+| Task | Gemma 4 31B | low | Very fast, cheap |
+| Vision | Gemma 4 31B | low | Very good vision capability, cheap |
+| File (Document) | Mistral Large 2512 | low | OKish price, top-notch PDF performance |
+| Transcription | Whisper Large 3 | --- | Industry standard |
+| Speech | --- | --- | Not yet implemented |
+| Image Gen | --- | --- | Not yet implemented |
+
+I also use Exa.ai's web search tool. I usually disable its fetch tool since we have an integrated fetcher that is quite capable.
 
 ### Environment variables
 
-All optional. They are read once at startup.
+All optional, read once at startup.
 
 | Variable | Meaning |
 | --- | --- |
 | `CHATTO_USERNAME` | Login name. Set both this and the password to require a sign-in; if either is missing there is no auth at all. |
 | `CHATTO_PASSWORD` | Login password, used as-is. Nothing about the login is written to the database; changing it means restarting. |
-| `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time` tool result so agents know where you are. |
+| `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time` tool's result so agents know where you are. |
 
-### Command line flags
+### Command-line flags
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `-db` | `chatto.db` next to the executable | SQLite database file |
-| `-listen` | `:8080` | HTTP listen address, fixed for the lifetime of the process |
-| `-debug` | off | Debug logging |
+| `-db` | `chatto.db` next to the executable | SQLite database file. |
+| `-listen` | `:8080` | HTTP listen address, fixed for the lifetime of the process. |
+| `-debug` | off | Debug logging. |
 
-The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `/var/lib/chattoneko` covers all state. A bind mount works as well: the entrypoint fixes the directory ownership at start, then drops to uid/gid 1000.
+The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `/var/lib/chattoneko` covers all state. A bind mount works too: the entrypoint fixes directory ownership at start, then drops to uid/gid 1000.
 
 ## Tools
 
 Seven integrated tools, each toggleable per chat and globally in settings:
 
-- `time` — the server's current date, time and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow", "next Friday" or "near me".
-- `code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8 and JSON encode/decode. No file, network, environment or debug access, capped by time, by work, and by output size. The tool description doubles as a Lua 5.1 → 5.4 migration guide for the model (what was renamed or removed, integer/float semantics, patterns vs regex, table borders).
-- `create_file` — gives you a file, and shows it on the reply in the same step: an image appears inline, a text file opens as a preview, anything else downloads when you click it. The model either writes the file (text as text, binary as base64) or passes a URL and we download it, which keeps the bytes out of the model's context.
-- `fetch` — reads a URL and returns its text to the model: a page, a JSON API, anything textual, truncated and labelled when it is very large. A body that isn't text is an error rather than base64 the model can't read — handing you a file from a URL is `create_file`'s job.
-- `vision`, `document`, `transcription` — ask a specialist model about an attachment the chat model can't handle itself and bring the answer back: an image, a PDF, or the recording's own text (the transcription model is added on the audio transcription endpoint and called through it, so what comes back is a transcript the chat model then works from). You flag the specialists in settings: a **Vision** model, a **Document** model and a **Transcription** model. Each one is offered only to a chat model that actually lacks that input — a model that sees images is never offered `vision`, and its row in the chat's Tools panel is greyed out and dead while that model is picked. Each exchange is one question and one answer: the specialist gets the file and the question, never your conversation — the transcription one gets the file only, since that endpoint takes no question.
+- `time` — the server's current date, time, and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow," "next Friday," or "near me."
+- `code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8, and JSON encode/decode. No file, network, environment, or debug access; capped by time, by work, and by output size.
+- `create_file` — shows you a file in the conversation window: an image appears inline, a text file opens as a preview, audio shows up as a player, PDFs get an inline preview, and anything else downloads when you click it. The model either writes the file (text as text, binary as base64) or passes a URL that the tool downloads, which keeps the bytes out of the model's context.
+- `fetch` — reads a URL and returns its text to the model: a page, a JSON API, anything textual, truncated and labelled when very large. A body that isn't text is an error rather than base64 the model can't read — handing you a file from a URL is `create_file`'s job. Uses the `utls` library to impersonate real browsers.
+- `vision`, `document`, `transcription` — ask a specialist model about an attachment the chat model can't handle itself and bring the answer back: an image, a PDF, or the recording's own text (the transcription model is reached through the audio transcription endpoint, so what comes back is a transcript the chat model then works from). You flag the specialists in settings: a **Vision** model, a **Document** model, and a **Transcription** model. Each specialist is offered only to a chat model that actually lacks that input — a model that sees images is never offered `vision`, and its row in the chat's Tools panel is greyed out and inert while that model is selected. Each exchange is one question and one answer: the specialist gets the file and the question, never your conversation — the transcription specialist gets the file only, since that endpoint takes no question.
 
-Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart. Each server card carries a **Fetch** button top right, next to the delete icon, that dials it and lists its tools right there with their own on/off defaults, so the global **Tool defaults** list stays purely the integrated tools above. Every MCP tool row also has an optional **title** box: the friendly label the chat shows while that tool runs (`web_exa_search` → "Searching web…") instead of the raw name. Leave it empty to keep the tool's own title, or the name when it has none — integrated tools have theirs built in.
+Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart. Each server card carries a **Fetch** button at the top right, next to the delete icon, that dials it and lists its tools right there with their own on/off defaults — so the global **Tool defaults** list stays purely the integrated tools above. Every MCP tool row also has an optional **title** box: the friendly label the chat shows while that tool runs (`web_exa_search` → "Searching web…") instead of the raw name. Leave it empty to keep the tool's own title, or the name when there is none — the integrated tools have their titles built in.
 
 ## FAQ
 
-**Why is there no built-in web search or page fetching?**
-
-Because doing it reliably is extremely hard. Anti-bot detection sits in front of almost everything worth reading, and a server-side fetcher either gets blocked or turns into a full browser-impersonation project of its own. Exa.ai has a free tier that is a perfect fit for personal usage — add their MCP server and you have search and content retrieval without ChattoNeko carrying any of that complexity.
-
 **Why no multi-user?**
 
-It is small and meant for self-hosted personal use. Accounts, permissions, quotas and isolation are most of the complexity in a chat product and none of the benefit when the one user is you.
+It is small and meant for self-hosted personal use. Accounts, permissions, quotas, and isolation are most of the complexity in a chat product, and none of the benefit when the one user is you.
 
 **What if I want my family to use it?**
 
-Run one instance per person. The image is 15 MB and idles at almost nothing, so ten of them on a single commodity server is not a thought you need to have twice. Everybody gets a private instance with their own database, their own models and their own API key.
+Run one instance per person. The image is 15 MB and idles at almost nothing, so ten of them on a single commodity server is not a thought you need to have twice. Everybody gets a private instance with their own database, their own models, and their own API key.
 
 **Will there ever be image or video generation?**
 
-Probably not. There is no standard API for it: OpenAI has one, no other provider implements it, and ChattoNeko only speaks OpenAI-compatible APIs. Keeping that single-provider contract is what keeps the whole thing simple.
+Image yes, video no. OpenAI has a proper image-generation API but no video one.
 
 **What about transcription and speech?**
 
-That will probably happen, yes. Speech-to-text and text-to-speech have de facto standard shapes that many providers implement, unlike generation.
+Yes. Speech-to-text and text-to-speech have de-facto-standard shapes that many providers implement, unlike video generation.
 
 **Why does attaching a recording fail in my browser?**
 
-Audio is transcoded in the browser (to WebM/Opus), which needs the WebCodecs `AudioEncoder`: Chrome and Edge 94+, Firefox on desktop 130+, Safari 26+. Firefox for Android and Safari 18 and older have none, and WebCodecs also requires a secure context — so opening the app over plain HTTP at a LAN address (`http://192.168.1.20:8080`) has no audio encoder either, in any browser. Use `http://localhost:8080`, put the server behind HTTPS, or use the Android app. Images are unaffected: canvas encoding works everywhere and needs no secure context.
+Audio is transcoded in the browser (to WebM/Opus), which needs the WebCodecs `AudioEncoder`: Chrome and Edge 94+, Firefox on desktop 130+, Safari 26+. Firefox for Android and Safari 18 and older have none, and WebCodecs also requires a secure context — so opening the app over plain HTTP at a LAN address (`http://192.168.1.20:8080`) gives you no audio encoder either, in any browser. Use `http://localhost:8080`, put the server behind HTTPS, or use the Android app. Images are unaffected.
 
 **iOS?**
 
-Open for contributions. The mobile app is Capacitor plus a WebView around the same web UI, so an iOS build should not be much work. The blocker is hardware: no Mac and no iPhone here so I can't develop or test.
+Open for contributions. The mobile app is Capacitor plus a WebView around the same web UI, so an iOS build should not be much work. The blocker is hardware: there's no Mac or iPhone here, so I can't develop or test.
 
 ## Disclaimer
 
-All cat pictures are from [magnific.com](https://magnific.com)
+All cat pictures are from [magnific.com](https://magnific.com).

@@ -10,7 +10,7 @@ It is extremely small. Everything is one static Go binary with the web UI embedd
 
 ## What it does
 
-- Chat with any model through an OpenAI-compatible API (chat completions, speech, transcriptions, images). Keep a list of favorite models and switch per chat.
+- Chat with any model through an OpenAI-compatible API (chat completions, transcriptions, speech). Keep a list of favorite models and switch per chat.
 - Replies stream in as they are written and can be stopped at any time.
 - Models that reason out loud show their thinking in collapsible blocks — one per step of a tool-using reply, each next to the tool calls it produced.
 - Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted in your browser as you attach them (images to WebP at most 1280px wide, never shrunk by more than half; audio to WebM/Opus), and a picture the model hands back goes through that same image conversion on the server, so both land in the chat in the same shape. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcription` tools), once you flag one in settings.
@@ -112,8 +112,9 @@ Seven integrated tools, each toggleable per chat and globally in settings:
 - `time` — the server's current date, time, and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow," "next Friday," or "near me."
 - `code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8, and JSON encode/decode. No file, network, environment, or debug access; capped by time, by work, and by output size.
 - `create_file` — shows you a file in the conversation window: an image appears inline, a text file opens as a preview, audio shows up as a player, PDFs get an inline preview, and anything else downloads when you click it. The model either writes the file (text as text, binary as base64) or passes a URL that the tool downloads, which keeps the bytes out of the model's context.
+- `speak` — reads text aloud and puts the recording in the conversation as an audio player, the same way `create_file` puts a file there. Any message can also be read aloud straight from its action row, which streams the audio without storing it.
 - `fetch` — reads a URL and returns its text to the model: a page, a JSON API, anything textual, truncated and labelled when very large. A body that isn't text is an error rather than base64 the model can't read — handing you a file from a URL is `create_file`'s job. Uses the `utls` library to impersonate real browsers.
-- `vision`, `document`, `transcription` — ask a specialist model about an attachment the chat model can't handle itself and bring the answer back: an image, a PDF, or the recording's own text (the transcription model is reached through the audio transcription endpoint, so what comes back is a transcript the chat model then works from). You flag the specialists in settings: a **Vision** model, a **Document** model, and a **Transcription** model. Each specialist is offered only to a chat model that actually lacks that input — a model that sees images is never offered `vision`, and its row in the chat's Tools panel is greyed out and inert while that model is selected. Each exchange is one question and one answer: the specialist gets the file and the question, never your conversation — the transcription specialist gets the file only, since that endpoint takes no question.
+- `vision`, `document`, `transcription` — ask a specialist model about an attachment the chat model can't handle itself and bring the answer back: an image, a PDF, or the recording's own text (the transcription model is reached through the audio transcription endpoint, so what comes back is a transcript the chat model then works from). You flag the vision and document models on their cards in settings; the transcription model is a single id in the **Audio** section, since there is only ever one. Each specialist is offered only to a chat model that actually lacks that input — a model that sees images is never offered `vision`, and its row in the chat's Tools panel is greyed out and inert while that model is selected. Each exchange is one question and one answer: the specialist gets the file and the question, never your conversation — the transcription specialist gets the file only, since that endpoint takes no question.
 
 Beyond those you can add MCP servers in settings: an HTTP (streamable) endpoint with optional headers. Their tools join the catalog as soon as you save, no restart. Each server card carries a **Fetch** button at the top right, next to the delete icon, that dials it and lists its tools right there with their own on/off defaults — so the global **Tool defaults** list stays purely the integrated tools above. Every MCP tool row also has an optional **title** box: the friendly label the chat shows while that tool runs (`web_exa_search` → "Searching web…") instead of the raw name. Leave it empty to keep the tool's own title, or the name when there is none — the integrated tools have their titles built in.
 
@@ -127,13 +128,13 @@ It is small and meant for self-hosted personal use. Accounts, permissions, quota
 
 Run one instance per person. The image is 15 MB and idles at almost nothing, so ten of them on a single commodity server is not a thought you need to have twice. Everybody gets a private instance with their own database, their own models, and their own API key.
 
-**Will there ever be image or video generation?**
-
-Image yes, video no. OpenAI has a proper image-generation API but no video one.
-
 **What about transcription and speech?**
 
-Yes. Speech-to-text and text-to-speech have de-facto-standard shapes that many providers implement, unlike video generation.
+Both are in, because speech-to-text and text-to-speech have de-facto-standard shapes that many providers implement. Each is a single model id in the settings' **Audio** section, plus the voice text-to-speech should use.
+
+**Will there ever be image or video generation?**
+
+No. Providers share no shape for either. OpenAI's `/images/generations` is text-to-image only, with img2img on a separate `/images/edits` route; OpenRouter serves neither and uses `POST /api/v1/images` with its own parameter names. ChattoNeko sticks to routes every OpenAI-compatible provider implements the same way, and video has no standard route at all.
 
 **Why does attaching a recording fail in my browser?**
 

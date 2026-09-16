@@ -96,11 +96,12 @@ func transcriptionServer(t *testing.T, text string) (*httptest.Server, func() tr
 // given role designations.
 func agentConfig(t *testing.T, srvURL string, models config.ModelsConfig) *config.Store {
 	t.Helper()
-	// A designation is dropped unless its model is whitelisted
-	// (sanitizeWhitelist), so the ids a case designates ARE the whitelist.
+	// A chat designation is dropped unless its model is whitelisted
+	// (sanitizeWhitelist), so the chat ids a case designates ARE the whitelist.
+	// The audio models are not in it: they are free-standing ids.
 	models.Whitelist = nil
 	for _, id := range []string{models.DefaultChatModel, models.DefaultTaskModel,
-		models.DefaultVisionModel, models.DefaultDocumentModel, models.DefaultTranscriptionModel} {
+		models.DefaultVisionModel, models.DefaultDocumentModel} {
 		if id != "" {
 			models.Whitelist = append(models.Whitelist, id)
 		}

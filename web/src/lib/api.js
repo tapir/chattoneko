@@ -36,8 +36,9 @@ export function setUnauthorizedHandler(fn) {
 
 // One fetch path for every endpoint. `body` may be a plain object (sent as
 // JSON) or a FormData (sent as-is, so the browser sets the multipart
-// boundary); `{ text: true }` returns the raw body instead of parsing it.
-async function request(method, path, body, { text = false } = {}) {
+// boundary); `{ text: true }` returns the raw body instead of parsing it and
+// `{ blob: true }` a blob URL for a binary body.
+async function request(method, path, body, { text = false, blob = false } = {}) {
   const init = { method };
   if (body instanceof FormData) {
     init.body = body;
@@ -52,6 +53,9 @@ async function request(method, path, body, { text = false } = {}) {
     throw new ApiError(0, "Cannot reach server");
   }
   if (res.status === 401) onUnauthorized();
+  // A binary response is audio bytes on success and a JSON error on failure,
+  // so only the success path skips the text read below.
+  if (blob && res.ok) return URL.createObjectURL(await res.blob());
   const raw = res.status === 204 ? "" : await res.text();
   if (!res.ok) {
     let data = null;
@@ -227,6 +231,12 @@ export const api = {
   // so the body is always safe to render as inert text.
   attachmentText: (id) =>
     request("GET", `/attachments/${id}`, undefined, { text: true }),
+
+  // Read one message aloud: POST /api/speech synthesizes it and streams the
+  // mp3 back without storing it, so the answer is a blob URL for an <audio>
+  // element (the caller revokes it once played).
+  speech: (messageId) =>
+    request("POST", "/speech", { message_id: messageId }, { blob: true }),
 
   // Probe a candidate server URL (native setup flow): GET /api/meta without
   // any auth. 5s timeout — the browser default on unreachable hosts can wait

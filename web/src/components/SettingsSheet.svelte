@@ -1,8 +1,9 @@
 <script>
   import { app } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
-  import { AudioLines, ChevronDown, Download, Eye, FileText, MessageCircle, Trash2, X, Zap } from '@lucide/svelte';
+  import { Download, Eye, FileText, MessageCircle, Plus, Trash2, X, Zap } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
+  import IconButton from './IconButton.svelte';
   import ToolToggleRow from './ToolToggleRow.svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input, PasswordInput } from '$lib/components/ui/input';
@@ -10,7 +11,7 @@
   import * as Select from '$lib/components/ui/select';
   import * as ToggleGroup from '$lib/components/ui/toggle-group';
   import { registerOverlay } from '../lib/overlays.svelte.js';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
 
   // Server settings overlay, on top of the main app.
   //
@@ -77,14 +78,24 @@
   // catalog already reports.
   let toolTitles = $state({});
 
-  // Models: one card per whitelisted model. Role designations are flagged
-  // from these cards — there are no separate inputs for them.
+  // Models: one card per whitelisted model. Every whitelisted model is a chat
+  // model — the audio models are single ids of their own (see the Audio
+  // section), not cards. Role designations are flagged from these cards; there
+  // are no separate inputs for them.
   let modelCards = $state([]);
   // Role key → designated model id (see ROLES). Only chat and task are
   // required by the server; the rest are optional reservations.
-  let roleModels = $state({ chat: '', task: '', vision: '', document: '', transcription: '' });
+  let roleModels = $state({ chat: '', task: '', vision: '', document: '' });
   let newModel = $state('');
-  let newEndpoint = $state('chat');
+  // Audio: exactly one model per role, each called through its own provider
+  // route, so they are plain ids rather than whitelist members with metadata.
+  // Blank = that feature is off (the tools say so in-band).
+  let transcriptionModel = $state('');
+  let speechModel = $state('');
+  // Blank omits the voice from the request, so the provider's own default
+  // applies — voice names are provider-specific, so this is free text and not
+  // a picker.
+  let speechVoice = $state('');
 
   // Dirty tracking: a JSON snapshot of the whole form, compared against the
   // baseline taken when settings were (re)loaded. Save is disabled while
@@ -107,42 +118,15 @@
   // text and nothing else. It is separate from "image" because plenty of
   // models see pictures but refuse a PDF (and the reverse happens too).
   const INPUT_MODALITIES = ['text', 'image', 'file', 'audio'];
-  // The endpoint a model is added on, i.e. the provider route it is called
-  // through. Only "chat" models carry the metadata below; a transcription
-  // model is posted to /audio/transcriptions and gets its own flag instead.
-  // ponytail: image and speech can be registered but nothing calls them yet.
-  const ENDPOINTS = [
-    { value: 'chat', label: 'Chat completions' },
-    { value: 'transcription', label: 'Audio transcription' },
-    { value: 'image', label: 'Image generation' },
-    { value: 'speech', label: 'Audio speech' },
-  ];
-  // The role flags on every model card, each belonging to one endpoint.
-  // `key` doubles as the config field name: the server stores each one as
-  // `default_<key>_model`.
+  // The role flags on every model card. `key` doubles as the config field
+  // name: the server stores each one as `default_<key>_model`. All of them are
+  // chat roles — the audio models are designated in the Audio section instead.
   const ROLES = [
-    { key: 'chat', endpoint: 'chat', label: 'Chat model', icon: MessageCircle },
-    { key: 'task', endpoint: 'chat', label: 'Task model (background jobs like chat titles)', icon: Zap },
-    { key: 'vision', endpoint: 'chat', label: 'Vision model (describes images for a chat model that can’t see them)', icon: Eye },
-    { key: 'document', endpoint: 'chat', label: 'Document model (reads PDFs for a chat model that can’t)', icon: FileText },
-    {
-      key: 'transcription',
-      endpoint: 'transcription',
-      label: 'Transcription model (transcribes recordings for a chat model that can’t hear them)',
-      icon: AudioLines,
-    },
+    { key: 'chat', label: 'Chat model', icon: MessageCircle },
+    { key: 'task', label: 'Task model (background jobs like chat titles)', icon: Zap },
+    { key: 'vision', label: 'Vision model (describes images for a chat model that can’t see them)', icon: Eye },
+    { key: 'document', label: 'Document model (reads PDFs for a chat model that can’t)', icon: FileText },
   ];
-  // A card only ever shows the flags its own endpoint can fill — a chat model
-  // is never offered the transcription flag and the other way round, which is
-  // what the backend checks on save.
-  const rolesFor = (card) => ROLES.filter((r) => r.endpoint === card.endpoint);
-  const endpointLabel = (value) => ENDPOINTS.find((e) => e.value === value)?.label ?? value;
-  // The card list is grouped by endpoint in ENDPOINTS order; an endpoint with
-  // no models gets no group. The server sanitizes an unknown endpoint to
-  // "chat", so a card can never fall out.
-  let modelGroups = $derived(
-    ENDPOINTS.map((e) => ({ ...e, cards: modelCards.filter((c) => c.endpoint === e.value) })).filter((g) => g.cards.length)
-  );
   const DEFAULT_EFFORTS = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
   const DEFAULT_EFFORT = 'medium';
   const DEFAULT_CONTEXT = 131072;
@@ -155,6 +139,7 @@
       baseUrl,
       apiKey,
       roleModels,
+      audio: [transcriptionModel, speechModel, speechVoice],
       cards: modelCards,
       mcp: mcpServers,
       // Sorted so the comparison is deterministic regardless of toggle order.
@@ -173,20 +158,27 @@
     maxToolIter = String(c.limits?.max_tool_iterations ?? '');
     mcpTimeout = String(c.limits?.mcp_call_timeout_seconds ?? '');
     roleModels = Object.fromEntries(ROLES.map((r) => [r.key, c.models?.[`default_${r.key}_model`] ?? '']));
+    transcriptionModel = c.models?.default_transcription_model ?? '';
+    speechModel = c.models?.default_speech_model ?? '';
+    speechVoice = c.models?.speech_voice ?? '';
     const metas = {};
     for (const m of c.models?.metas ?? []) metas[m.model_id] = m;
-    modelCards = (c.models?.whitelist ?? []).map((id) => {
-      const m = metas[id] ?? {};
-      return {
-        id,
-        endpoint: m.endpoint ?? 'chat',
-        contextLength: String(m.context_length ?? DEFAULT_CONTEXT),
-        inputModality: [...(m.input_modality ?? ['text'])],
-        reasoningEfforts: [...(m.reasoning_efforts ?? DEFAULT_EFFORTS)],
-        effortOptions: [...(m.reasoning_efforts ?? DEFAULT_EFFORTS)],
-        reasoningDefault: m.reasoning_default ?? DEFAULT_EFFORT,
-      };
-    });
+    // A whitelisted id whose stored row is not a chat model is a leftover from
+    // before the audio models moved out of the whitelist: it gets no card here,
+    // so the next save drops it from the whitelist for good.
+    modelCards = (c.models?.whitelist ?? [])
+      .filter((id) => (metas[id]?.endpoint ?? 'chat') === 'chat')
+      .map((id) => {
+        const m = metas[id] ?? {};
+        return {
+          id,
+          contextLength: String(m.context_length ?? DEFAULT_CONTEXT),
+          inputModality: [...(m.input_modality ?? ['text'])],
+          reasoningEfforts: [...(m.reasoning_efforts ?? DEFAULT_EFFORTS)],
+          effortOptions: [...(m.reasoning_efforts ?? DEFAULT_EFFORTS)],
+          reasoningDefault: m.reasoning_default ?? DEFAULT_EFFORT,
+        };
+      });
     mcpServers = (c.mcp_servers ?? []).map(normalizeServer);
     // Fetched lists belong to the rows that dialed them; a (re)load rebuilds
     // every row, so drop the stale keys with them.
@@ -220,9 +212,14 @@
     }
   }
 
-  // Reload every time the overlay transitions to open.
+  // Reload every time the overlay transitions to open. `load` reads `baseline`
+  // synchronously and its `applyConfig` writes it, so the call is untracked:
+  // tracking it would re-run this effect on every load. The rows it rebuilds
+  // carry freshly minted local keys (`normalizeServer`'s `srv-N`/`hdr-N`, which
+  // `snapshot` includes), so that re-run changes `baseline` again and never
+  // settles — an endless refetch that recreates every MCP card mid-hover.
   $effect(() => {
-    if (open) void load();
+    if (open) untrack(() => void load());
   });
 
   // ---- close handling ----
@@ -239,12 +236,10 @@
   });
 
   // ---- models ----
-  // Adds a whitelisted model on the endpoint picked above. A chat model's card
-  // is pushed first, then filled by the same provider fetch the per-card
-  // "fetch data" button uses (which also persists the metadata server-side); a
-  // failed fetch removes the card rather than leaving a half-populated one
-  // behind. A specialist has no metadata to fetch, so its card is the
-  // registration and nothing else happens.
+  // Adds a whitelisted model. Its card is pushed first, then filled by the same
+  // provider fetch the per-card "fetch data" button uses (which also persists
+  // the metadata server-side); a failed fetch removes the card rather than
+  // leaving a half-populated one behind.
   async function addModel() {
     const id = newModel.trim();
     if (!id || adding || fetchingId || !providerReady) return;
@@ -252,11 +247,9 @@
       app.toast('error', `${id} is already whitelisted`);
       return;
     }
-    const endpoint = newEndpoint;
     modelCards = [
       {
         id,
-        endpoint,
         contextLength: String(DEFAULT_CONTEXT),
         inputModality: ['text'],
         reasoningEfforts: [...DEFAULT_EFFORTS],
@@ -266,10 +259,6 @@
       ...modelCards,
     ];
     newModel = '';
-    if (endpoint !== 'chat') {
-      app.toast('success', `Added ${id}`);
-      return;
-    }
     adding = true;
     try {
       if (!(await fetchModelData(id, { added: true }))) {
@@ -475,9 +464,12 @@
         models: {
           whitelist: modelCards.map((c) => c.id),
           ...Object.fromEntries(ROLES.map((r) => [`default_${r.key}_model`, (roleModels[r.key] ?? '').trim()])),
+          default_transcription_model: transcriptionModel.trim(),
+          default_speech_model: speechModel.trim(),
+          speech_voice: speechVoice.trim(),
           metas: modelCards.map((c) => ({
             model_id: c.id,
-            endpoint: c.endpoint,
+            endpoint: 'chat',
             context_length: Number(c.contextLength) || 0,
             input_modality: c.inputModality,
             reasoning_efforts: c.reasoningEfforts,
@@ -595,19 +587,6 @@
           <section class="space-y-3">
             <h3 class="text-base font-semibold">Models</h3>
             <div class="space-y-1.5">
-              <Label for="set-model-endpoint" class={labelCls}>Endpoint</Label>
-              <Select.Root type="single" value={newEndpoint} onValueChange={(v) => (newEndpoint = v)}>
-                <Select.Trigger id="set-model-endpoint" class="h-9 w-full text-sm">
-                  <span class="truncate">{endpointLabel(newEndpoint)}</span>
-                </Select.Trigger>
-                <Select.Content>
-                  {#each ENDPOINTS as e (e.value)}
-                    <Select.Item value={e.value} label={e.label} class="text-sm" />
-                  {/each}
-                </Select.Content>
-              </Select.Root>
-            </div>
-            <div class="space-y-1.5">
               <Label for="set-model-id" class={labelCls}>Model ID</Label>
               <div class="flex gap-2">
                 <Input
@@ -632,133 +611,160 @@
               <p class={hint}>No models configured.</p>
             {:else}
               <div class="space-y-3">
-                {#each modelGroups as group (group.value)}
-                  <details open class="space-y-3 open:[&>summary_.chevron]:rotate-180">
-                    <summary class="flex list-none cursor-pointer items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase select-none [&::-webkit-details-marker]:hidden">
-                      <ChevronDown class="chevron size-3.5 shrink-0 transition-transform" strokeWidth={1.75} aria-hidden="true" />
-                      {group.label}
-                    </summary>
-                    <div class="space-y-3">
-                      {#each group.cards as card (card.id)}
-                      <div class="space-y-3 rounded-lg border p-3">
-                        <!-- Card header: id, default flags, fetch data, delete -->
-                        <div class="flex flex-wrap items-center gap-2">
-                          <!-- Own line on mobile for chat cards only: their role
-                               flags + Fetch would squeeze the id into a sliver. -->
-                          <span
-                            class="{card.endpoint === 'chat'
-                              ? 'w-full break-all sm:w-auto sm:min-w-0 sm:flex-1 sm:break-normal sm:truncate'
-                              : 'min-w-0 flex-1 truncate'} font-mono text-sm"
-                            >{card.id}</span>
-                          <!-- Role flags: icon buttons (see ROLES), only the ones
-                               this card's endpoint can fill. -->
-                          {#each rolesFor(card) as role (role.key)}
-                            {@const Icon = role.icon}
-                            <button
-                              type="button"
-                              title={role.label}
-                              aria-label={role.label}
-                              aria-pressed={roleModels[role.key] === card.id}
-                              class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors {roleModels[role.key] === card.id
-                                ? 'border-primary/50 bg-primary/10 text-primary'
-                                : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-                              onclick={() => toggleRole(role.key, card.id)}
-                            >
-                              <Icon class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-                            </button>
-                          {/each}
-                          <div class="ml-auto flex items-center gap-2 sm:ml-0">
-                            {#if card.endpoint === 'chat'}
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                class="h-7 gap-1 px-2 text-xs"
-                                onclick={() => fetchModelData(card.id)}
-                                disabled={!providerReady || fetchingId === card.id}
-                              >
-                                {#if fetchingId === card.id}<Spinner class="size-3" />{:else}<Download class="size-3" strokeWidth={1.75} aria-hidden="true" />{/if}
-                                Fetch
-                              </Button>
-                            {/if}
-                            <button
-                              type="button"
-                              class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                              aria-label="Remove {card.id}"
-                              onclick={() => removeModel(card.id)}
-                            >
-                              <Trash2 class="size-4" strokeWidth={1.75} aria-hidden="true" />
-                            </button>
-                          </div>
-                        </div>
+                {#each modelCards as card (card.id)}
+                  <div class="space-y-3 rounded-lg border p-3">
+                    <!-- Card header: id, default flags, fetch data, delete -->
+                    <div class="flex flex-wrap items-center gap-2">
+                      <!-- Own line on mobile: the role flags + Fetch would
+                           squeeze the id into a sliver. -->
+                      <span class="w-full break-all font-mono text-sm sm:w-auto sm:min-w-0 sm:flex-1 sm:break-normal sm:truncate">{card.id}</span>
+                      <!-- Role flags: icon buttons (see ROLES). -->
+                      {#each ROLES as role (role.key)}
+                        {@const Icon = role.icon}
+                        <button
+                          type="button"
+                          title={role.label}
+                          aria-label={role.label}
+                          aria-pressed={roleModels[role.key] === card.id}
+                          class="inline-flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors {roleModels[role.key] === card.id
+                            ? 'border-primary/50 bg-primary/10 text-primary'
+                            : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+                          onclick={() => toggleRole(role.key, card.id)}
+                        >
+                          <Icon class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+                        </button>
+                      {/each}
+                      <div class="ml-auto flex items-center gap-2 sm:ml-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          class="h-7 gap-1 px-2 text-xs"
+                          onclick={() => fetchModelData(card.id)}
+                          disabled={!providerReady || fetchingId === card.id}
+                        >
+                          {#if fetchingId === card.id}<Spinner class="size-3" />{:else}<Download class="size-3" strokeWidth={1.75} aria-hidden="true" />{/if}
+                          Fetch
+                        </Button>
+                        <button
+                          type="button"
+                          class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          aria-label="Remove {card.id}"
+                          onclick={() => removeModel(card.id)}
+                        >
+                          <Trash2 class="size-4" strokeWidth={1.75} aria-hidden="true" />
+                        </button>
+                      </div>
+                    </div>
 
-                        {#if card.endpoint === 'chat'}
-                          <!-- Metadata -->
-                          <div class="grid gap-3 sm:grid-cols-2">
-                            <div class="space-y-1.5">
-                              <Label class={labelCls}>Context window (tokens)</Label>
-                              <Input type="number" min="1" class="h-8 font-mono text-xs" bind:value={card.contextLength} />
-                            </div>
-                            <div class="space-y-1.5">
-                              <Label class={labelCls}>Default reasoning effort</Label>
-                              {#if card.reasoningEfforts.length > 0}
-                                <Select.Root type="single" value={card.reasoningDefault} onValueChange={(v) => (card.reasoningDefault = v)}>
-                                  <Select.Trigger class="h-8 w-full text-sm">
-                                    <span class="truncate">{card.reasoningDefault || 'select'}</span>
-                                  </Select.Trigger>
-                                  <Select.Content>
-                                    {#each card.reasoningEfforts as e (e)}
-                                      <Select.Item value={e} label={e} class="text-sm" />
-                                    {/each}
-                                  </Select.Content>
-                                </Select.Root>
-                              {/if}
-                            </div>
-                          </div>
-
-                          <div class="space-y-1.5">
-                            <Label class={labelCls}>Input modalities</Label>
-                            <ToggleGroup.Root
-                              type="multiple"
-                              size="sm"
-                              variant="outline"
-                              value={card.inputModality}
-                              onValueChange={(v) => {
-                                // At least one modality must stay selected: an
-                                // empty change is rejected by re-pushing the
-                                // current value (new reference) into the group.
-                                card.inputModality = (v ?? []).length ? v : [...card.inputModality];
-                              }}
-                              class="w-full flex-wrap justify-start"
-                            >
-                              {#each INPUT_MODALITIES as mod (mod)}
-                                <ToggleGroup.Item value={mod}>{mod}</ToggleGroup.Item>
+                    <!-- Metadata -->
+                    <div class="grid gap-3 sm:grid-cols-2">
+                      <div class="space-y-1.5">
+                        <Label class={labelCls}>Context window (tokens)</Label>
+                        <Input type="number" min="1" class="h-8 font-mono text-xs" bind:value={card.contextLength} />
+                      </div>
+                      <div class="space-y-1.5">
+                        <Label class={labelCls}>Default reasoning effort</Label>
+                        {#if card.reasoningEfforts.length > 0}
+                          <Select.Root type="single" value={card.reasoningDefault} onValueChange={(v) => (card.reasoningDefault = v)}>
+                            <Select.Trigger class="h-8 w-full text-sm">
+                              <span class="truncate">{card.reasoningDefault || 'select'}</span>
+                            </Select.Trigger>
+                            <Select.Content>
+                              {#each card.reasoningEfforts as e (e)}
+                                <Select.Item value={e} label={e} class="text-sm" />
                               {/each}
-                            </ToggleGroup.Root>
-                          </div>
-
-                          <div class="space-y-1.5">
-                            <Label class={labelCls}>Reasoning effort levels</Label>
-                            <ToggleGroup.Root
-                              type="multiple"
-                              size="sm"
-                              variant="outline"
-                              value={card.reasoningEfforts}
-                              onValueChange={(v) => setEfforts(card, v ?? [])}
-                              class="w-full flex-wrap justify-start"
-                            >
-                              {#each effortOptionsFor(card) as e (e)}
-                                <ToggleGroup.Item value={e}>{e}</ToggleGroup.Item>
-                              {/each}
-                            </ToggleGroup.Root>
-                          </div>
+                            </Select.Content>
+                          </Select.Root>
                         {/if}
                       </div>
-                      {/each}
                     </div>
-                  </details>
+
+                    <div class="space-y-1.5">
+                      <Label class={labelCls}>Input modalities</Label>
+                      <ToggleGroup.Root
+                        type="multiple"
+                        size="sm"
+                        variant="outline"
+                        value={card.inputModality}
+                        onValueChange={(v) => {
+                          // At least one modality must stay selected: an
+                          // empty change is rejected by re-pushing the
+                          // current value (new reference) into the group.
+                          card.inputModality = (v ?? []).length ? v : [...card.inputModality];
+                        }}
+                        class="w-full flex-wrap justify-start"
+                      >
+                        {#each INPUT_MODALITIES as mod (mod)}
+                          <ToggleGroup.Item value={mod}>{mod}</ToggleGroup.Item>
+                        {/each}
+                      </ToggleGroup.Root>
+                    </div>
+
+                    <div class="space-y-1.5">
+                      <Label class={labelCls}>Reasoning effort levels</Label>
+                      <ToggleGroup.Root
+                        type="multiple"
+                        size="sm"
+                        variant="outline"
+                        value={card.reasoningEfforts}
+                        onValueChange={(v) => setEfforts(card, v ?? [])}
+                        class="w-full flex-wrap justify-start"
+                      >
+                        {#each effortOptionsFor(card) as e (e)}
+                          <ToggleGroup.Item value={e}>{e}</ToggleGroup.Item>
+                        {/each}
+                      </ToggleGroup.Root>
+                    </div>
+                  </div>
                 {/each}
               </div>
             {/if}
+          </section>
+
+          <!-- Audio: exactly one model per role, each called through its own
+               provider route, so they are plain ids with no metadata and no
+               whitelist entry. Voice names are provider-specific, hence free
+               text; blank leaves the voice out of the request entirely. -->
+          <section class="space-y-3">
+            <h3 class="text-base font-semibold">Audio</h3>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div class="space-y-1.5">
+                <Label for="set-transcription-model" class={labelCls}>Transcription model</Label>
+                <Input
+                  id="set-transcription-model"
+                  type="text"
+                  class="h-9 font-mono text-sm"
+                  bind:value={transcriptionModel}
+                  placeholder="e.g. openai/whisper-1"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </div>
+              <div class="space-y-1.5">
+                <Label for="set-speech-model" class={labelCls}>Speech model</Label>
+                <Input
+                  id="set-speech-model"
+                  type="text"
+                  class="h-9 font-mono text-sm"
+                  bind:value={speechModel}
+                  placeholder="e.g. openai/tts-1"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </div>
+              <div class="space-y-1.5">
+                <Label for="set-speech-voice" class={labelCls}>Speech voice</Label>
+                <Input
+                  id="set-speech-voice"
+                  type="text"
+                  class="h-9 font-mono text-sm"
+                  bind:value={speechVoice}
+                  placeholder="e.g. alloy"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </div>
+            </div>
           </section>
 
           <!-- Auth is env-var driven (CHATTO_USERNAME / CHATTO_PASSWORD) and
@@ -814,7 +820,17 @@
                   <Input type="text" class="h-8 font-mono text-xs" placeholder="https://example.com/mcp" bind:value={s.url} />
                 </div>
                 <div class="space-y-1.5">
-                  <Label class={labelCls}>Headers</Label>
+                  <!-- The add control rides the title row: a full-width button
+                       under the list read as a card action, not a row one. -->
+                  <div class="flex items-center gap-1">
+                    <Label class={labelCls}>Headers</Label>
+                    <IconButton
+                      icon={Plus}
+                      label="Add header"
+                      size="sm"
+                      onclick={() => (s.headers = [...(s.headers ?? []), { id: `hdr-${++rowSeq}`, key: '', value: '' }])}
+                    />
+                  </div>
                   {#each s.headers ?? [] as h, hi (h.id)}
                     <div class="flex gap-2">
                       <Input type="text" class="h-8 flex-1 font-mono text-xs" placeholder="Header name" bind:value={h.key} />
@@ -824,14 +840,13 @@
                       </button>
                     </div>
                   {/each}
-                  <Button variant="outline" size="sm" class="h-9" onclick={() => (s.headers = [...(s.headers ?? []), { id: `hdr-${++rowSeq}`, key: '', value: '' }])}>Add</Button>
                 </div>
                 <!-- This server's tool defaults + optional user-facing titles:
                      the same global tool_defaults / tool_titles maps the
                      integrated list below writes, only scoped to the card so
                      the tools sit next to the server providing them. -->
                 {#if toolsFor(s).length}
-                  <div class="space-y-1.5 border-t pt-2.5">
+                  <div class="space-y-1.5">
                     <Label class={labelCls}>Tools</Label>
                     <div class="flex flex-col gap-0.5">
                       {#each toolsFor(s) as tool (tool.name)}

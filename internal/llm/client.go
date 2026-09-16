@@ -5,6 +5,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -50,6 +51,28 @@ func (c *Client) Transcribe(ctx context.Context, filename, mime string, data []b
 		return "", err
 	}
 	return resp.Text, nil
+}
+
+// Speak sends text to /audio/speech and returns the audio bytes. The container
+// is always mp3: every browser decodes it, the inline <audio> player needs a
+// real mime to play it, and one known shape is what an attachment's stored mime
+// has to say. An empty voice omits the field, so the provider's own default
+// applies — and a provider that requires one says so in its error.
+func (c *Client) Speak(ctx context.Context, text, voice string) ([]byte, error) {
+	params := openai.AudioSpeechNewParams{
+		Model:          c.model,
+		Input:          text,
+		ResponseFormat: openai.AudioSpeechNewParamsResponseFormatMP3,
+	}
+	if voice != "" {
+		params.Voice = openai.AudioSpeechNewParamsVoiceUnion{OfString: openai.String(voice)}
+	}
+	resp, err := c.api.Audio.Speech.New(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }
 
 // Cache holds one client built from a config.Store's provider settings and

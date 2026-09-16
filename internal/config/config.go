@@ -55,23 +55,17 @@ const (
 // levels, highest first. DefaultReasoningEffort is the preselected one.
 var DefaultReasoningEfforts = []string{"max", "xhigh", "high", "medium", "low", "minimal", "none"}
 
-// Model endpoints: the provider route a model is called through, chosen when
-// the model is added. Only "chat" models describe themselves with the metadata
-// below (context window, modalities, reasoning); the others are specialists
-// called through their own route.
+// EndpointChat is the only provider route a whitelisted model is called
+// through: POST /chat/completions. The audio models are not whitelisted at all
+// (see ModelsConfig) — each role holds exactly one id, called through its own
+// route, so there is nothing to disambiguate and no metadata to describe.
 //
-// ponytail: image and speech are stored but nothing calls /images/generations
-// or /audio/speech; the values let a model be registered under its real kind.
-const (
-	EndpointChat          = "chat"          // POST /chat/completions
-	EndpointTranscription = "transcription" // POST /audio/transcriptions
-	EndpointImage         = "image"
-	EndpointSpeech        = "speech"
-)
-
-var validEndpoints = map[string]bool{
-	EndpointChat: true, EndpointTranscription: true, EndpointImage: true, EndpointSpeech: true,
-}
+// ponytail: "transcription", "image" and "speech" rows can still sit in the
+// models table from before audio left the whitelist. They read back verbatim
+// (scanModelMeta does not coerce), so chatModels and the settings card list
+// skip them and the next save drops them from the whitelist. Listing the values
+// here again would resurrect them as chat models instead.
+const EndpointChat = "chat"
 
 const DefaultReasoningEffort = "medium"
 
@@ -94,16 +88,24 @@ type ModelsConfig struct {
 	// DefaultTaskModel is the model id used by background tasks (title
 	// generation). It talks to the same provider as chat.
 	DefaultTaskModel string `json:"default_task_model"`
-	// The remaining designations are the specialist models the vision,
-	// document and transcription tools hand files to when the chat model
-	// cannot read them itself (vision needs image input, the document model
-	// needs "file" input). Complete() requires none of them: a missing one
-	// leaves that file type unreadable, which the tool reports in-band. The
-	// transcription model is posted to /audio/transcriptions, so it has no
-	// input modalities to check and no chat metadata.
-	DefaultVisionModel        string `json:"default_vision_model"`
-	DefaultDocumentModel      string `json:"default_document_model"`
+	// The remaining chat designations are the specialist models the vision and
+	// document tools hand files to when the chat model cannot read them itself
+	// (vision needs image input, the document model needs "file" input).
+	// Complete() requires none of them: a missing one leaves that file type
+	// unreadable, which the tool reports in-band.
+	DefaultVisionModel   string `json:"default_vision_model"`
+	DefaultDocumentModel string `json:"default_document_model"`
+	// The audio models are NOT whitelist members: each role is exactly one
+	// model called through its own route (/audio/transcriptions and
+	// /audio/speech), so there is nothing to choose between, no chat metadata
+	// to store and no endpoint to validate. Empty = that feature is off, which
+	// the transcription and speak tools report in-band.
 	DefaultTranscriptionModel string `json:"default_transcription_model"`
+	DefaultSpeechModel        string `json:"default_speech_model"`
+	// SpeechVoice is the voice handed to /audio/speech. Empty omits it, so the
+	// provider's own default applies — and a provider that requires one says so
+	// in its error, in-band.
+	SpeechVoice string `json:"speech_voice"`
 }
 
 // MCPServerConfig declares one MCP server. Only streamable HTTP is
@@ -228,6 +230,7 @@ func (c *Config) finalize() {
 	if c.Limits.MCPCallTimeoutSeconds <= 0 {
 		c.Limits.MCPCallTimeoutSeconds = DefaultMCPCallTimeoutSeconds
 	}
+	c.Models.SpeechVoice = strings.TrimSpace(c.Models.SpeechVoice)
 	c.sanitizeWhitelist()
 	c.sanitizeMCPServers()
 	c.sanitizeToolTitles()
@@ -257,9 +260,11 @@ func (c *Config) sanitizeWhitelist() {
 	for _, m := range c.Models.Whitelist {
 		seen[m] = true
 	}
+	// The audio models are not in this list: they are free-standing ids, not
+	// whitelist pointers, so membership says nothing about them.
 	for _, d := range []*string{
 		&c.Models.DefaultChatModel, &c.Models.DefaultTaskModel, &c.Models.DefaultVisionModel,
-		&c.Models.DefaultDocumentModel, &c.Models.DefaultTranscriptionModel,
+		&c.Models.DefaultDocumentModel,
 	} {
 		if !seen[strings.TrimSpace(*d)] {
 			*d = ""

@@ -508,13 +508,10 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	}
 	// Provider set, so only the designations decide Complete().
 	update(Patch{Provider: &ProviderPatch{BaseURL: ptr("https://p.example"), APIKey: ptr("k")}})
-	whitelist := []string{"m", "vision", "pdf", "audio"}
+	whitelist := []string{"m", "vision", "pdf"}
 	stored := []ModelMeta{
 		{ModelID: "vision", InputModality: []string{"image"}},
 		{ModelID: "pdf", InputModality: []string{"text", "image", "file"}},
-		// A transcriber: called through /audio/transcriptions, so it carries no
-		// chat modalities at all.
-		{ModelID: "audio", Endpoint: EndpointTranscription},
 	}
 	update(Patch{Models: &ModelsPatch{Whitelist: &whitelist, Metas: &stored}})
 
@@ -539,13 +536,30 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	}
 
 	// The document role needs "file" input — image input does NOT imply it,
-	// plenty of models see pictures but refuse a PDF. The transcription role
-	// needs no modality, only a model added on the transcription endpoint.
-	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("vision"), DefaultTranscriptionModel: ptr("vision")}}); c.Models.DefaultDocumentModel != "" || c.Models.DefaultTranscriptionModel != "" {
-		t.Errorf("document/transcription models = %q/%q, want both cleared", c.Models.DefaultDocumentModel, c.Models.DefaultTranscriptionModel)
+	// plenty of models see pictures but refuse a PDF.
+	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("vision")}}); c.Models.DefaultDocumentModel != "" {
+		t.Errorf("document model = %q, want cleared", c.Models.DefaultDocumentModel)
 	}
-	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("pdf"), DefaultTranscriptionModel: ptr("audio")}}); c.Models.DefaultDocumentModel != "pdf" || c.Models.DefaultTranscriptionModel != "audio" {
-		t.Errorf("document/transcription models = %q/%q, want pdf/audio", c.Models.DefaultDocumentModel, c.Models.DefaultTranscriptionModel)
+	if c = update(Patch{Models: &ModelsPatch{DefaultDocumentModel: ptr("pdf")}}); c.Models.DefaultDocumentModel != "pdf" {
+		t.Errorf("document model = %q, want pdf", c.Models.DefaultDocumentModel)
+	}
+
+	// The audio models are free-standing ids, not whitelist pointers: they are
+	// called through routes no chat metadata describes, so nothing validates
+	// them and an id outside the whitelist survives (sanitizeWhitelist must not
+	// clear them). The voice is trimmed; blank stays blank and means "the
+	// provider's own default".
+	c = update(Patch{Models: &ModelsPatch{
+		DefaultTranscriptionModel: ptr("whisper-large"),
+		DefaultSpeechModel:        ptr("tts-1"),
+		SpeechVoice:               ptr("  alloy  "),
+	}})
+	if c.Models.DefaultTranscriptionModel != "whisper-large" || c.Models.DefaultSpeechModel != "tts-1" || c.Models.SpeechVoice != "alloy" {
+		t.Errorf("audio = %q/%q/%q, want whisper-large/tts-1/alloy",
+			c.Models.DefaultTranscriptionModel, c.Models.DefaultSpeechModel, c.Models.SpeechVoice)
+	}
+	if got := strings.Join(c.Models.Whitelist, ","); got != "m,vision,pdf" {
+		t.Errorf("whitelist = %q, want the audio ids kept out of it", got)
 	}
 
 	// Metas sent in the same patch win over the stored rows: adding text input
@@ -564,7 +578,8 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	if got := s2.Get().Models; got.DefaultDocumentModel != "pdf" || got.DefaultTranscriptionModel != "audio" {
-		t.Errorf("stored document/transcription = %q/%q, want pdf/audio", got.DefaultDocumentModel, got.DefaultTranscriptionModel)
+	if got := s2.Get().Models; got.DefaultDocumentModel != "pdf" || got.DefaultTranscriptionModel != "whisper-large" ||
+		got.DefaultSpeechModel != "tts-1" || got.SpeechVoice != "alloy" {
+		t.Errorf("stored document/audio = %+v, want pdf + whisper-large/tts-1/alloy", got)
 	}
 }

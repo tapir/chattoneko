@@ -79,6 +79,50 @@ func TestGetSetupExposesSecrets(t *testing.T) {
 	}
 }
 
+// The audio settings are free-standing ids, not whitelist pointers: they save
+// with nothing whitelisted, come back verbatim from GET /api/setup, and flip the
+// flag /api/config hands the chat UI to show the read-aloud action.
+func TestSpeechSettingsRoundTrip(t *testing.T) {
+	ts := newTestServer(t, quickProvider{}, false)
+	if _, err := ts.cfg.Update(t.Context(), patchFromMap(t, map[string]any{
+		"models": map[string]any{
+			"default_transcription_model": "whisper-large",
+			"default_speech_model":        "tts-1",
+			"speech_voice":                "alloy",
+		},
+	})); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	var setup struct {
+		Config struct {
+			Models struct {
+				Transcription string `json:"default_transcription_model"`
+				Speech        string `json:"default_speech_model"`
+				Voice         string `json:"speech_voice"`
+			} `json:"models"`
+		} `json:"config"`
+	}
+	rec := ts.do(t, "GET", "/api/setup", nil, nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &setup); err != nil {
+		t.Fatal(err)
+	}
+	if m := setup.Config.Models; m.Transcription != "whisper-large" || m.Speech != "tts-1" || m.Voice != "alloy" {
+		t.Fatalf("audio settings = %+v, want whisper-large/tts-1/alloy", m)
+	}
+
+	var cfg struct {
+		SpeechEnabled bool `json:"speech_enabled"`
+	}
+	rec = ts.do(t, "GET", "/api/config", nil, nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SpeechEnabled {
+		t.Error("speech_enabled = false with a speech model designated")
+	}
+}
+
 func TestMetaExposesSetupComplete(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 

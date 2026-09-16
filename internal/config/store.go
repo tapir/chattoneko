@@ -24,6 +24,8 @@ const (
 	keyDefaultVisionModel        = "default_vision_model"
 	keyDefaultDocumentModel      = "default_document_model"
 	keyDefaultTranscriptionModel = "default_transcription_model"
+	keyDefaultSpeechModel        = "default_speech_model"
+	keySpeechVoice               = "speech_voice"
 	keyMCPServers                = "mcp_servers"
 	keyUploadMaxFileBytes        = "upload_max_file_bytes"
 	keyMaxToolIterations         = "max_tool_iterations"
@@ -150,6 +152,8 @@ func writeConfigRows(ctx context.Context, tx *sql.Tx, c *Config, now int64) erro
 		keyDefaultVisionModel:        c.Models.DefaultVisionModel,
 		keyDefaultDocumentModel:      c.Models.DefaultDocumentModel,
 		keyDefaultTranscriptionModel: c.Models.DefaultTranscriptionModel,
+		keyDefaultSpeechModel:        c.Models.DefaultSpeechModel,
+		keySpeechVoice:               c.Models.SpeechVoice,
 		keyMCPServers:                string(servers),
 		keyUploadMaxFileBytes:        strconv.FormatInt(c.Limits.UploadMaxFileBytes, 10),
 		keyMaxToolIterations:         strconv.Itoa(c.Limits.MaxToolIterations),
@@ -232,6 +236,8 @@ func loadSnapshot(ctx context.Context, db *sql.DB) (*Config, error) {
 	c.Models.DefaultVisionModel = kv[keyDefaultVisionModel]
 	c.Models.DefaultDocumentModel = kv[keyDefaultDocumentModel]
 	c.Models.DefaultTranscriptionModel = kv[keyDefaultTranscriptionModel]
+	c.Models.DefaultSpeechModel = kv[keyDefaultSpeechModel]
+	c.Models.SpeechVoice = kv[keySpeechVoice]
 	// Auth never comes from the database: it is derived from CHATTO_USERNAME /
 	// CHATTO_PASSWORD.
 	c.Auth = authFromEnv()

@@ -22,10 +22,10 @@ type fileStore interface {
 // Builtin returns the catalog of integrated tools. Each tool's definition
 // lives in its own file; tools that need dependencies (stores) are constructed
 // here with them, so no package-level wiring state is needed. cfgs is the live
-// config store: create_file reads the size limits from it, the specialists
-// their designated models.
+// config store: create_file reads the size limits from it, speak and the
+// specialists their designated models.
 func Builtin(files fileStore, cfgs *config.Store) *registry {
-	ts := []tool{Time, Code, CreateFile(files, cfgs), Fetch}
+	ts := []tool{Time, Code, CreateFile(files, cfgs), Fetch, Speak(files, cfgs)}
 	return newRegistry(append(ts, Specialists(files, cfgs)...)...)
 }
 

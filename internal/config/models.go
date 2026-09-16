@@ -16,14 +16,13 @@ import (
 // nothing else — so it is not stored.
 var validModalities = map[string]bool{"text": true, "image": true, "file": true, "audio": true}
 
-// ModelMeta is the per-model metadata stored in the models table: the endpoint
-// the model is called through, what it accepts, how much context it takes, and
-// which reasoning effort levels it offers. Everything but Endpoint describes a
-// CHAT model; a transcription/image/speech row keeps the defaults and nothing
-// reads them.
+// ModelMeta is the per-model metadata stored in the models table: what the
+// model accepts, how much context it takes, and which reasoning effort levels
+// it offers. All of it describes a CHAT model — the only kind that is
+// whitelisted, so the only kind with a row of its own.
 type ModelMeta struct {
 	ModelID          string   `json:"model_id"`
-	Endpoint         string   `json:"endpoint"` // one of the Endpoint* constants
+	Endpoint         string   `json:"endpoint"` // EndpointChat; a legacy row keeps its own
 	InputModality    []string `json:"input_modality"`
 	ContextLength    int64    `json:"context_length"`
 	ReasoningEfforts []string `json:"reasoning_efforts"`
@@ -44,17 +43,15 @@ func DefaultModelMeta(id string) ModelMeta {
 	}
 }
 
-// SanitizeMeta normalizes one model metadata entry in place: an unknown
-// endpoint becomes "chat", input modalities are filtered to the known set
-// (defaulting to ["text"]), context length must be positive (default 128K),
-// effort levels fall back to the default list and the default effort must be
-// one of the levels (falls back to the 2nd element).
+// SanitizeMeta normalizes one model metadata entry in place: the endpoint is
+// always chat (the only route a whitelisted model is called through), input
+// modalities are filtered to the known set (defaulting to ["text"]), context
+// length must be positive (default 128K), effort levels fall back to the
+// default list and the default effort must be one of the levels (falls back to
+// the 2nd element).
 func SanitizeMeta(m *ModelMeta) {
 	m.ModelID = strings.TrimSpace(m.ModelID)
-	m.Endpoint = strings.TrimSpace(m.Endpoint)
-	if !validEndpoints[m.Endpoint] {
-		m.Endpoint = EndpointChat
-	}
+	m.Endpoint = EndpointChat
 	m.InputModality = filterModalities(m.InputModality)
 	if m.ContextLength <= 0 {
 		m.ContextLength = DefaultContextLength
@@ -208,9 +205,10 @@ func scanModelMeta(rows *sql.Rows) (ModelMeta, error) {
 	if err := rows.Scan(&m.ModelID, &m.Endpoint, &in, &m.ContextLength, &efforts, &m.ReasoningDefault); err != nil {
 		return m, err
 	}
-	if !validEndpoints[m.Endpoint] {
-		m.Endpoint = EndpointChat
-	}
+	// The stored endpoint is kept verbatim rather than coerced to "chat": a
+	// legacy row (an audio model whitelisted before those became free-standing
+	// ids) has to stay recognisable so chatModels and the settings card list
+	// skip it instead of offering it as a chat model.
 	// Stored rows are sanitized on write; parse errors fall back to the column
 	// defaults rather than failing the whole read.
 	m.InputModality = parseModalities(in)

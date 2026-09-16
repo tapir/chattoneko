@@ -992,21 +992,29 @@ func TestGetAttachmentServing(t *testing.T) {
 	}
 }
 
-// A model that can't take text input can't drive a chat, and a model on any
-// endpoint but chat isn't a chat model at all, so /api/config drops both from
-// the whitelist the picker renders. Models with no stored metadata keep the
-// chat + text defaults and stay.
+// A model that can't take text input can't drive a chat, so /api/config drops
+// it from the whitelist the picker renders — and so is a legacy row on a route
+// that is not /chat/completions (an audio model whitelisted before those became
+// free-standing ids), which must stay hidden rather than read back as a chat
+// model. Models with no stored metadata keep the chat + text defaults and stay.
 func TestGetConfigHidesNonTextModels(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 	whitelist := []string{"m", "vision", "plain", "whisper"}
 	metas := []config.ModelMeta{
 		{ModelID: "vision", InputModality: []string{"image"}},
-		{ModelID: "whisper", Endpoint: config.EndpointTranscription},
+		{ModelID: "whisper"},
 	}
 	if _, err := ts.cfg.Update(context.Background(), config.Patch{
 		Models: &config.ModelsPatch{Whitelist: &whitelist, Metas: &metas},
 	}); err != nil {
 		t.Fatalf("update: %v", err)
+	}
+	// No patch can produce a non-chat row any more (SanitizeMeta coerces an
+	// unknown endpoint to chat), so the legacy shape goes in the way an upgrade
+	// leaves it: straight into the table.
+	if _, err := ts.db.ExecContext(context.Background(),
+		`UPDATE models SET endpoint = 'transcription' WHERE model_id = 'whisper'`); err != nil {
+		t.Fatalf("legacy row: %v", err)
 	}
 	rec := ts.do(t, "GET", "/api/config", nil, nil)
 	if rec.Code != 200 {
@@ -1027,5 +1035,65 @@ func TestGetConfigHidesNonTextModels(t *testing.T) {
 	// The metadata still reports every model so the settings UI can fix it.
 	if len(out.ModelInfo) != 4 {
 		t.Fatalf("model_info = %d entries, want 4", len(out.ModelInfo))
+	}
+}
+
+// The read-aloud route synthesizes one stored message and streams the mp3
+// straight back: nothing is persisted, because the audio is a rendering of text
+// the database already holds (the speak tool's recording, which IS part of the
+// conversation, is the other path and stores its file).
+func TestSpeechStreamsMessageAudio(t *testing.T) {
+	mp3 := []byte("ID3\x04\x00\x00\x00\x00\x00\x00")
+	var got struct{ path, model, input, voice string }
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct{ Model, Input, Voice string }
+		_ = json.Unmarshal(body, &req)
+		got.path, got.model, got.input, got.voice = r.URL.Path, req.Model, req.Input, req.Voice
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(mp3)
+	}))
+	defer upstream.Close()
+
+	ts := newTestServer(t, quickProvider{}, false)
+	if _, err := ts.cfg.Update(context.Background(), patchFromMap(t, map[string]any{
+		"provider": map[string]any{"base_url": upstream.URL, "api_key": "sk-test"},
+		"models":   map[string]any{"default_speech_model": "tts-1", "speech_voice": "alloy"},
+	})); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	chat, err := ts.store.CreateChat(context.Background(), "m", store.GenParams{}, nil)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	msg, err := ts.store.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chat.ID, Role: "assistant", Status: "complete", Content: "Good morning.",
+	})
+	if err != nil {
+		t.Fatalf("message: %v", err)
+	}
+
+	rec := ts.do(t, "POST", "/api/speech", map[string]string{"message_id": msg.ID}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "audio/mpeg" {
+		t.Errorf("content-type = %q, want audio/mpeg", ct)
+	}
+	if !bytes.Equal(rec.Body.Bytes(), mp3) {
+		t.Errorf("body = %q, want the provider's audio", rec.Body.Bytes())
+	}
+	if got.path != "/audio/speech" {
+		t.Errorf("POSTed to %q, want /audio/speech", got.path)
+	}
+	if got.model != "tts-1" || got.voice != "alloy" || got.input != "Good morning." {
+		t.Errorf("upstream saw model %q voice %q input %q", got.model, got.voice, got.input)
+	}
+	atts, err := ts.store.ListAttachmentsByMessage(context.Background(), msg.ID)
+	if err != nil {
+		t.Fatalf("attachments: %v", err)
+	}
+	if len(atts) != 0 {
+		t.Errorf("stored %d attachments, want the audio kept out of the database", len(atts))
 	}
 }

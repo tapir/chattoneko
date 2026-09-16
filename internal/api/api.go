@@ -13,6 +13,7 @@ import (
 	"chattoneko/internal/auth"
 	"chattoneko/internal/config"
 	"chattoneko/internal/engine"
+	"chattoneko/internal/llm"
 	"chattoneko/internal/mcphub"
 	"chattoneko/internal/store"
 )
@@ -35,11 +36,15 @@ type Server struct {
 	staticFS fs.FS
 	// Build version (main.version, stamped by ldflags): reported on /api/meta.
 	version string
+	// speech builds the /audio/speech client for the read-aloud route, rebuilt
+	// live when the provider or the designated model changes (see llm.Cache).
+	speech *llm.Cache
 }
 
 // New builds the server. staticFS is the embedded web/dist tree.
 func New(cfg *config.Store, st *store.Store, a *auth.Auth, eng *engine.Engine, tools ToolCatalog, staticFS fs.FS, version string) *Server {
-	return &Server{cfg: cfg, store: st, auth: a, engine: eng, tools: tools, staticFS: staticFS, version: version}
+	return &Server{cfg: cfg, store: st, auth: a, engine: eng, tools: tools, staticFS: staticFS, version: version,
+		speech: llm.NewCache(cfg)}
 }
 
 // Handler returns the root mux. http.Server MUST NOT set WriteTimeout
@@ -72,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 	gated("DELETE /api/chats/{id}/generation", s.handleStopGeneration)
 	gated("POST /api/chats/{id}/attachments", s.handleUpload)
 	gated("GET /api/attachments/{id}", s.handleGetAttachment)
+	gated("POST /api/speech", s.handleSpeech)
 
 	// Static SPA with fallback for client-side routes.
 	mux.Handle("/", spaHandler{static: http.FileServerFS(s.staticFS), fs: s.staticFS})

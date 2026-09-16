@@ -18,7 +18,9 @@
   import { downloadAttachment } from '../lib/attach-actions.js';
   import { isPdf } from '../lib/pdf.js';
   import { isAudio, canPlayAudio } from '../lib/media.js';
-  import { FileText, Info, Paperclip, Pencil, RotateCcw, Workflow, X } from '@lucide/svelte';
+  import { FileText, Info, Paperclip, Pencil, RotateCcw, Square, Volume2, Workflow, X } from '@lucide/svelte';
+  import { onDestroy } from 'svelte';
+  import { speech, stopSpeech, toggleSpeech } from '../lib/speech.svelte.js';
   import CollapsibleStatus from './CollapsibleStatus.svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
   import Scramble from './Scramble.svelte';
@@ -191,6 +193,13 @@
   // thinking/argument delta, so reading it tracks all of them.
   $effect(() => {
     track?.(content, turns);
+  });
+
+  // Switching chats (or regenerating this message away) unmounts the row while
+  // its recording is still playing: stop it, or the audio keeps going with no
+  // control left on screen to stop it.
+  onDestroy(() => {
+    if (speech.id === msg.id) stopSpeech();
   });
 
   // ---- tap to reveal actions (touch) ----
@@ -501,6 +510,19 @@
         {/if}
 
         <CopyButton text={() => content} label="Copy message" />
+
+        <!-- Read aloud: server-side speech synthesis, offered only when a
+             speech model is designated (POST /api/speech). The square is both
+             "fetching" (pulsing) and "playing", so the button stays a stop
+             control for the whole time it is busy. -->
+        {#if app.config?.speech_enabled}
+          <IconButton
+            icon={speech.id === msg.id ? Square : Volume2}
+            label={speech.id === msg.id ? 'Stop reading aloud' : 'Read aloud'}
+            class={speech.loading && speech.id === msg.id ? 'animate-pulse' : ''}
+            onclick={() => toggleSpeech(msg.id)}
+          />
+        {/if}
 
         <Popover.Root>
           <Popover.Trigger

@@ -150,6 +150,10 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		},
 		"model_info": info,
 		"tools":      s.tools.Tools(),
+		// Whether the read-aloud action can work at all: the chat UI hides the
+		// button when no speech model is designated. The id itself is a setup
+		// detail and stays out of this response.
+		"speech_enabled": cfg.Models.DefaultSpeechModel != "",
 		"limits": map[string]any{
 			"upload_max_file_bytes": cfg.Limits.UploadMaxFileBytes,
 			"max_tool_iterations":   cfg.Limits.MaxToolIterations,
@@ -209,6 +213,8 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 			"default_vision_model":        c.Models.DefaultVisionModel,
 			"default_document_model":      c.Models.DefaultDocumentModel,
 			"default_transcription_model": c.Models.DefaultTranscriptionModel,
+			"default_speech_model":        c.Models.DefaultSpeechModel,
+			"speech_voice":                c.Models.SpeechVoice,
 			"metas":                       metas,
 		},
 		"mcp_servers": servers,
@@ -325,18 +331,6 @@ func (s *Server) handleSetupModels(w http.ResponseWriter, r *http.Request) {
 
 	metas := make([]config.ModelMeta, 0, len(ids))
 	sources := make(map[string]string, len(ids))
-	// A model added on another endpoint has no /models metadata to fetch, and
-	// the defaults would quietly turn it back into a chat model: carry the
-	// stored endpoint over instead.
-	stored, err := s.cfg.ModelMetas(r.Context(), ids)
-	if err != nil {
-		internalError(w, "load model metadata", err)
-		return
-	}
-	endpoints := make(map[string]string, len(stored))
-	for _, m := range stored {
-		endpoints[m.ModelID] = m.Endpoint
-	}
 	for _, id := range ids {
 		f, found := byID[id]
 		var m config.ModelMeta
@@ -347,7 +341,6 @@ func (s *Server) handleSetupModels(w http.ResponseWriter, r *http.Request) {
 			m = config.DefaultModelMeta(id)
 			sources[id] = "defaults"
 		}
-		m.Endpoint = endpoints[id]
 		metas = append(metas, m)
 	}
 	if err := s.cfg.UpsertModelMetas(r.Context(), metas); err != nil {
@@ -414,10 +407,10 @@ func (s *Server) handleSetupMCPTools(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
 }
 
-// chatModels drops whitelist ids the chat picker must not offer: a model on
-// any endpoint but /chat/completions (a transcriber, an image or speech model)
-// and a chat model whose metadata offers no "text" input. Ids with no metadata
-// (defaults = chat + text) are kept.
+// chatModels drops whitelist ids the chat picker must not offer: a legacy row
+// on a route that is not /chat/completions (an audio model whitelisted before
+// those became free-standing ids) and a chat model whose metadata offers no
+// "text" input. Ids with no metadata (defaults = chat + text) are kept.
 func chatModels(whitelist []string, metas []config.ModelMeta) []string {
 	byID := make(map[string]config.ModelMeta, len(metas))
 	for _, m := range metas {
@@ -1143,4 +1136,64 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	// ServeContent sets Content-Length and handles Range requests.
 	http.ServeContent(w, r, "", time.UnixMilli(att.CreatedAt), bytes.NewReader(att.Data))
+}
+
+// ---- speech ----
+
+// speechTimeout bounds one synthesis. It is a full provider round trip over a
+// whole message, and nothing else caps it: the server carries no WriteTimeout
+// (it would kill SSE).
+const speechTimeout = 2 * time.Minute
+
+// handleSpeech reads one stored message aloud and streams the mp3 back. The
+// audio is deliberately NOT stored: it is a rendering of text the database
+// already holds, so keeping it would grow the file for something a click can
+// produce again — unlike the speak tool's recording, which is part of the
+// conversation the model produced.
+//
+// ponytail: the message content is spoken as stored, markdown and all. Strip it
+// to plain text here if providers start reading the syntax aloud.
+func (s *Server) handleSpeech(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		MessageID string `json:"message_id"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+	msg, err := s.store.GetMessage(r.Context(), strings.TrimSpace(body.MessageID))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "no such message")
+			return
+		}
+		internalError(w, "load message", err)
+		return
+	}
+	text := strings.TrimSpace(msg.Content)
+	if text == "" {
+		writeError(w, http.StatusBadRequest, "the message has no text to speak")
+		return
+	}
+	models := s.cfg.Get().Models
+	cli := s.speech.Get(r.Context(), models.DefaultSpeechModel)
+	if cli == nil {
+		// Covers both "no speech model designated" and "provider not
+		// configured": either way the route cannot do its job.
+		writeError(w, http.StatusServiceUnavailable, "no speech model is configured")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), speechTimeout)
+	defer cancel()
+	audio, err := cli.Speak(ctx, text, models.SpeechVoice)
+	if err != nil {
+		// The provider's own diagnostics are the useful part: an unknown voice
+		// or an unsupported model only ever shows up in them.
+		writeError(w, http.StatusBadGateway, "speech model: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", attach.MimeMP3)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(audio)
 }

@@ -1,0 +1,108 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"chattoneko/internal/attach"
+	"chattoneko/internal/config"
+	"chattoneko/internal/llm"
+	"chattoneko/internal/mcphub"
+)
+
+// Speak returns the "speak" tool: the model hands the user a recording of text
+// read aloud. It is create_file for one fixed kind of content — the words go to
+// /audio/speech, and the mp3 that comes back is stored and linked to the
+// assistant message being generated, so a successful call always means the user
+// can hear it and no tool result has to name another tool.
+func Speak(files fileStore, cfgs *config.Store) tool {
+	s := &speakTool{files: files, cfgs: cfgs, cache: llm.NewCache(cfgs)}
+	return tool{
+		Name: "speak",
+		Description: "Read text aloud for the user: the recording appears in the chat on your reply as " +
+			"soon as this call succeeds. Pass the exact words to speak in `text` — they are spoken " +
+			"verbatim, so write them out as speech: no markdown, no stage directions, and nothing that " +
+			"only makes sense on a page. Use it when the user asks to hear something rather than read " +
+			"it. Describe the recording in your reply instead of repeating the words.",
+		Schema: json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"text": {
+			"type": "string",
+			"description": "The exact words to speak."
+		}
+	},
+	"required": ["text"],
+	"additionalProperties": false
+}`),
+		DefaultEnabled: true,
+		Title:          "Speaking…",
+		// A full provider round trip over the whole text, not local work, so
+		// the integrated tools' 30s default is far too tight (as for the
+		// specialists).
+		Timeout: specialistTimeout,
+		Handler: s.call,
+	}
+}
+
+type speakTool struct {
+	files fileStore
+	cfgs  *config.Store
+	cache *llm.Cache
+}
+
+func (s *speakTool) call(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (string, error) {
+	var args struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("invalid arguments JSON: %v", err)
+	}
+	if strings.TrimSpace(args.Text) == "" {
+		return "", errors.New("text is required")
+	}
+	// The recording is shown on the message being generated, so both
+	// coordinates are needed before any work happens.
+	if meta.ChatID == "" || meta.MessageID == "" {
+		return "", errors.New("no chat context for this call")
+	}
+
+	cfg := s.cfgs.Get()
+	if cfg.Models.DefaultSpeechModel == "" {
+		// Named by what it does rather than by the settings row, because this
+		// text is what the chat model relays to the user.
+		return "", errors.New("no model is designated for speech in the server settings, so nothing can be read aloud")
+	}
+	cli := s.cache.Get(ctx, cfg.Models.DefaultSpeechModel)
+	if cli == nil {
+		return "", errors.New("the provider is not configured yet")
+	}
+	data, err := cli.Speak(ctx, args.Text, cfg.Models.SpeechVoice)
+	if err != nil {
+		return "", fmt.Errorf("speech model: %v", err)
+	}
+
+	// The same classification and size cap as create_file, so the recording is
+	// stored exactly the way an uploaded one is and the player, the mime and
+	// the download all behave alike.
+	limit := cfg.Limits.UploadMaxFileBytes
+	res, err := attach.ProcessAny("speech.mp3", data, limit)
+	if errors.Is(err, attach.ErrTooLarge) {
+		return "", fmt.Errorf("the recording exceeds the %s file size limit", humanSize(limit))
+	}
+	if err != nil {
+		return "", fmt.Errorf("the speech model returned audio that could not be stored: %v", err)
+	}
+	m, err := s.files.CreateAttachment(ctx, meta.ChatID, res.Name, res.Kind, res.Mime, res.Size, res.Data)
+	if err != nil {
+		return "", fmt.Errorf("store audio: %v", err)
+	}
+	if err := s.files.LinkAttachmentToMessage(ctx, m.ID, meta.MessageID, meta.ChatID); err != nil {
+		return "", fmt.Errorf("the recording was stored but could not be shown: %v", err)
+	}
+	return fmt.Sprintf("Spoken as %q (%s) — it now plays on your reply. Say what it is instead of repeating the words.",
+		m.Filename, humanSize(m.Size)), nil
+}

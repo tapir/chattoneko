@@ -45,9 +45,14 @@ type ModelsPatch struct {
 	DefaultVisionModel *string   `json:"default_vision_model,omitempty"`
 	// Both optional: Complete() does not require them.
 	DefaultDocumentModel *string `json:"default_document_model,omitempty"`
-	// The transcription model is an EndpointTranscription model: it is posted
-	// to /audio/transcriptions, so it has no chat metadata to check.
+	// The audio models are free-standing ids, not whitelist members: each is
+	// called through its own route (/audio/transcriptions, /audio/speech), so
+	// there is no chat metadata to check and nothing to validate them against.
 	DefaultTranscriptionModel *string `json:"default_transcription_model,omitempty"`
+	DefaultSpeechModel        *string `json:"default_speech_model,omitempty"`
+	// SpeechVoice is the /audio/speech voice; empty omits it and the provider's
+	// own default applies.
+	SpeechVoice *string `json:"speech_voice,omitempty"`
 	// Metas upserts per-model metadata (context window, modalities,
 	// reasoning efforts) into the models table alongside the whitelist.
 	// Entries are sanitized on write; models dropped from the whitelist
@@ -109,12 +114,12 @@ func (s *Store) Update(ctx context.Context, patch Patch) (*Config, error) {
 
 // sanitizeDesignated clears a designated model that cannot do the job it is
 // designated for: the chat, task, vision and document models must be chat models
-// whose input modalities cover the role ("text", "text", "image", "file"), and
-// the transcription model must be a transcription one — it is called through
-// /audio/transcriptions, which no chat metadata describes. Clearing rather than
-// rejecting is the point: a broken designation ends up in the same state as a
-// missing one, so Complete() reports the config as unfinished and the settings
-// overlay stays forced open until it is fixed.
+// whose input modalities cover the role ("text", "text", "image", "file"). The
+// audio models are not checked here at all — they are free-standing ids outside
+// the whitelist, called through routes no chat metadata describes. Clearing
+// rather than rejecting is the point: a broken designation ends up in the same
+// state as a missing one, so Complete() reports the config as unfinished and the
+// settings overlay stays forced open until it is fixed.
 //
 // Metadata lives in the models table, not in the Config snapshot, so this reads
 // it; the patch's metas win over the stored rows because the settings sheet
@@ -125,14 +130,12 @@ func (s *Store) sanitizeDesignated(ctx context.Context, c *Config, patch Patch) 
 	designated := []struct {
 		kind     string
 		id       *string
-		endpoint string
-		modality string // "" = the endpoint alone decides
+		modality string // the input the role needs
 	}{
-		{"chat", &c.Models.DefaultChatModel, EndpointChat, "text"},
-		{"task", &c.Models.DefaultTaskModel, EndpointChat, "text"},
-		{"vision", &c.Models.DefaultVisionModel, EndpointChat, "image"},
-		{"document", &c.Models.DefaultDocumentModel, EndpointChat, "file"},
-		{"transcription", &c.Models.DefaultTranscriptionModel, EndpointTranscription, ""},
+		{"chat", &c.Models.DefaultChatModel, "text"},
+		{"task", &c.Models.DefaultTaskModel, "text"},
+		{"vision", &c.Models.DefaultVisionModel, "image"},
+		{"document", &c.Models.DefaultDocumentModel, "file"},
 	}
 	ids := make([]string, 0, len(designated))
 	for _, d := range designated {
@@ -165,7 +168,10 @@ func (s *Store) sanitizeDesignated(ctx context.Context, c *Config, patch Patch) 
 			continue
 		}
 		m := meta[*d.id]
-		if m.Endpoint != d.endpoint || (d.modality != "" && !slices.Contains(m.InputModality, d.modality)) {
+		// The endpoint half of the check only ever trips on a legacy row: audio
+		// models left the whitelist, so nothing but a chat model has a card to
+		// flag, and SanitizeMeta forces the patched metas to chat.
+		if m.Endpoint != EndpointChat || !slices.Contains(m.InputModality, d.modality) {
 			slog.Warn("config: dropping designated model that cannot fill its role",
 				"role", d.kind, "model", *d.id, "endpoint", m.Endpoint, "needs", d.modality)
 			*d.id = ""
@@ -205,6 +211,12 @@ func applyPatch(c *Config, p Patch) {
 		}
 		if p.Models.DefaultTranscriptionModel != nil {
 			c.Models.DefaultTranscriptionModel = strings.TrimSpace(*p.Models.DefaultTranscriptionModel)
+		}
+		if p.Models.DefaultSpeechModel != nil {
+			c.Models.DefaultSpeechModel = strings.TrimSpace(*p.Models.DefaultSpeechModel)
+		}
+		if p.Models.SpeechVoice != nil {
+			c.Models.SpeechVoice = strings.TrimSpace(*p.Models.SpeechVoice)
 		}
 	}
 	if p.MCPServers != nil {

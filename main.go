@@ -1,17 +1,15 @@
-// Chattoneko — a self-hosted ChatGPT-style chat app. Single Go binary:
-// embedded Svelte SPA + REST/SSE API + SQLite storage + one OpenAI-compatible
-// provider + tools (integrated built-ins and MCP servers).
+// Chattoneko — a self-hosted ChatGPT-style chat app in one Go binary:
+// embedded Svelte SPA, REST/SSE API, SQLite storage, one OpenAI-compatible
+// provider, built-in and MCP tools.
 //
-// There is NO config file. Every setting lives in the SQLite database
-// (config + models tables) except two things: the listen address, which is
-// the -listen CLI flag fixed at startup (default :8080), and single-user
-// auth, which is driven by the CHATTO_USERNAME / CHATTO_PASSWORD
-// environment variables — login is required exactly when BOTH are set, the
-// password is used as plaintext, and neither is stored in the database. On
-// the very first run the empty config table is seeded with defaults and the
-// server comes up in "setup" mode until the provider/model fields are filled
-// in through the API. Config edits apply live — see the subscriptions wired
-// in run().
+// There is no config file. Settings live in the SQLite config and models
+// tables and apply live (see the subscription in run()). Two exceptions: the
+// listen address is the -listen flag (default :8080), fixed for the process
+// lifetime, and single-user auth comes from CHATTO_USERNAME /
+// CHATTO_PASSWORD — login is required exactly when both are set, the password
+// is used as plaintext, and neither value reaches the database. An empty
+// config table is seeded with defaults, and the server reports setup mode
+// until the provider and model fields are set through the API.
 package main
 
 import (
@@ -44,9 +42,8 @@ import (
 //go:embed web/dist
 var webFS embed.FS
 
-// version is stamped at link time (make build → -ldflags -X main.version=…):
-// the release workflow passes the git tag, anything built by hand keeps this
-// default. Served on /api/meta so the SPA can show what it is talking to.
+// version is stamped at link time (-ldflags -X main.version=…) and served on
+// /api/meta; hand-built binaries keep this default.
 var version = "1.0.0-local"
 
 func main() {
@@ -62,8 +59,8 @@ func run() error {
 	debug := flag.Bool("debug", false, "enable debug logging (default level: info)")
 	flag.Parse()
 
-	// Database default: chatto.db BESIDE the binary, so the same database is
-	// used regardless of the working directory chattoneko is launched from.
+	// Default to chatto.db beside the binary so the working directory does not
+	// decide which database is opened.
 	dbFile := *dbPath
 	if dbFile == "" {
 		dbFile = "chatto.db" // fallback if the executable path cannot be resolved
@@ -72,16 +69,13 @@ func run() error {
 		}
 	}
 
-	// One standard handler for the whole process; -debug exposes the Debug
-	// events (http requests, flushes).
 	level := slog.LevelInfo
 	if *debug {
 		level = slog.LevelDebug
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-	// Database file permissions (the config table holds the API key and the
-	// password hash).
+	// 0o600: the config table holds the provider API key.
 	if _, err := os.Stat(dbFile); os.IsNotExist(err) {
 		f, err := os.OpenFile(dbFile, os.O_CREATE, 0o600)
 		if err != nil {
@@ -101,8 +95,6 @@ func run() error {
 	}
 	st := store.NewStore(sqlDB)
 
-	// Config store: seeds defaults on the very first run, then serves live
-	// snapshots. This replaces the old config.toml entirely.
 	ctx := context.Background()
 	cfgStore, err := config.NewStore(ctx, sqlDB)
 	if err != nil {
@@ -110,7 +102,6 @@ func run() error {
 	}
 	warnIfExposed(cfgStore.Get(), *listen)
 
-	// Startup sweeps.
 	now := time.Now()
 	if err := st.DeleteOrphanAttachments(ctx, now.Add(-24*time.Hour).UnixMilli()); err != nil {
 		slog.Warn("sweep orphan attachments", "error", err)
@@ -119,21 +110,15 @@ func run() error {
 		slog.Warn("sweep empty chats", "error", err)
 	}
 
-	// Provider + MCP. The live provider starts unconfigured when the setup
-	// hasn't provided an endpoint yet; Reconfigure (wired below) dials it the
-	// moment base_url/api_key are set.
 	boot := cfgStore.Get()
 	prov := provider.NewLive(boot.Provider.BaseURL, boot.Provider.APIKey)
 	hub := mcphub.New(cfgStore)
 	hub.Reload(ctx)
-	// Aggregated tool catalog: integrated (built-in, hardcoded) tools first,
-	// then MCP tools; integrated tools win name collisions. The merged catalog
-	// reads both sources live, so MCP servers added through config appear
-	// without a restart, and layers the global per-tool defaults from the
-	// config (settings UI) over the sources' own defaults.
+	// Built-ins precede MCP servers: Merge gives the first source priority on
+	// name collisions.
 	catalog := tools.Merge(cfgStore, tools.Builtin(st, cfgStore), hub)
 
-	// Engine (server-scoped context: generations survive client disconnects).
+	// Server-scoped context: generations outlive the request that started them.
 	serverCtx, serverCancel := context.WithCancel(context.Background())
 	defer serverCancel()
 	eng := engine.New(serverCtx, st, prov, catalog, cfgStore)
@@ -141,10 +126,6 @@ func run() error {
 		slog.Warn("crash recovery", "error", err)
 	}
 
-	// Background title task: the ONLY writer of auto-generated titles. Runs
-	// on the server context and publishes finals on the engine's global SSE
-	// stream (the app's one stream endpoint — see api.handleStream). It reads
-	// its provider + task model live from the config store.
 	titleSvc := titlegen.New(st, cfgStore, eng.PublishTitle)
 	go titleSvc.Run(serverCtx)
 
@@ -155,30 +136,20 @@ func run() error {
 	a := auth.New(cfgStore)
 	srv := api.New(cfgStore, st, a, eng, catalog, distFS, version)
 
-	// Live config wiring: re-dial the provider and reconcile MCP servers
-	// whenever the relevant settings change. Both can take real time (MCP
-	// dials), so they run async — Update() must not block on them. The
-	// listen address is not live-editable: it is the -listen flag, fixed
-	// for the process lifetime.
+	// Config saves re-dial the provider and reconcile MCP servers. hub.Reload
+	// dials every server, so it runs off the subscriber: config.Update must
+	// not block on it.
 	cfgStore.Subscribe(func(c *config.Config) {
 		prov.Reconfigure(c.Provider.BaseURL, c.Provider.APIKey)
 		warnIfExposed(c, *listen)
 		go func() {
-			// Reload first, then notify — publishing before the MCP
-			// reconciliation finished would have clients refetch /api/config
-			// and read back the old tool catalog.
-			//
-			// Unconditional: every setting lives in /api/config, not just the
-			// MCP-derived part, and the save response already went out, so this
-			// is the only thing that tells other tabs and devices. Update() is
-			// called only by the save handler — one broadcast per human save.
+			// Reload before publishing: config_changed makes clients refetch
+			// /api/config, which must already list the new tool catalog.
 			hub.Reload(serverCtx)
 			eng.PublishConfigChanged()
 		}()
 	})
 
-	// Bind the listener. The listen address is the -listen flag, fixed for
-	// the process lifetime; a bind failure at startup is fatal.
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", *listen, err)
@@ -195,7 +166,6 @@ func run() error {
 	}()
 	slog.Info("chattoneko serving", "addr", *listen, "db", dbFile, "setup_complete", cfgStore.Complete())
 
-	// Graceful shutdown on SIGINT/SIGTERM.
 	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
 	<-sigCtx.Done()
@@ -204,8 +174,8 @@ func run() error {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
 	_ = httpSrv.Shutdown(shutdownCtx)
-	eng.Shutdown() // cancels active generations and WAITS for their final persistence
-	hub.Close()    // closes MCP sessions
+	eng.Shutdown() // waits for in-flight generations to persist before the DB closes
+	hub.Close()
 	_ = sqlDB.Close()
 	serverCancel()
 	return nil
@@ -224,18 +194,17 @@ func sweepEmptyChats(ctx context.Context, st *store.Store, cutoff int64) error {
 	return nil
 }
 
-// warnIfExposed flags the dangerous combination of auth disabled on a
-// non-loopback address (the API is open to the whole network). The listen
-// address is a CLI flag, not part of the config, so it is passed in.
+// warnIfExposed logs when auth is disabled on a non-loopback address, which
+// leaves the API open to the network. addr is the -listen flag, not config.
 func warnIfExposed(c *config.Config, addr string) {
 	if !c.Auth.Enabled && !isLoopbackAddr(addr) {
 		slog.Warn("auth is DISABLED and the listen address is not loopback-only — the API is fully open on the network")
 	}
 }
 
-// isLoopbackAddr reports whether a "host:port" listen address binds only to
-// the loopback interface. An empty host (":8080") means all interfaces in
-// Go's net.Listen, so it is NOT loopback-only.
+// isLoopbackAddr reports whether a "host:port" listen address binds loopback
+// only. An empty host (":8080") binds every interface, so it is not
+// loopback-only.
 func isLoopbackAddr(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {

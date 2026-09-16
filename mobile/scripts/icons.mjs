@@ -1,14 +1,13 @@
 // Regenerate all Android launcher icon PNGs from the canonical SVGs:
-//   icons/app-icon-bg.svg       — full-bleed background
-//   icons/app-icon-fg.svg       — cat face, transparent margins (safe zone)
-//   icons/app-icon-combined.svg — single-image icon (legacy / older launchers)
+//   icons/app-icon-bg.svg       — full-bleed adaptive background
+//   icons/app-icon-fg.svg       — cat face, transparent margins (adaptive safe zone)
+//   icons/app-icon-combined.svg — single-image icon for launchers without adaptive support
 //
-// Adaptive-icon layers (API 26+) are rendered at 108dp per density — NOT
-// launcher sizes. A 192px max foreground is what made the launch zoom-in
-// blurry; xxxhdpi needs 432px. Legacy icons get the combined SVG at
-// launcher sizes.
+// Adaptive layers render on the 108dp canvas, not at launcher sizes, so the
+// launch zoom-in stays sharp (xxxhdpi = 432px); the combined icon renders at
+// launcher sizes (48dp).
 //
-// Requires: rsvg-convert.
+// Requires: rsvg-convert on PATH.
 import { execFileSync } from "node:child_process";
 import { cpSync } from "node:fs";
 import { join } from "node:path";
@@ -19,7 +18,6 @@ const BG = join(iconsDir, "app-icon-bg.svg");
 const FG = join(iconsDir, "app-icon-fg.svg");
 const COMBINED = join(iconsDir, "app-icon-combined.svg");
 
-// Density scale: adaptive layers are 108dp, legacy glyphs 48dp.
 const DENSITY = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
 
 const render = (svg, px, out) =>

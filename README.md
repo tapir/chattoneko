@@ -70,7 +70,7 @@ If your provider is OpenRouter, much of this is automated. ChattoNeko reads the 
 
 ### Recommended Configuration
 
-This is my personal config trying to achieve cost-efficiency with good performance. I was uing Gemini, ChatGPT and Claude for my daily assistance and this setup is quite capable compared to them. If you're having multiple conversations a day, it's still cheaper than their lowest tier monthly subscriptions with service like OpenRouter.
+This is my personal config trying to achieve cost-efficiency with good performance. It is quite capable compared to Gemini, ChatGPT and Claude for daily assistance. If you're having multiple conversations a day, it's still cheaper than their lowest tier monthly subscriptions with service like OpenRouter.
 
 | Purpose | Model | Default Reasoning | Info |
 | --- | --- | --- | --- |

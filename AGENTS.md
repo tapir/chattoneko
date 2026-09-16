@@ -21,10 +21,10 @@ Everything goes through the `Makefile`:
 - `make dev` — run the Go server (`go run . -db chatto.db`).
 - `make build` / `make run` — build web + sqlc, then the binary (`make run` also starts it).
 - `make web` — rebuild the frontend only; `cd web && npm run dev` for the Vite dev server (proxies `/api` to `:8080`).
-- `make sqlc` — regenerate typed queries after editing `internal/db/query/queries.sql`.
+- `make sqlc` — regenerate typed queries after editing `internal/db/queries.sql`.
 - `make tidy`, `make docker`, `make mobile`, `make mobile-apk`, `make mobile-run`.
 
-Go changes must be preceded by `make sqlc` when queries changed, and the frontend must be built (`make web`) before `go build` since `web/dist` is embedded.
+Go changes must be preceded by `make sqlc` when queries change, and the frontend must be built (`make web`) before `go build` since `web/dist` is embedded.
 
 ## Rules
 

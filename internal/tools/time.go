@@ -17,19 +17,16 @@ import (
 // Read at call time, like the clock itself.
 const envLocationString = "CHATTO_LOCATION_STRING"
 
-// The "time" tool: returns the server's current local date, time,
-// and timezone — plus its configured location when CHATTO_LOCATION_STRING is
-// set — so the model can ground relative expressions ("tomorrow", "next
-// Friday", "in two hours") and place-aware answers ("near me", "local").
-//
-// All user/LLM-facing text is hardcoded here — edit in place to change it.
+// The "time" tool: returns the server's current local date, time and
+// timezone — plus its configured location when CHATTO_LOCATION_STRING is set —
+// so the model can ground relative expressions ("tomorrow", "next Friday", "in
+// two hours") and place-aware answers ("near me", "local").
 var Time = tool{
 	Name: "time",
 	Description: "Get the current date, time, timezone, and — when the " +
 		"server has one configured — location. Call this when the answer " +
 		"depends on what day or time it is now, or on where the user is.",
-	// No arguments.
-	Schema:         nil, // defaults to an empty object schema (see New)
+	Schema:         nil, // defaults to an empty object schema
 	DefaultEnabled: true,
 	Title:          "Checking the time…",
 	Handler:        reportTime,

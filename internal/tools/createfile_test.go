@@ -76,7 +76,7 @@ func (f *fakeFileStore) GetAttachment(_ context.Context, id string) (*store.Atta
 }
 
 // shownOn asserts the one file created by a call was linked to the message
-// that asked for it — storing and showing are one step now.
+// that asked for it — storing and showing are one step.
 func shownOn(t *testing.T, fs *fakeFileStore, messageID string) fakeFile {
 	t.Helper()
 	if len(fs.files) != 1 {
@@ -124,7 +124,7 @@ func TestCreateFileText(t *testing.T) {
 }
 
 // Binary goes in as base64 and lands as a download-only file — except real
-// image bytes, which the shared pipeline re-encodes to PNG like every upload.
+// image bytes, which the shared pipeline re-encodes to WebP like every upload.
 func TestCreateFileBinary(t *testing.T) {
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 	pdf := []byte("%PDF-1.4\n\x00\xfe\xff binary")
@@ -205,7 +205,7 @@ func TestCreateFileValidation(t *testing.T) {
 	}
 }
 
-// The size cap is the configured upload limit for BOTH sources, so a file the
+// The size cap is the configured upload limit for both sources, so a file the
 // model writes itself gets no larger a budget than a user's upload.
 func TestCreateFileWrittenContentHonorsConfiguredLimit(t *testing.T) {
 	sqlDB, err := db.Open(":memory:")
@@ -241,8 +241,8 @@ func TestCreateFileWrittenContentHonorsConfiguredLimit(t *testing.T) {
 	}
 }
 
-// A failed link is an error, not a silent invisible file: with no separate
-// showing step there is nothing the model could call to recover.
+// A failed link is an error, not a silent invisible file: nothing the model
+// could call next recovers it.
 func TestCreateFileLinkFailure(t *testing.T) {
 	fs := &fakeFileStore{linkErr: fmt.Errorf("boom")}
 	out, isErr := callTool(t, fs, "create_file", `{"filename":"a.txt","content":"x"}`,
@@ -449,7 +449,7 @@ func TestCreateFileFromURLBinary(t *testing.T) {
 }
 
 // Bytes with a real PNG magic but nonsense after the header are refused: the
-// conversion runs on the server now, and a picture that will not decode is an
+// conversion runs on the server, so a picture that will not decode is an
 // in-band error rather than a broken thumbnail nobody can explain.
 func TestCreateFileFromURLUndecodablePNGIsRefused(t *testing.T) {
 	allowWebFetchLoopback(t)

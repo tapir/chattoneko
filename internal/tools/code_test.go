@@ -20,8 +20,8 @@ func callCode(t *testing.T, argsJSON string) (string, bool, error) {
 }
 
 func TestCodeBasicArithmetic(t *testing.T) {
-	// Lua 5.3+ separates integers from floats: 2^10 is a float, so it prints
-	// with the trailing ".0" (Lua 5.2 printed "1024").
+	// Integers and floats are distinct types: 2^10 is a float, so it prints
+	// with a trailing ".0".
 	out, isErr, err := callCode(t, `{"code":"print(1+2*3)\nprint(2^10)\nprint(7//2)"}`)
 	if err != nil || isErr {
 		t.Fatalf("out=%q isErr=%v err=%v", out, isErr, err)
@@ -58,9 +58,8 @@ func TestCodeAllowedLibraries(t *testing.T) {
 	}
 }
 
-// TestCodeLibrariesShopifyLacked covers the standard-Lua facilities the
-// previous VM did not implement at all: pattern matching, binary packing,
-// UTF-8, table.move.
+// TestCodeLibrariesShopifyLacked covers pattern matching, binary packing,
+// UTF-8 and table.move.
 func TestCodeLibrariesShopifyLacked(t *testing.T) {
 	out, isErr, err := callCode(t, `{
 		"code": "print(string.match('a=1','(%w+)=(%d+)'), (string.gsub('xxx','x','y')), utf8.len('héllo'), table.move({1},1,1,2,{9})[2], #string.pack('>i4',7), math.type(3.0))"
@@ -257,8 +256,7 @@ func TestCodeRunawayPrintLoopBounded(t *testing.T) {
 }
 
 func TestCodeCancelledContextAborts(t *testing.T) {
-	// The VM runs under the handler's context, so a cancelled turn stops it —
-	// something a debug count-hook alone could not do.
+	// The VM runs under the handler's context, so a cancelled turn stops it.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
@@ -358,33 +356,31 @@ func TestCodeDoesNotLeakToStdout(t *testing.T) {
 	}
 }
 
-// TestCodeLua54Semantics pins the language the Description advertises.
-// Every expectation here was probed against the running sandbox, and the ones
-// that differ between golua v1 (Lua 5.4) and golua /v2 (Lua 5.5) are included
-// deliberately: bumping the dependency — or a golua release that changes
-// behaviour — fails this test instead of silently making the description lie
-// to the model. The 5.5 branch makes for-loop control variables read-only,
-// which is what killed a real snippet in production.
+// TestCodeLua54Semantics pins the language the Description advertises: a
+// golua release or a dependency bump that changes semantics fails here instead
+// of silently making the description lie to the model. The cases where Lua 5.5
+// differs are included deliberately, since 5.5 makes for-loop control
+// variables read-only.
 func TestCodeLua54Semantics(t *testing.T) {
 	// Loop control variables are assignable in 5.4, a compile error in 5.5.
 	wantOut(t, `for w in ('a b'):gmatch('%S+') do w = w:upper() print(w) end`, "A\nB\n")
 	wantOut(t, `for i=1,3 do i = i*10 print(i) end`, "10\n20\n30\n")
-	// table.create is 5.5-only; the compat aliases stock Lua dropped in 5.3
-	// are still here in 5.4.
+	// table.create is 5.5-only; the 5.1/5.2 compat aliases are still here in
+	// 5.4.
 	wantOut(t, `print(table.create)`, "nil\n")
 	wantOut(t, `print(type(math.pow), type(math.atan2), type(math.log10), type(math.cosh), type(math.frexp), type(math.ldexp), type(bit32))`,
 		strings.Repeat("function\t", 6)+"table\n")
 	wantOut(t, `print(math.pow(2,10), math.log10(1000), math.log(1000,10), bit32.bxor(5,3))`, "1024.0\t3.0\t3.0\t6\n")
 
-	// Removed or renamed since 5.1.
+	// These 5.1 names are absent in 5.4.
 	wantOut(t, `print(setfenv, getfenv, unpack, loadstring, table.maxn, table.getn, table.foreach, table.foreachi, module, newproxy, string.gfind, math.mod)`,
 		strings.Repeat("nil\t", 11)+"nil\n")
 	wantOut(t, `local a,b = table.unpack({1,2}) print(a, b, load('return 6*7')(), #'abc', select('#',1,nil,3), (table.pack(1,nil,3)).n, math.fmod(-7,3))`,
 		"1\t2\t42\t3\t3\t3\t-1\n")
-	// _ENV replaced setfenv/getfenv and is a plain assignable upvalue.
+	// _ENV is a plain assignable upvalue.
 	wantOut(t, `print(type(_ENV), _ENV == _G)`, "table\ttrue\n")
 
-	// Integers and floats (5.3).
+	// Integers and floats.
 	wantOut(t, `print(math.type(3), math.type(3.0), math.type('3'), tostring(3.0), 7/2, 7//2, 7.0//2, -7//2, 7%3, -7%3, math.fmod(-7,3))`,
 		"integer\tfloat\tnil\t3.0\t3.5\t3\t3.0\t-4\t1\t2\t-1\n")
 	wantOut(t, `print(math.maxinteger+1 == math.mininteger, math.tointeger(3.0), math.tointeger(3.5), math.type(math.floor(3.7)), math.type(math.ceil(3.2)), math.type(math.sqrt(9)), math.type(math.random(1,3)))`,
@@ -403,7 +399,7 @@ func TestCodeLua54Semantics(t *testing.T) {
 	wantOut(t, `local z=0 print(1/z, -1/z, 0/0)`, "inf\t-inf\t-nan\n")
 	wantOut(t, `math.randomseed(42) local a=math.random(1,100) math.randomseed(42) print(a == math.random(1,100))`, "true\n")
 
-	// New since 5.1.
+	// goto, <close>/<const> variables, utf8 and string.pack.
 	wantOut(t, `for i=1,3 do if i==2 then goto cont end print('i', i) ::cont:: end`, "i\t1\ni\t3\n")
 	wantOut(t, `local log={} do local f <close> = setmetatable({}, {__close=function() log[#log+1]='closed' end}) end print(table.concat(log, ','))`,
 		"closed\n")

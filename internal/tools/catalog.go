@@ -11,20 +11,19 @@ import (
 // fileStore is the attachment store the file and specialist tools work
 // against: create_file stores a file and links it to the assistant message
 // being generated in one step, so a successful call always means the user can
-// see it; the specialists read one back by id. *store.Store implements it;
-// tests can substitute a fake.
+// see it, and the specialists read one back by id. *store.Store implements
+// it; tests can substitute a fake.
 type fileStore interface {
 	CreateAttachment(ctx context.Context, chatID, filename, kind, mime string, size int64, data []byte) (*store.AttachmentMeta, error)
 	LinkAttachmentToMessage(ctx context.Context, attachmentID, messageID, chatID string) error
 	GetAttachment(ctx context.Context, id string) (*store.Attachment, error)
 }
 
-// Builtin returns the hardcoded catalog of integrated tools. Add new
-// integrated tools to this list — each tool's definition (name, description,
-// schema, default toggle, handler) lives in its own file; tools that need
-// dependencies (stores) are constructed here with them, so no package-level
-// wiring state is needed. cfgs is the live config store: create_file reads the
-// size limits from it, the specialists their designated models.
+// Builtin returns the catalog of integrated tools. Each tool's definition
+// lives in its own file; tools that need dependencies (stores) are constructed
+// here with them, so no package-level wiring state is needed. cfgs is the live
+// config store: create_file reads the size limits from it, the specialists
+// their designated models.
 func Builtin(files fileStore, cfgs *config.Store) *registry {
 	ts := []tool{Time, Code, CreateFile(files, cfgs), Fetch}
 	return newRegistry(append(ts, Specialists(files, cfgs)...)...)

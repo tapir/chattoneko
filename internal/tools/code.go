@@ -15,51 +15,43 @@ import (
 	"chattoneko/internal/mcphub"
 )
 
-// The "code" tool: runs a small Lua snippet in a restricted sandbox
-// and returns whatever the snippet prints. It exists so the model can do
-// exact arithmetic, string/data wrangling, or logic that is error-prone to
-// do "in its head" — an advanced calculator / expression evaluator.
+// The "code" tool: runs a small Lua snippet in a restricted sandbox and
+// returns whatever the snippet prints. It exists so the model can do exact
+// arithmetic, string/data wrangling, or logic that is error-prone to do "in
+// its head" — an advanced calculator / expression evaluator.
 //
-// The VM is golua v1 (Lua 5.4.8). Sandboxing is capability-based rather than a
-// hand-picked library whitelist: stdlib.Open registers the standard modules,
-// and every host-facing one only appears when its provider is set. We set no
-// providers, so io, os, debug, chan, time, exec and http are never
-// registered at all, and dofile/loadfile do not exist without a code
-// provider. What is left is base plus string, table, math, bit32, utf8, an
-// inert package/require (its searchers only reach the filesystem through a
-// code provider, and package.loadlib always reports "absent") and our own
-// json module (luajson.go).
+// The VM is golua v1 (Lua 5.4.8). golua's /v2 branch is Lua 5.5, whose
+// read-only for-loop control variables reject idioms models write from
+// 5.1-5.4 memory (`for w in s:gmatch(...) do w = w:gsub(...) end` is a compile
+// error there); v1 also keeps the 5.1/5.2 compat aliases (math.pow, bit32,
+// ...). TestCodeLua54Semantics pins the version the description advertises.
 //
-// WHY v1 AND NOT v2 — golua ships two maintained branches in lockstep (same
-// release days, same provider/sandbox/limits API, so the only difference here
-// is the language version) and /v2 is Lua 5.5. Lua 5.5 makes for-loop control
-// variables read-only, which rejects code every model writes from 5.1-5.4
-// memory — `for w in s:gmatch(...) do w = w:gsub(...) end` is a compile error
-// there, so the whole snippet dies before running. This tool is a calculator
-// for an LLM, not a place to adopt a language version no model has seen; v1
-// keeps the 5.1/5.2 compat aliases (math.pow, bit32, ...) so those idioms run
-// too. Bumping to /v2 is an import-path change plus this description's
-// version text — and TestCodeLua54Semantics below will fail first.
+// Sandboxing is capability-based rather than a hand-picked library whitelist:
+// stdlib.Open registers the standard modules, and every host-facing one only
+// appears when its provider is set. With no providers set, io, os, debug,
+// chan, time, exec and http are never registered at all, and dofile/loadfile do
+// not exist without a code provider. What is left is base plus string, table,
+// math, bit32, utf8, an inert package/require (its searchers only reach the
+// filesystem through a code provider, and package.loadlib always reports
+// "absent") and our own json module (luajson.go).
 //
-// hardenSandbox then drops the few globals that do not belong here — see
+// runLua then drops the few globals that do not belong here — see
 // removedGlobals for why each one goes, and note that dropping a module also
 // has to clear its package.loaded entry or require() hands it straight back —
 // and replaces load() with a text-only wrapper so no precompiled bytecode
 // reaches the undumper.
 //
-// GETTING RESULTS BACK — the tool returns ONLY what the snippet sends to
-// print(), captured in-memory by the VM (vm.WithCaptureOutput) rather than
-// written to the process stdout; stdlib does the tab-joining and honors
-// __tostring. We do not read return values off the VM (we cannot know what
-// the model will compute), so the description tells the model to always
-// print() its final result.
+// The tool returns only what the snippet sends to print(), captured in memory
+// by the VM (vm.WithCaptureOutput) rather than written to the process stdout;
+// stdlib does the tab-joining and honors __tostring. Return values are never
+// read off the VM (we cannot know what the model will compute), so the
+// description tells the model to always print() its final result.
 //
-// LIMITS — a snippet is bounded three ways, none of them hand-rolled:
+// A snippet is bounded three ways, none of them hand-rolled:
 //
 //   - wall clock: the VM runs under the handler's context, which
-//     registry.Call already bounds (30s). golua checks cancellation at loop
-//     backedges, calls and tail calls, so a runaway loop is aborted —
-//     something a debug count-hook alone cannot do.
+//     registry.Call bounds (30s). golua checks cancellation at loop
+//     backedges, calls and tail calls, so a runaway loop is aborted.
 //   - work/memory: luaCheckpointBudget. A deadline bounds CPU but not
 //     memory, and the capture buffer is an uncapped append; this is what
 //     stops a print loop from retaining hundreds of MB before the deadline
@@ -70,8 +62,6 @@ import (
 // Lua errors (including the limit errors, which are catchable by pcall) come
 // back as a Go error, which the registry surfaces to the model in-band as
 // "Error: ..." — the host never crashes.
-//
-// All user/LLM-facing text is hardcoded here — edit in place to change it.
 
 // maxCodeBytes bounds the incoming snippet size. Snippets are meant to be
 // small; this keeps a pathological payload from even reaching the VM.
@@ -82,12 +72,12 @@ const maxCodeBytes = 1 << 20 // 1 MiB
 const chunkName = "code"
 
 // luaCheckpointBudget bounds VM checkpoints — loop backedges, calls and tail
-// calls, NOT raw instructions. Wall-clock time is already bounded by the
-// handler's context; this bound exists because a deadline cannot bound
-// memory. golua's output capture appends without limit, so a runaway print
-// loop retains ~450 MB/s until the context deadline lands. 5M checkpoints
-// caps that at roughly 2.5M captured lines while leaving ~50x the headroom
-// any realistic calculation needs.
+// calls, not raw instructions. Wall-clock time is already bounded by the
+// handler's context; this bound exists because a deadline cannot bound memory.
+// golua's output capture appends without limit, so a runaway print loop
+// retains ~450 MB/s until the context deadline lands. 5M checkpoints caps
+// that at roughly 2.5M captured lines while leaving ~50x the headroom any
+// realistic calculation needs.
 //
 // ponytail: this bounds iterations, not bytes per iteration, so retention is
 // still only bounded by the deadline — a loop keeping string.rep results
@@ -104,7 +94,6 @@ const luaCheckpointBudget = 5_000_000
 // result the model has to read.
 const maxOutputBytes = 1 * 1024 * 1024
 
-// The code argument is a single required string.
 var codeSchema = json.RawMessage(`{
 	"type": "object",
 	"properties": {
@@ -170,14 +159,14 @@ func runCode(ctx context.Context, argsJSON string, _ mcphub.CallMeta) (string, e
 
 // removedGlobals are dropped after stdlib.Open. Everything else the sandbox
 // lacks (io, os, debug, chan, time, exec, http, dofile, loadfile) is absent
-// because no provider was set — capability gating, not deletion.
+// because no provider is set — capability gating, not deletion.
 var removedGlobals = []string{
 	// Each Lua coroutine runs on its own goroutine, and one left suspended
-	// and abandoned costs ~16 KB that neither the deadline nor the
-	// checkpoint budget bounds — the budget counts iterations, not bytes,
-	// and a coroutine is ~180x what a printed line costs. Measured: within
-	// the budget a snippet strands ~1.2M of them (~20 GB) and the kernel
-	// OOM-kills the process. v.Close reaps them, but only after the run.
+	// and abandoned costs ~16 KB that neither the deadline nor the checkpoint
+	// budget bounds — the budget counts iterations, not bytes, and a coroutine
+	// is ~180x what a printed line costs. Within the budget a snippet strands
+	// ~1.2M of them (~20 GB) and the kernel OOM-kills the process. v.Close
+	// reaps them, but only after the run.
 	"coroutine",
 	// Drives the host's garbage collector, and collectgarbage("count")
 	// reports the whole Go process's heap in KB. runtime.ReadMemStats is
@@ -236,8 +225,7 @@ func runLua(ctx context.Context, code string) (string, error) {
 	textOnlyLoad(v)
 	openJSON(v)
 
-	// The documented VM lifecycle: Close is what reaps goroutines a library
-	// spawned. Coroutines are removed today, so there is nothing to reap.
+	// The documented VM lifecycle: Close reaps the goroutines a library spawned.
 	defer v.Close(ctx)
 
 	if _, err := v.Run(proto); err != nil {

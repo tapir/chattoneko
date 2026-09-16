@@ -36,8 +36,8 @@ func testJPEG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// testPNG returns a small PNG's bytes — the format the app stores images in
-// (the browser encodes them before upload; nothing server-side converts).
+// testPNG returns a small PNG's bytes, one of the two formats attach sends a
+// vision model.
 func testPNG(t *testing.T, w, h int) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -204,9 +204,8 @@ func TestFetchErrors(t *testing.T) {
 	}
 }
 
-// The catalog the engine actually runs: the two file paths, the two local
-// tools and one specialist per file type. attach_file is gone — create_file
-// shows what it creates — and so is the single `agent` tool it replaced.
+// The catalog the engine runs: create_file, fetch, code, time and one
+// specialist per file type. The names in the second list must stay out of it.
 func TestBuiltinFileTools(t *testing.T) {
 	names := map[string]bool{}
 	for _, e := range Builtin(&fakeFileStore{}, nil).Tools() {
@@ -225,9 +224,8 @@ func TestBuiltinFileTools(t *testing.T) {
 }
 
 // No integrated tool's LLM-facing text may point at another tool by name: a
-// name in prose is a promise the user can break by turning that tool off, and
-// the invisible-file bug this replaced came from exactly that. Only the
-// underscore names are checked — "code", "time" and "fetch" are ordinary
+// name in prose is a promise the user can break by turning that tool off. Only
+// the underscore names are checked — "code", "time" and "fetch" are ordinary
 // English words that show up in prose ("source code") and would only produce
 // false positives.
 func TestNoCrossToolReferences(t *testing.T) {

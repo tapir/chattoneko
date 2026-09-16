@@ -58,7 +58,7 @@ func completionServer(t *testing.T, answer string) (*httptest.Server, func() map
 	}
 }
 
-// transcribeReq is what a transcription request carried.
+// transcribeReq is what a transcription request carries.
 type transcribeReq struct {
 	path, model, filename, mime string
 	data                        []byte
@@ -470,10 +470,9 @@ func TestSpecialistReportsEmptyAnswer(t *testing.T) {
 
 // TestSpecialistPromptsRefuseInFileInstructions: a file is data, so a question
 // or instruction written INSIDE it must be reported verbatim rather than
-// answered — the "Who is Eminem" PDF that came back as "no information about
-// Eminem". Every specialist prompt has to carry that rule, or the same file
-// reads differently depending on its type. Audio has no prompt: what comes
-// back is a transcript, and the tool description tells the chat model it is one.
+// answered. Every specialist prompt has to carry that rule, or the same file
+// reads differently depending on its type. Audio has no prompt: what comes back
+// is a transcript, and the tool description tells the chat model it is one.
 func TestSpecialistPromptsRefuseInFileInstructions(t *testing.T) {
 	for _, tc := range []struct {
 		kind   string

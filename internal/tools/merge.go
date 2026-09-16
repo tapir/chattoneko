@@ -18,21 +18,19 @@ type source interface {
 
 // Merged is the union of several tool sources presented as one catalog, so
 // the engine doesn't care where a tool comes from. The union is computed
-// LAZILY on every Tools()/Call() from the live sources, so sources whose
-// tool list changes at runtime (the MCP hub reconnecting after a config
-// update) are picked up without rebuilding the catalog. On display-name
-// collisions the FIRST source passed wins (pass integrated tools first).
+// lazily on every Tools()/Call() from the live sources, so sources whose tool
+// list changes at runtime (the MCP hub reconnecting after a config update) are
+// picked up without rebuilding the catalog. On display-name collisions the
+// first source passed wins (pass integrated tools first).
 //
-// cfg supplies the global per-tool defaults from the settings UI
-// (tool_defaults), read live on every Tools() call: an entry listed there
-// gets its DefaultEnabled replaced, so both the engine's per-chat effective
-// tool set and the API's tool listing see the configured default. A tool
-// absent from the map keeps its source's own default (integrated tools:
-// hardcoded; MCP tools: their server's default_enabled). The same goes for
-// the user-facing title: cfg's tool_titles map (tool name → label, edited in
-// the settings UI for MCP tools) replaces an entry's Title when it holds a
-// non-empty value, otherwise the source's own stays (integrated tools:
-// hardcoded; MCP tools: the title their server declared). cfg may be nil.
+// cfg supplies the global per-tool defaults from the settings UI, read live on
+// every Tools() call. An entry listed in tool_defaults gets its DefaultEnabled
+// replaced, so both the engine's per-chat effective tool set and the API's tool
+// listing see the configured default; a tool absent from the map keeps its
+// source's own default (integrated tools: hardcoded, MCP tools: their server's
+// default_enabled). The same goes for the user-facing title: tool_titles (tool
+// name → label, edited in the settings UI) replaces an entry's Title when it
+// holds a non-empty value, otherwise the source's own stays. cfg may be nil.
 type Merged struct {
 	cfg     *config.Store
 	sources []source

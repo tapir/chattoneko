@@ -35,10 +35,8 @@ func fetchBody(ctx context.Context, rawURL string) (data []byte, finalURL *url.U
 // The "fetch" tool: reads a URL and hands the body to the model. Text comes
 // back verbatim, capped at the tool-result budget; anything else is an in-band
 // error, because bytes the model cannot read are not a result. Handing the USER
-// a file from a URL is create_file's job, and it never routes the bytes
-// through the model — so there is no save mode and no base64 here.
-//
-// All user/LLM-facing text is hardcoded here — edit in place to change it.
+// a file from a URL is create_file's job, and it never routes the bytes through
+// the model, so this tool only ever returns text.
 var Fetch = tool{
 	Name: "fetch",
 	Description: "Read a web page or an HTTP API and get its text back. A text body arrives " +
@@ -100,10 +98,10 @@ func textResult(body string) string {
 		humanSize(int64(len(cut))), humanSize(int64(len(body))))
 }
 
-// ctypeHint names the Content-Type the server actually sent, so failures
-// like "the server sent image/avif" (not one of the accepted image formats),
-// "application/pdf" (binary, refused) or "text/html" (a bot interstitial
-// where an image was expected) are self-explanatory to the model.
+// ctypeHint names the Content-Type the server actually sent, so failures like
+// "the server sent image/avif" (not one of the accepted image formats),
+// "application/pdf" (binary, refused) or "text/html" (a bot interstitial where
+// an image was expected) are self-explanatory to the model.
 func ctypeHint(ctype string) string {
 	ctype = strings.ToLower(strings.TrimSpace(ctype))
 	if ctype == "" {

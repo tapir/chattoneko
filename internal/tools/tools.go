@@ -1,14 +1,11 @@
 // Package tools provides the integrated (built-in) tool catalog: tools
 // implemented in-process and declared entirely in code. Integrated tools
 // implement the same engine.ToolCatalog interface as the MCP hub, so the
-// engine's turn loop, per-chat toggles, and the API's tool listing treat
-// them identically to MCP tools.
+// engine's turn loop, per-chat toggles and the API's tool listing treat them
+// identically to MCP tools.
 //
-// Adding a new integrated tool:
-//  1. Create a file for it here (e.g. timelocation.go) with a `var MyTool = tool{...}`
-//     holding all LLM-facing text (name, description, schema) and its
-//     user-facing title hardcoded.
-//  2. Add it to the list in Builtin() (catalog.go).
+// A new integrated tool is a `var MyTool = tool{...}` in its own file here,
+// listed in Builtin() (catalog.go).
 package tools
 
 import (
@@ -21,27 +18,26 @@ import (
 	"chattoneko/internal/mcphub"
 )
 
-// callTimeout bounds one integrated tool call: integrated tools are local,
-// but a future handler doing I/O must not block the turn loop indefinitely.
+// callTimeout bounds one integrated tool call so a handler doing I/O cannot
+// block the turn loop indefinitely.
 const callTimeout = 30 * time.Second
 
-// tool is one integrated tool definition. All LLM-facing text is hardcoded
-// here in code — edit the tool's own file to change it. DefaultEnabled
-// controls whether the tool starts enabled for chats that have not toggled
-// it explicitly (per-chat overrides live in the chat's persisted tools map).
+// tool is one integrated tool definition; all of its LLM-facing text lives in
+// the tool's own file. DefaultEnabled is the starting state for chats that
+// have not toggled the tool explicitly (per-chat overrides live in the chat's
+// persisted tools map).
 type tool struct {
 	Name           string          // LLM-facing name (must be unique across the whole catalog)
 	Description    string          // LLM-facing description
 	Schema         json.RawMessage // JSON schema for the arguments
-	DefaultEnabled bool            // enabled by default (configurable here in code)
-	// Title is the USER-facing label the chat UI shows instead of Name
-	// ("Coding…"). Hardcoded here like the rest of the tool's text; the
-	// model never sees it. Empty falls back to Name in the UI.
+	DefaultEnabled bool            // enabled unless the chat or the config says otherwise
+	// Title is the user-facing label the chat UI shows instead of Name
+	// ("Coding…"); the model never sees it. Empty falls back to Name in the UI.
 	Title string
 	// Modality is the chat-model input modality that makes the tool pointless,
 	// because the model takes that input itself ("image" for vision). Empty for
-	// every other tool: it is always offered. The engine leaves such a tool out
-	// of the request and the chat UI greys it out.
+	// every other tool, which is always offered. The engine leaves such a tool
+	// out of the request and the chat UI greys it out.
 	Modality string
 	// Timeout bounds one call, overriding callTimeout. Only a handler doing
 	// remote I/O needs it (the specialists wait on another model); 0 keeps the
@@ -65,8 +61,8 @@ type registry struct {
 	byName map[string]int // name → index into tools
 }
 
-// newRegistry builds a registry from the given tool definitions. Duplicate names are
-// a programming error and panic at startup so they are caught immediately.
+// newRegistry builds a registry from the given tool definitions. A missing
+// name or handler and a duplicate name panic at startup.
 func newRegistry(ts ...tool) *registry {
 	r := &registry{byName: map[string]int{}}
 	for i := range ts {
@@ -104,9 +100,9 @@ func (r *registry) Tools() []mcphub.Entry {
 	return out
 }
 
-// Call invokes the named integrated tool. Handler errors are returned
-// in-band (isError=true) so the model sees the failure as tool output,
-// mirroring how MCP tool errors surface.
+// Call invokes the named integrated tool. Handler errors are returned in-band
+// (isError=true) so the model sees the failure as tool output, mirroring how
+// MCP tool errors surface.
 func (r *registry) Call(ctx context.Context, display, argsJSON string, meta mcphub.CallMeta) (out string, isErr bool, err error) {
 	i, ok := r.byName[display]
 	if !ok {
@@ -119,8 +115,8 @@ func (r *registry) Call(ctx context.Context, display, argsJSON string, meta mcph
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// An in-process handler (including third-party VM code like the Lua
-	// sandbox) must not be able to kill the generation — or the whole
-	// process — with a panic; surface it as an in-band tool error instead.
+	// sandbox) must not be able to kill the generation or the whole process
+	// with a panic; surface it as an in-band tool error instead.
 	defer func() {
 		if p := recover(); p != nil {
 			slog.Error("integrated tool panicked", "tool", display, "panic", p)

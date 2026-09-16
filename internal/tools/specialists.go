@@ -39,7 +39,7 @@ const (
 	// maxSpecialistTokens bounds the specialist's answer. Reasoning models
 	// spend part of that budget on hidden reasoning tokens before emitting any
 	// content (the trap titlegen documents), and an exhausted budget comes back
-	// as an EMPTY answer — which the handler reports with the provider's own
+	// as an empty answer — which the handler reports with the provider's own
 	// diagnostics instead of handing the chat model silence.
 	maxSpecialistTokens = 4096
 )
@@ -142,7 +142,7 @@ func (s specialist) description() string {
 // Specialists returns one tool per row of the hand-off table: the chat model
 // hands over an attachment id (and a question, for the readers), and a model
 // that CAN read that file type answers. They exist for chat models without the
-// capability — the file reached them as a <file> reference naming its id, so
+// capability — the file reaches them as a <file> reference naming its id, so
 // the id is all a tool needs to load the bytes back from the database. Each one
 // carries the modality that makes it pointless, which the engine reads to leave
 // it out of the request and the chat UI reads to grey it out.
@@ -305,9 +305,9 @@ func specialistFor(kind string) *specialist {
 }
 
 // wireSupported refuses, in-band, a file whose stored mime has no wire
-// representation: an image outside the png/webp the app converts uploads to.
-// The stored mime is the sniffed one and nothing is re-encoded server-side, so
-// what is stored is what would go out. Audio is not checked: the
+// representation: an image outside the png/webp a vision input takes. The
+// stored mime is the sniffed one and nothing re-encodes a file on its way out,
+// so what is stored is what would be sent. Audio is not checked: the
 // transcriptions endpoint takes every container the app can store (webm, mp3,
 // wav, ogg, flac).
 func wireSupported(kind string, att *store.Attachment) error {

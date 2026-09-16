@@ -12,9 +12,9 @@ import (
 // A small "json" library for the code sandbox: json.encode(value) and
 // json.decode(text), both backed by the standard library's encoding/json.
 //
-// The conversion mirrors golua's own (unexported) JSON helpers in
-// stdlib/http, so json.encode produces what the library itself would have
-// sent as an HTTP body. Two things are added because a sandbox needs them:
+// The conversion mirrors golua's own (unexported) JSON helpers in stdlib/http,
+// so json.encode produces what the library itself sends as an HTTP body. Two
+// things are added because a sandbox needs them:
 //
 //   - A nesting cap on encode. golua's converter recurses into tables with no
 //     depth limit, so `local t={} t.self=t; json.encode(t)` exhausts the Go
@@ -92,9 +92,9 @@ func jsonDecode(v *vm.VM) int {
 
 // luaToGo converts a Lua value into something json.Marshal can encode.
 // Anything without a JSON form falls back to its string rendering, which is
-// what golua's converter does — in practice only functions, since coroutines
-// are removed from the sandbox — note that this puts a heap address in the
-// output ("function: 0x34…").
+// what golua's converter does — in practice only functions, since the sandbox
+// has no coroutines. Note that this puts a heap address in the output
+// ("function: 0x34…").
 func luaToGo(val vm.Value, depth int) any {
 	if depth > maxJSONDepth {
 		panic(fmt.Sprintf("json.encode: exceeded max nesting depth (%d)", maxJSONDepth))
@@ -180,7 +180,7 @@ func luaKeyString(key vm.Value) string {
 // null member simply disappears ({"a":null} -> {}) and a null array element
 // leaves a hole ([1,null,3] -> t[2] == nil). That is what dkjson and golua's
 // own converter do. Nesting needs no depth guard here: encoding/json stops at
-// maxJSONDepth before this is ever called.
+// maxJSONDepth, so this never sees deeper input.
 func goToLua(val any) vm.Value {
 	switch v := val.(type) {
 	case nil:

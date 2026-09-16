@@ -18,12 +18,10 @@ import (
 
 // CreateFile returns the "create_file" tool: the model hands the user a file,
 // either one it writes (text as a string, binary as base64) or one it points
-// at by URL and we download. Storing and showing are ONE step — the file is
+// at by URL and we download. Storing and showing are one step — the file is
 // linked to the assistant message being generated before the result goes back,
 // so a successful call always means the user can see it and no tool result has
 // to name another tool.
-//
-// All user/LLM-facing text is hardcoded here — edit in place to change it.
 func CreateFile(files fileStore, limits *config.Store) tool {
 	return tool{
 		Name: "create_file",

@@ -18,7 +18,7 @@ import (
 // (web/src/lib/media.js): a picture create_file is handed is decoded, capped
 // and re-encoded to WebP, so a file the model drew or fetched lands in the chat
 // in the shape a user's upload does — and, being WebP, is one of the two mimes
-// attach.SendsAsImage lets a vision model actually read.
+// attach.SendsAsImage lets a vision model read.
 const (
 	maxImageSide = 1280 // media.js MAX_SIDE
 	imageQuality = 75   // media.js IMAGE_QUALITY, on go-webp's 0-100 scale
@@ -31,7 +31,7 @@ const (
 	maxDecodePixels = 64 << 20
 )
 
-// scaleToFit is media.js scaleToFit: cap the LONGEST side at limit, keep the
+// scaleToFit is media.js scaleToFit: cap the longest side at limit, keep the
 // aspect ratio, never upscale, and never shrink by more than 2x — past that,
 // squeezing a 5000px photo into 1280 throws away more detail than it saves
 // bytes, so it stops at half size instead.
@@ -50,7 +50,7 @@ func scaleToFit(w, h, limit int) (int, int) {
 // browser. An animated GIF or WebP keeps its first frame, which is all a decode
 // (and a canvas draw of it) yields.
 //
-// EXIF orientation is NOT applied: image/jpeg ignores the tag and nothing else
+// EXIF orientation is not applied: image/jpeg ignores the tag and nothing else
 // in the accepted set carries one, so a phone photo stored sideways stays
 // sideways. The browser gets this free from createImageBitmap and there is no
 // stdlib equivalent.

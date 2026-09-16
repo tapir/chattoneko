@@ -14,8 +14,8 @@ import (
 	"github.com/skrashevich/go-webp"
 )
 
-// scaleToFit is a port of media.js scaleToFit, so it is checked against the
-// numbers that function's own doc comment promises.
+// scaleToFit mirrors media.js scaleToFit, so these are the numbers that
+// function's own doc comment promises.
 func TestScaleToFit(t *testing.T) {
 	for _, tc := range []struct{ w, h, wantW, wantH int }{
 		{100, 50, 100, 50},     // already small: never upscaled
@@ -111,8 +111,8 @@ func TestToWebP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Frame 2 leaves (0,0) black, so a white pixel proves the first frame
-		// won and the animation was dropped.
+		// Frame 2 leaves (0,0) black, so a white pixel proves only the first
+		// frame survived.
 		r, gg, b, _ := decodeWebP(t, out, 20, 10).At(0, 0).RGBA()
 		if r>>8 != 255 || gg>>8 != 255 || b>>8 != 255 {
 			t.Fatalf("first frame not kept: (0,0) = %d,%d,%d", r>>8, gg>>8, b>>8)

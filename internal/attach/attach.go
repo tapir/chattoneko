@@ -2,11 +2,10 @@
 // sanitizes filenames. Nothing here decodes pixels or audio samples: an upload
 // arrives already converted by the browser (web/src/lib/media.js), and a tool's
 // picture is re-encoded to WebP by internal/tools before it reaches ProcessAny.
-// This package's whole job is one magic-byte check per file.
 //
-// Two policies share that check. Uploads accept only what the browser produces
-// (WebP, WebM, PDF) plus text; tools also accept any media a browser can
-// render unaided, and keep every other binary as a download.
+// Two policies share one magic-byte check per file. Uploads accept only what the
+// browser produces (WebP, WebM, PDF) plus text; tools also accept any media a
+// browser can render unaided, and keep every other binary as a download.
 package attach
 
 import (
@@ -31,14 +30,12 @@ const (
 )
 
 // The mimes a file can be stored under, all decided by magic bytes. WebP is
-// THE image format: the browser encodes every upload to it — libwebp in WASM
-// where the browser cannot (Safari, every version, silently hands back a PNG
-// for a WebP request) — and create_file re-encodes a tool's picture to it, so
-// nothing else is accepted as an upload. PNG, JPEG, GIF and BMP stay in the
-// tool table so a picture that somehow skips that conversion still previews
-// instead of downloading, and PNG stays a mime the app can serve and send for
-// rows stored before uploads became WebP-only. ICO is supported nowhere: an
-// .ico is just a download.
+// the upload image format: the browser encodes every upload to it, using
+// libwebp in WASM where it has no native encoder (Safari silently hands back a
+// PNG for a WebP toBlob request), and create_file re-encodes a tool's picture
+// to it. PNG, JPEG, GIF and BMP are in the tool table so a picture that skips
+// that conversion still previews instead of downloading. ICO is supported
+// nowhere: an .ico is a download.
 const (
 	MimePNG  = "image/png"
 	MimeJPEG = "image/jpeg"
@@ -189,8 +186,8 @@ const MaxRawUploadBytes = 64 * 1024 * 1024 // 64 MiB
 const MaxFilenameBytes = 200
 
 // Process classifies one UPLOADED file: the media the browser produces before
-// it sends (PNG/WebP, WebM, PDF) plus text. Anything else is refused — a client
-// that skipped conversion gets a 415 rather than a file nobody can preview.
+// it sends (WebP, WebM, PDF) plus text. Anything else is refused — a client that
+// skipped conversion gets a 415 rather than a file nobody can preview.
 func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 	return process(filename, data, maxBytes, uploadPolicy)
 }
@@ -395,12 +392,10 @@ func IsText(data []byte) bool {
 }
 
 // SendsAsImage reports whether a stored image mime may go to a model as an
-// image part. WebP is what every conversion path produces now; PNG is here for
-// the rows stored before uploads became WebP-only, which a Safari browser
-// encoded. A JPEG, GIF or BMP survives in an attachment stored before
-// create_file started converting, previews fine but takes the <file> reference
-// path instead, and the vision tool refuses it in-band. History is rebuilt every
-// turn, so a mime the provider rejects would break that chat for good.
+// image part: PNG and WebP only. Any other image previews in the browser but
+// goes out through the <file> reference path, and the vision tool refuses it
+// in-band. History is rebuilt every turn, so a mime the provider rejects would
+// break that chat permanently.
 func SendsAsImage(mime string) bool {
 	return mime == MimePNG || mime == MimeWebP
 }
@@ -437,9 +432,9 @@ func fileTag(filename, id, typ string) string {
 //	...content...
 //	</file id="a1b2c3d4">
 //
-// The filename is escaped and the closing tag repeats the
-// attachment's unguessable random id (M2), so a stray or hostile "</file>"
-// inside the file content cannot terminate the block early.
+// The filename is escaped and the closing tag repeats the attachment's
+// unguessable random id, so a stray or hostile "</file>" inside the file
+// content cannot terminate the block early.
 func SerializeText(filename, id, content string) string {
 	return fmt.Sprintf("%s\n%s\n</file id=%q>", fileTag(filename, id, KindText), content, id)
 }

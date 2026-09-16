@@ -26,7 +26,7 @@ type ToolCatalog interface {
 
 // Engine runs generations. Its context is the server context: generations
 // survive HTTP client disconnects and end only via stop, chat deletion, or
-// server shutdown (B6).
+// server shutdown.
 type Engine struct {
 	store     *store.Store
 	prov      provider.Provider
@@ -210,16 +210,16 @@ func (e *Engine) deliverGlobal(ev WireEvent) {
 }
 
 // PublishTitle tells global-stream subscribers that a chat's auto-generated
-// title became final. Rides the global stream (it used to have its own SSE
-// endpoint): every extra endpoint cost one persistent browser connection,
-// and browsers cap an origin at 6 concurrent HTTP/1.1 connections.
+// title became final. It rides the global stream because every extra SSE
+// endpoint costs one persistent browser connection, and browsers cap an
+// origin at 6 concurrent HTTP/1.1 connections.
 func (e *Engine) PublishTitle(chatID, title string) {
 	e.deliverGlobal(WireEvent{Type: "title", ChatID: chatID, Title: title})
 }
 
 // PublishConfigChanged tells global-stream subscribers that /api/config may
 // now return different data. Fires after every config save — not only when
-// the async MCP reconciliation changed the catalog — because the default
+// the async MCP reconciliation changes the catalog — because the default
 // model, system prompt, limits and tool defaults live in that payload too.
 // Clients respond by refetching /api/config.
 func (e *Engine) PublishConfigChanged() {
@@ -306,12 +306,11 @@ func (e *Engine) BroadcastChat(chatID string, ev WireEvent) {
 }
 
 // ClaimGeneration atomically reserves the chat's generation slot BEFORE any
-// user-visible persistence happens (TOCTOU fix): a handler claims, persists
-// its user message / history edits, then calls StartClaimedGeneration — a
-// concurrent request for the same chat gets ErrGenerationActive up front
-// instead of a 409 after leaving an unanswered user message behind.
-// On any failure between claim and start the handler MUST call
-// ReleaseClaim.
+// user-visible persistence: a handler claims, persists its user message /
+// history edits, then calls StartClaimedGeneration, so a concurrent request
+// for the same chat gets ErrGenerationActive up front instead of a 409 after
+// leaving an unanswered user message behind. On any failure between claim and
+// start the handler MUST call ReleaseClaim.
 func (e *Engine) ClaimGeneration(chatID string) error {
 	h := e.hubFor(chatID)
 	h.mu.Lock()
@@ -347,20 +346,18 @@ func (e *Engine) startGeneration(ctx context.Context, chatID string) (*store.Mes
 	return e.StartClaimedGeneration(ctx, chatID)
 }
 
-// StartClaimedGeneration creates the assistant message and runs the turn
-// loop asynchronously on a slot previously reserved with ClaimGeneration
-// (the handler path: claim → persist user-visible changes → start). The
-// claim is always consumed: installed as the generation on success, released
-// on failure. DB work runs OUTSIDE the hub lock so subscribers never block
-// on DB latency.
+// StartClaimedGeneration creates the assistant message and runs the turn loop
+// asynchronously on a slot reserved by ClaimGeneration (the handler path:
+// claim → persist user-visible changes → start). The claim is always
+// consumed: installed as the generation on success, released on failure. DB
+// work runs OUTSIDE the hub lock so subscribers never block on DB latency.
 func (e *Engine) StartClaimedGeneration(ctx context.Context, chatID string) (*store.Message, error) {
 	h := e.hubFor(chatID)
 
 	// Persistence here must survive the caller's (HTTP request) context
 	// canceling: the user message is already persisted and the generation
-	// itself runs on the server context (B6), so failing the assistant
-	// message on a client disconnect would leave the user message
-	// unanswered.
+	// itself runs on the server context, so failing the assistant message on a
+	// client disconnect would leave the user message unanswered.
 	persistCtx := context.WithoutCancel(ctx)
 
 	// Stamp the assistant message with the model in effect NOW: the chat
@@ -480,7 +477,7 @@ func (e *Engine) CancelForChatDeletion(chatID string) {
 }
 
 // RecoverCrashed marks any in-flight messages from a previous server run as
-// failed, inserting synthetic tool results for dangling calls first (B2).
+// failed, inserting synthetic tool results for dangling calls first.
 func (e *Engine) RecoverCrashed(ctx context.Context) error {
 	msgs, err := e.store.ListGeneratingMessages(ctx)
 	if err != nil {
@@ -534,7 +531,7 @@ func (e *Engine) Shutdown() {
 }
 
 // synthesizeToolResults inserts role=tool messages for every tool call of
-// messageID lacking a result. This keeps history replayable to the API (B2).
+// messageID lacking a result. This keeps history replayable to the API.
 func (e *Engine) synthesizeToolResults(ctx context.Context, chatID, messageID, text string) error {
 	dangling, err := e.store.ListDanglingToolCalls(ctx, messageID)
 	if err != nil {

@@ -11,7 +11,7 @@ import (
 	"chattoneko/internal/store"
 )
 
-// WireEvent is one SSE event (the doc's wire format).
+// WireEvent is one SSE event as it goes on the wire.
 type WireEvent struct {
 	Seq int64 `json:"seq,omitempty"`
 	// Epoch identifies the hub incarnation that stamped the seq space.
@@ -36,7 +36,7 @@ type WireEvent struct {
 	Status    string `json:"status,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Title     string `json:"title,omitempty"`
-	// Per-turn usage + duration, set on the "done" event (#5 + top-bar totals).
+	// Per-turn usage + duration, set on the "done" event.
 	PromptTokens     int64          `json:"prompt_tokens,omitempty"`
 	ContextTokens    int64          `json:"context_tokens,omitempty"`
 	CompletionTokens int64          `json:"completion_tokens,omitempty"`
@@ -145,9 +145,9 @@ func (h *chatHub) publishGen(ev WireEvent) {
 
 // publishChat broadcasts a chat-level event (not replayed, no seq).
 // Exception: chat_updated is appended to the grace-period replay buffer with
-// a seq. A rename can land right after done, and a subscriber reconnecting
-// in that window must not lose it — unreplayed, a dropped chat_updated left
-// the sidebar title stale until a full reload.
+// a seq, because a rename can land right after done and a subscriber
+// reconnecting in that window must not lose it — a dropped chat_updated
+// leaves the sidebar title stale until a full reload.
 // Caller holds chatHub.mu.
 func (h *chatHub) publishChat(ev WireEvent) {
 	ev.ChatID = h.id // see publishGen

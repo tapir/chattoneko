@@ -60,9 +60,9 @@ func cancelOutcome(ag *activeGen) (string, string) {
 // runGeneration is the turn loop for one generation. It publishes events to
 // the chat hub, persists incrementally, executes tool calls up to the
 // per-response MCP budget (limits.max_tool_iterations), and finalizes with the
-// tool-call history invariant on EVERY exit path (B2). Running out of budget
-// never ends the generation — over-budget MCP calls are refused with an error
-// result so the model can finish in text.
+// tool-call history invariant on EVERY exit path. Running out of budget never
+// ends the generation — over-budget MCP calls are refused with an error result
+// so the model can finish in text.
 func (e *Engine) runGeneration(ag *activeGen) {
 	h := e.hubFor(ag.chatID)
 	ctx := ag.ctx
@@ -154,9 +154,9 @@ func (e *Engine) runGeneration(ag *activeGen) {
 			_ = e.store.TouchChat(persistCtx, ag.chatID)
 		}
 
-		// Include usage in done so the client can render per-message stats
-		// (#5) and the top-bar totals without a refetch. done is replayed, so
-		// it can't be lost.
+		// Include usage in done so the client can render per-message stats and
+		// the top-bar totals without a refetch. done is replayed, so it can't be
+		// lost.
 		h.mu.Lock()
 		h.publishGen(WireEvent{Type: "status", Status: status, Error: errText})
 		h.publishGen(WireEvent{
@@ -222,9 +222,8 @@ func (e *Engine) runGeneration(ag *activeGen) {
 	// keys this generation's reasoning parts, is stamped on the turn's wire
 	// events, and is what the client groups tool calls under.
 	turn := 0
-	// Generation-wide tool-call counter: position must stay chronological
-	// across turns (it used to restart at 0 every turn, which scrambled the
-	// order of a multi-turn message on reload).
+	// Generation-wide tool-call counter: position stays chronological across
+	// turns so a reloaded multi-turn message keeps its call order.
 	callPos := int64(0)
 	// Remaining MCP calls this response may make. Read once, so the budget is
 	// stable even if settings change mid-run.
@@ -412,7 +411,7 @@ func isTruncationFinish(reason string) bool {
 	switch reason {
 	case "length", // OpenAI
 		"max_tokens",        // Anthropic / some OpenAI-compatible
-		"max_output_tokens", // Anthropic newer spelling
+		"max_output_tokens", // Anthropic
 		"output_length",     // generic
 		"model_max_tokens":  // some proxies
 		return true
@@ -441,9 +440,9 @@ func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat,
 	meta := mcphub.CallMeta{ChatID: chat.ID, MessageID: ag.messageID}
 	// Tool side effects happen under the cancellable ctx, but persisting a
 	// result that EXISTS must survive a user stop / server shutdown landing
-	// mid-batch: otherwise the invariant finalize would falsely record
-	// "interrupted before this tool call could run" and the model would
-	// re-run the tool on the next generation, doubling its side effects.
+	// mid-batch: otherwise the invariant finalize would record an executed
+	// call as interrupted and the model would re-run the tool on the next
+	// generation, doubling its side effects.
 	persistCtx := context.WithoutCancel(ctx)
 	for _, c := range calls {
 		if ctx.Err() != nil {

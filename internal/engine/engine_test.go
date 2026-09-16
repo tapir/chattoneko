@@ -389,8 +389,9 @@ func TestUnavailableToolBackstopEndsStubbornLoop(t *testing.T) {
 }
 
 // A tool referenced only by history is still declared, so the provider accepts
-// the old call ids — but as a placeholder, never with its real definition: a
-// disabled tool that still looks callable is an invitation the model takes.
+// the call ids already in history — but as a placeholder, never with its real
+// definition: a disabled tool that still looks callable is an invitation the
+// model takes.
 func TestHistoryOnlyToolIsPlaceholder(t *testing.T) {
 	ctx := context.Background()
 	mcpFake := &fakeMCP{
@@ -621,9 +622,9 @@ func (b *blockingTool) Call(_ context.Context, name, _ string, _ mcphub.CallMeta
 
 // A tool that finished executing must keep its result even when a user stop
 // lands before the result is persisted: the write happens on a detached
-// context, so the finalize synthesis never fakes "interrupted before this
-// tool call could run" and the model can never re-run the tool's side
-// effects on the next generation.
+// context, so the finalize synthesis never marks an executed call as
+// interrupted and the model can never re-run the tool's side effects on the
+// next generation.
 func TestStopAfterToolStillPersistsResult(t *testing.T) {
 	prov := &scriptedProvider{
 		scripts: [][]provider.StreamEvent{
@@ -804,9 +805,8 @@ func (b *blockingProvider) StreamChat(ctx context.Context, _ []provider.Message,
 }
 
 func TestInvariantFinalizeSynthesizesToolResults(t *testing.T) {
-	// First iteration ends in tool_calls; stop arrives during tool execution
-	// phase simulation: we emulate the crash path instead — an assistant
-	// message left with dangling tool calls must get synthetic results.
+	// An assistant message left with dangling tool calls must get synthetic
+	// results: build that state directly, then run crash recovery over it.
 	eng, st, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
 	chatID := newTestChat(t, st)
 	am, err := st.CreateMessage(context.Background(), store.NewMessageParams{
@@ -885,7 +885,7 @@ func TestSubscribeReplayBuffer(t *testing.T) {
 	}
 }
 
-// TestClaimGenerationIsAtomic verifies the TOCTOU fix: only one claimant can
+// TestClaimGenerationIsAtomic verifies claim atomicity: only one claimant can
 // hold the generation slot at a time, and ReleaseClaim frees it.
 func TestClaimGenerationIsAtomic(t *testing.T) {
 	eng, st, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
@@ -904,7 +904,7 @@ func TestClaimGenerationIsAtomic(t *testing.T) {
 	eng.ReleaseClaim(chatID)
 }
 
-// TestConcurrentStartGenerationOnlyOneWins hammers StartGeneration from
+// TestConcurrentStartGenerationOnlyOneWins hammers startGeneration from
 // several goroutines against a provider that blocks: exactly one may win.
 func TestConcurrentStartGenerationOnlyOneWins(t *testing.T) {
 	prov := &blockingProvider{prefix: "x"}
@@ -942,9 +942,9 @@ func TestConcurrentStartGenerationOnlyOneWins(t *testing.T) {
 	eng.StopGeneration(chatID)
 }
 
-// TestFlushNeverOverwritesFinalContent is the regression guard for the
-// flush-vs-finalize race: with a tiny flush interval the flusher races the
-// finalize; the persisted content must always end up exactly the final text.
+// TestFlushNeverOverwritesFinalContent guards the flush-vs-finalize race:
+// with a tiny flush interval the flusher races the finalize; the persisted
+// content must always end up exactly the final text.
 func TestFlushNeverOverwritesFinalContent(t *testing.T) {
 	var script []provider.StreamEvent
 	full := ""
@@ -982,10 +982,10 @@ func TestFlushNeverOverwritesFinalContent(t *testing.T) {
 	}
 }
 
-// TestStartSurvivesCanceledRequestContext guards B6 at the start boundary:
-// the caller ctx is typically the HTTP request context; a client disconnect
-// between claim and assistant-message creation must not leave the user
-// message unanswered.
+// TestStartSurvivesCanceledRequestContext guards the start boundary: the
+// caller ctx is typically the HTTP request context, and a client disconnect
+// between claim and assistant-message creation must not leave the user message
+// unanswered.
 func TestStartSurvivesCanceledRequestContext(t *testing.T) {
 	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{{
 		{Kind: provider.EventTextDelta, Text: "ok"},

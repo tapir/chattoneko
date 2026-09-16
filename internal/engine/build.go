@@ -75,9 +75,9 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 					content += "\n\n" + attach.SerializeText(att.Filename, att.ID, string(att.Data))
 				} else if att.Kind == attach.KindImage && vision && attach.SendsAsImage(att.Mime) {
 					// Only PNG and WebP go out as images: a JPEG, GIF or BMP
-					// stored before create_file converted pictures previews in
-					// the browser but takes the reference path, since a
-					// provider 400 here would repeat on every turn of the chat.
+					// attachment previews in the browser but takes the reference
+					// path, since a provider 400 here would repeat on every turn of
+					// the chat.
 					images = append(images, provider.Image{Data: att.Data, Mime: att.Mime})
 				} else {
 					content += "\n\n" + attach.SerializeRef(att.Filename, att.ID, att.Kind, att.Mime, att.Size)
@@ -155,14 +155,14 @@ func (e *Engine) SystemPrompt() string {
 }
 
 // effectiveTools returns the tool definitions to send to the provider:
-// enabled tools ∪ tools referenced anywhere in the chat's history (H3 —
-// omitting a tool whose calls exist in history would make chat_completions
-// reject the request with orphan tool_call ids). mods are the chat model's
-// input modalities: they decide which specialist tools are offered at all.
+// enabled tools ∪ tools referenced anywhere in the chat's history — omitting
+// a tool whose calls exist in history makes chat_completions reject the
+// request with orphan tool_call ids. mods are the chat model's input
+// modalities: they decide which specialist tools are offered at all.
 // History-only tools get a bare placeholder rather than their real definition:
-// they are declared so the provider accepts the old call ids, and
-// re-advertising a disabled or removed tool with its full description reads to
-// the model as an invitation to call it.
+// they are declared so the provider accepts the call ids already in history,
+// and re-advertising a disabled or removed tool with its full description
+// reads to the model as an invitation to call it.
 func (e *Engine) effectiveTools(ctx context.Context, chat *store.Chat, mods []string) ([]provider.Tool, error) {
 	catalog := e.catalog.Tools()
 	byDisplay := map[string]int{}
@@ -189,7 +189,7 @@ func (e *Engine) effectiveTools(ctx context.Context, chat *store.Chat, mods []st
 		included[t.Display] = true
 	}
 
-	// H3: history-referenced tools.
+	// History-referenced tools.
 	referenced, err := e.store.DistinctToolNamesInChat(ctx, chat.ID)
 	if err != nil {
 		return nil, err

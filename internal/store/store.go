@@ -17,8 +17,6 @@ import (
 // ErrNotFound is returned when a lookup has no matching row.
 var ErrNotFound = errors.New("not found")
 
-// notFound maps sql.ErrNoRows to ErrNotFound, passing any other error
-// through unchanged.
 func notFound(err error) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
@@ -50,17 +48,17 @@ type ToolCall struct {
 	ProviderCallID string `json:"provider_call_id"`
 	Name           string `json:"name"`
 	Arguments      string `json:"arguments"`
-	// Position orders the calls of one message chronologically across the
-	// whole generation (it does not restart per turn).
+	// Position orders a message's calls chronologically across the whole
+	// generation; it does not restart per turn.
 	Position int64 `json:"position"`
-	// Turn is the tool-loop iteration (0-based) that produced the call, so the
-	// UI can render it under that turn's thinking block.
+	// Turn is the 0-based tool-loop iteration that produced the call; the UI
+	// renders the call under that turn's thinking block.
 	Turn int64 `json:"turn"`
 }
 
-// AttachmentMeta is attachment metadata (no blob data). An attachment belongs
-// to a chat, not to a message: which messages show it lives in the
-// message_attachments link table (see ListAttachmentsByMessage).
+// AttachmentMeta is attachment metadata without the blob. An attachment
+// belongs to a chat; the messages showing it live in the message_attachments
+// link table (ListAttachmentsByMessage).
 type AttachmentMeta struct {
 	ID        string `json:"id"`
 	ChatID    string `json:"chat_id"`
@@ -85,19 +83,20 @@ type Message struct {
 	Role    string `json:"role"`
 	Status  string `json:"status"`
 	Content string `json:"content"`
-	// Reasoning is the model's thinking as ONE entry per tool-loop turn, in
-	// order (an entry is "" when that turn produced no thinking). Stored as a
-	// JSON array in messages.reasoning.
+	// Reasoning is the model's thinking, one entry per tool-loop turn in
+	// order; "" for a turn that produced none. Stored as a JSON array in
+	// messages.reasoning.
 	Reasoning  []string `json:"reasoning"`
 	Error      string   `json:"error"`
 	ToolCallID string   `json:"tool_call_id,omitempty"`
 	Name       string   `json:"name,omitempty"`
-	// Model is the model id that produced this message (assistant messages;
-	// '' for messages created before per-message model tracking).
+	// Model is the model id that produced this message (assistant messages
+	// only).
 	Model     string `json:"model,omitempty"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
-	// Per-turn usage stats (assistant messages; 0 = unknown/not captured).
+	// Token and duration totals over every request of the generation
+	// (assistant messages; 0 = not captured).
 	PromptTokens     int64            `json:"prompt_tokens,omitempty"`
 	CompletionTokens int64            `json:"completion_tokens,omitempty"`
 	DurationMs       int64            `json:"duration_ms,omitempty"`
@@ -211,10 +210,9 @@ func toolCallFromRow(tc query.ToolCall) ToolCall {
 	}
 }
 
-// reasoningParts decodes the JSON array stored in messages.reasoning. Empty
-// means "never thought"; a value that is not a JSON array is pre-002 prose (or
-// a hand-edited row) and becomes a single part. Reasoning is display-only, so
-// a bad value must never fail a chat load.
+// reasoningParts decodes the JSON array in messages.reasoning: empty means no
+// thinking, and a value that is not a JSON array becomes a single part —
+// reasoning is display-only, so a bad value must never fail a chat load.
 func reasoningParts(raw string) []string {
 	if raw == "" {
 		return []string{}
@@ -226,8 +224,8 @@ func reasoningParts(raw string) []string {
 	return parts
 }
 
-// reasoningJSON encodes per-turn reasoning for messages.reasoning, keeping the
-// column empty for messages that never thought.
+// reasoningJSON encodes per-turn reasoning for messages.reasoning, leaving the
+// column empty when there are no parts.
 func reasoningJSON(parts []string) string {
 	if len(parts) == 0 {
 		return ""
@@ -356,9 +354,9 @@ func (s *Store) ListChatsNeedingTitle(ctx context.Context, limit int64) ([]strin
 	return s.q.ListChatsNeedingTitle(ctx, limit)
 }
 
-// SetGeneratedTitle writes an auto-generated title, but only if the title is
-// still non-final (title_generated = 0). Returns false when a concurrent
-// manual rename won the race — the caller must not broadcast in that case.
+// SetGeneratedTitle writes an auto-generated title only while title_generated
+// is 0. It returns false when a manual rename got there first, and the caller
+// must not broadcast then.
 func (s *Store) SetGeneratedTitle(ctx context.Context, id, title string) (bool, error) {
 	n, err := s.q.SetGeneratedTitle(ctx, query.SetGeneratedTitleParams{
 		Title:     title,
@@ -514,8 +512,8 @@ func (s *Store) FinalizeMessage(ctx context.Context, id, status, errText, conten
 	})
 }
 
-// UpdateMessageUsage records per-turn token usage + wall-clock duration on an
-// assistant message.
+// UpdateMessageUsage records the generation's token totals and wall-clock
+// duration on an assistant message.
 func (s *Store) UpdateMessageUsage(ctx context.Context, id string, promptTokens, completionTokens, contextTokens, durationMs int64) error {
 	return s.q.UpdateMessageUsage(ctx, query.UpdateMessageUsageParams{
 		PromptTokens:     promptTokens,
@@ -634,8 +632,8 @@ func (s *Store) CreateToolCall(ctx context.Context, messageID, providerCallID, n
 	return &tc, nil
 }
 
-// ListDanglingToolCalls returns tool calls on messageID that have no matching
-// role=tool result message (B2 invariant finalize).
+// ListDanglingToolCalls returns tool calls on messageID with no matching
+// role=tool result message.
 func (s *Store) ListDanglingToolCalls(ctx context.Context, messageID string) ([]ToolCall, error) {
 	rows, err := s.q.ListDanglingToolCalls(ctx, messageID)
 	if err != nil {
@@ -648,8 +646,8 @@ func (s *Store) ListDanglingToolCalls(ctx context.Context, messageID string) ([]
 	return tcs, nil
 }
 
-// DistinctToolNamesInChat returns tool names referenced anywhere in a chat's
-// history (H3: tool defs must include them).
+// DistinctToolNamesInChat returns the tool names referenced anywhere in a
+// chat's history; the next request must define every one of them.
 func (s *Store) DistinctToolNamesInChat(ctx context.Context, chatID string) ([]string, error) {
 	return s.q.DistinctToolNamesInChat(ctx, chatID)
 }
@@ -717,10 +715,9 @@ func (s *Store) LinkAttachmentToMessage(ctx context.Context, attachmentID, messa
 	})
 }
 
-// DeleteAttachment stops messageID showing the attachment and deletes the
-// blob once no message shows it any more (an empty messageID just drops an
-// unlinked one, which is how a rolled-back upload is removed). The same call
-// serves "remove this file from my message" and "delete this staged upload".
+// DeleteAttachment unlinks the attachment from messageID, then deletes the
+// blob once no message shows it. An empty messageID skips the unlink, so the
+// same call also drops a staged upload that was never linked.
 func (s *Store) DeleteAttachment(ctx context.Context, attachmentID, messageID string) error {
 	if messageID != "" {
 		if err := s.q.UnlinkAttachmentFromMessage(ctx, query.UnlinkAttachmentFromMessageParams{
@@ -733,9 +730,9 @@ func (s *Store) DeleteAttachment(ctx context.Context, attachmentID, messageID st
 	return s.q.DeleteUnlinkedAttachment(ctx, attachmentID)
 }
 
-// DeleteOrphanAttachments removes attachments no message shows — abandoned
-// uploads, files a tool created but never attached, and blobs left behind by
-// history truncation (their links cascade away with the messages).
+// DeleteOrphanAttachments removes attachments older than the cutoff that no
+// message shows: abandoned uploads, files a tool created but never attached,
+// and blobs whose links cascaded away with deleted messages.
 func (s *Store) DeleteOrphanAttachments(ctx context.Context, cutoffMillis int64) error {
 	return s.q.DeleteOrphanAttachmentsOlderThan(ctx, cutoffMillis)
 }

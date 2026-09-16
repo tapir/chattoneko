@@ -216,7 +216,7 @@ func TestMessagesToolCallsAttachmentsRoundTrip(t *testing.T) {
 		t.Fatalf("still dangling after result: %v %v", dangling, err)
 	}
 
-	// Finalize + usage. Reasoning is per-turn: both parts must survive the
+	// Finalize + usage. Reasoning is per-turn: all three parts survive the
 	// JSON round trip in order.
 	if err := s.FinalizeMessage(ctx, am.ID, StatusComplete, "", "answer", []string{"thought one", "", "thought three"}); err != nil {
 		t.Fatal(err)
@@ -416,10 +416,10 @@ func TestTitleGenerationQueries(t *testing.T) {
 	}
 }
 
-// TestConcurrentWritesSameChat verifies the store's concurrency safety: it
-// is a stateless wrapper over database/sql, and SQLite WAL serializes the
-// writes — concurrent message creation on one chat must all succeed and get
-// distinct, monotonic global seqs. Runs with -race in CI.
+// TestConcurrentWritesSameChat checks the store's concurrency safety: a
+// stateless wrapper over database/sql with SQLite WAL serializing the writes,
+// so concurrent message creation on one chat all succeeds and gets distinct,
+// monotonic global seqs.
 func TestConcurrentWritesSameChat(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -560,8 +560,7 @@ func TestAttachmentLinksAcrossMessages(t *testing.T) {
 }
 
 // messages.reasoning stores a JSON array of per-turn parts; a value that is
-// not JSON is pre-002 prose and must still render (as a single part) instead
-// of failing the chat load.
+// not JSON renders as a single part instead of failing the chat load.
 func TestReasoningPartsDecoding(t *testing.T) {
 	if got := reasoningParts(""); len(got) != 0 {
 		t.Fatalf("empty reasoning = %#v, want no parts", got)

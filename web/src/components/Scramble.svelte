@@ -1,8 +1,7 @@
 <script>
-  // Crush-style waiting cursor: 15 glyphs that start as dots, then three
-  // random positions flip every 20ms, never re-picking one changed on the
-  // previous tick. Mount it while something is in flight (a message being
-  // sent, a reply being generated); unmounting stops the interval.
+  // Waiting cursor: 15 glyphs that start as dots, then three random positions
+  // flip every 20ms, never re-picking one changed on the previous tick. Mount
+  // it while something is in flight; unmounting stops the interval.
   let text = $state('');
   $effect(() => {
     const glyph = () => String.fromCharCode(33 + Math.floor(Math.random() * 94));

@@ -4,24 +4,21 @@
   // Shared by the per-chat Tools panel and the settings overlay's two default
   // lists (integrated tools, and each MCP server card's own tools).
   //
-  // Passing onTitle adds the optional user-facing title box (settings MCP
-  // cards only — integrated titles are hardcoded in the backend). Its
-  // placeholder is the title the tool already has, so an empty box shows what
-  // the chat will display.
+  // onTitle adds the optional user-facing title box (settings MCP cards only —
+  // integrated titles are hardcoded in the backend). Its placeholder is the
+  // title the tool already has, so an empty box shows what the chat displays.
   //
-  // The name/description column carries a chevron so the row reads as
-  // clickable (it expands to the full description).
+  // The name/description column carries a chevron and expands to the full
+  // description, so the row reads as clickable.
   //
-  // Passing disabled greys the row out and kills the switch: the per-chat
-  // panel does that for a specialist tool the picked chat model makes
-  // pointless. Everything else about the row stays as it is.
+  // disabled greys the row out and kills the switch: the per-chat panel does
+  // that for a specialist tool the picked chat model makes pointless.
   import { ChevronDown } from '@lucide/svelte';
   import { Switch } from '$lib/components/ui/switch';
   import { Input } from '$lib/components/ui/input';
 
   let { tool, checked, onToggle, titleValue = '', onTitle = null, disabled = false } = $props();
 
-  // Tap the name/description to unclamp and read the full description.
   let expanded = $state(false);
 </script>
 

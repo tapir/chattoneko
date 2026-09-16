@@ -12,20 +12,18 @@
   import { registerOverlay } from '../lib/overlays.svelte.js';
   import { onDestroy } from 'svelte';
 
-  // Server settings overlay. Sits on top of the main app.
+  // Server settings overlay, on top of the main app.
   //
-  // Forced-open contract: when the server reports setup_complete === false
+  // Forced-open contract: while the server reports setup_complete === false
   // (no provider endpoint/key and designated models yet) the overlay opens
-  // automatically on top of everything and cannot be dismissed — no close
-  // button, backdrop clicks and Escape are ignored — until a save makes the
-  // config complete. Otherwise it opens/closes like a normal panel from the
-  // sidebar or header.
+  // automatically and cannot be dismissed — no close button, backdrop clicks
+  // and Escape are ignored — until a save makes the config complete. Otherwise
+  // it opens and closes like a normal panel from the sidebar or header.
   let open = $derived(app.settingsOpen || app.setupComplete === false);
   let canClose = $derived(app.setupComplete !== false);
 
-  // Open/close animation is class-driven CSS (same trick as the lightbox):
-  // Svelte transitions on this block stalled its unmount, so `visible` keeps
-  // the DOM alive through the exit animation and then drops it.
+  // Open/close animation is class-driven CSS: `visible` keeps the DOM alive
+  // through the exit animation and then drops it.
   const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let visible = $state(false); // synced from `open` by the effect below, incl. on mount
   let closing = $state(false);
@@ -139,9 +137,9 @@
   // what the backend checks on save.
   const rolesFor = (card) => ROLES.filter((r) => r.endpoint === card.endpoint);
   const endpointLabel = (value) => ENDPOINTS.find((e) => e.value === value)?.label ?? value;
-  // The list below is grouped by the endpoint each model was added on, in
-  // ENDPOINTS order; an endpoint with no models gets no group. The server
-  // sanitizes an unknown endpoint to "chat", so a card can never fall out.
+  // The card list is grouped by endpoint in ENDPOINTS order; an endpoint with
+  // no models gets no group. The server sanitizes an unknown endpoint to
+  // "chat", so a card can never fall out.
   let modelGroups = $derived(
     ENDPOINTS.map((e) => ({ ...e, cards: modelCards.filter((c) => c.endpoint === e.value) })).filter((g) => g.cards.length)
   );
@@ -235,8 +233,8 @@
   // Adds a whitelisted model on the endpoint picked above. A chat model's card
   // is pushed first, then filled by the same provider fetch the per-card
   // "fetch data" button uses (which also persists the metadata server-side); a
-  // failed fetch removes the card again rather than leaving a half-populated
-  // one behind. A specialist has no metadata to fetch, so its card is the
+  // failed fetch removes the card rather than leaving a half-populated one
+  // behind. A specialist has no metadata to fetch, so its card is the
   // registration and nothing else happens.
   async function addModel() {
     const id = newModel.trim();
@@ -320,7 +318,7 @@
       const fromProvider = res?.source?.[id] === 'provider' && !!m;
       if (card) {
         if (m) card.contextLength = String(m.context_length ?? card.contextLength);
-        // The chip universe and the selected levels are exactly what was
+        // Chip universe and selected levels are exactly what the provider
         // reported (never padded with well-known levels), so a fetched card
         // matches what a reload shows; a failed fetch falls back to the
         // hardcoded default effort list.
@@ -748,7 +746,7 @@
           </section>
 
           <!-- Auth is env-var driven (CHATTO_USERNAME / CHATTO_PASSWORD) and
-               fixed at startup, so there is nothing to edit here. -->
+               fixed at startup: nothing to edit here. -->
 
           <!-- MCP servers -->
           <section class="space-y-3">
@@ -899,10 +897,9 @@
 {/if}
 
 <style>
-  /* Open/close animation, class-driven like the lightbox's: the wrapper fades
-     while the panel travels — a 0.96<->1 zoom on desktop, a rise from the
-     bottom below sm. Exit holds via .ss-closing until the `visible` state
-     drops the block. */
+  /* Open/close animation: the wrapper fades while the panel travels — a
+     0.96<->1 zoom on desktop, a rise from the bottom below sm. Exit holds via
+     .ss-closing until the `visible` state drops the block. */
   .ss-anim { animation: ss-fade-in 180ms ease-out; }
   .ss-anim > .ss-panel { animation: ss-zoom-in 180ms ease-out; }
   .ss-closing { animation: ss-fade-out 150ms ease-in forwards; }

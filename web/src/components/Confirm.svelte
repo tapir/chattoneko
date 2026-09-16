@@ -1,11 +1,9 @@
 <script>
-  // One confirmation, two layouts: below `sm` an iOS-style bottom action sheet
-  // (vaul drawer, stacked thumb-height targets), above it a centered
-  // <dialog>. The layout is picked at mount, which is when the caller asks the
-  // question. Dismissing by ANY means — Cancel, overlay/backdrop, swipe down,
-  // Escape, Android back — reports oncancel through one path; confirming
-  // reports onconfirm and then dismisses, which the `confirmed` flag keeps
-  // from being reported as a cancel too.
+  // One confirmation, two layouts picked at mount: below `sm` a bottom action
+  // sheet (vaul drawer, stacked thumb-height targets), above it a centered
+  // <dialog>. Every dismissal path — Cancel, backdrop, swipe down, Escape,
+  // Android back — reports oncancel; confirming reports onconfirm and then
+  // dismisses, and `confirmed` keeps that dismiss from also reading as a cancel.
   import { onMount, onDestroy } from 'svelte';
   import * as Drawer from '$lib/components/ui/drawer';
   import { Button } from '$lib/components/ui/button';
@@ -32,8 +30,8 @@
     if (sheet && !open) dismissed();
   });
 
-  // Native Android back button dismisses instead of navigating away
-  // underneath the question.
+  // Android back button dismisses instead of navigating away underneath the
+  // question.
   let unregisterBack;
   onMount(() => {
     if (sheet) unregisterBack = registerOverlay(() => (open = false));

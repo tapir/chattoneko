@@ -14,7 +14,7 @@
   } = $props();
 
   // Read the config props ONCE at init: after this the width belongs to the
-  // user (drag + localStorage), so it must not re-derive when a prop changes.
+  // user (drag + localStorage) and must not re-derive when a prop changes.
   // The closure is what tells the compiler that's deliberate — without it
   // every prop read here warns `state_referenced_locally`.
   width = (() => loadPanelWidth(storageKey, fallback, { min, max }))();

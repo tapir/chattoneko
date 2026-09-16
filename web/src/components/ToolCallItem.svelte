@@ -10,8 +10,8 @@
   // configurable for MCP ones); the raw name shows when there is none.
   let label = $derived(app.toolTitle(call.name) || call.name || '…');
 
-  // A call still pending on a message that is no longer generating was cut
-  // off (stop/failure/disconnect) — render it as failed, not spinning forever.
+  // A call still pending on a message that stopped generating was cut off
+  // (stop/failure/disconnect) — render it as failed, not spinning forever.
   let interrupted = $derived(call.pending && status !== 'generating');
   let isError = $derived(interrupted || call.is_error || (call.result || '').startsWith('Error:'));
   let running = $derived(call.pending && !interrupted);

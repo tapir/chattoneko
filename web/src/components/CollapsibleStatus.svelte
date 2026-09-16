@@ -1,9 +1,8 @@
 <script>
-  // Shared collapsible status row: icon + title + status indicator + chevron,
-  // with a default-open/closed <details> body. Used by ThinkingBlock,
-  // ToolCallItem and MessageItem's "Processing…" fold so all get identical
-  // chrome (shimmer title + spinner while running, check/x when done, error
-  // tint on failure).
+  // Shared collapsible status row: icon + title + status indicator + chevron
+  // over a <details> body. Used by ThinkingBlock, ToolCallItem and MessageItem's
+  // "Processing…" fold so all get identical chrome (shimmer title + spinner
+  // while running, check/x when done, error tint on failure).
   //
   // Props:
   //   icon      — leading glyph (lucide component: Brain, Wrench, ...)
@@ -15,7 +14,7 @@
   //
   // The chevron rotates via `open:[&>summary_.chevron]` on the <details> itself
   // rather than a `group-open:` variant: these boxes nest inside the
-  // "Processing…" fold, and any ancestor-based selector would spin every inner
+  // "Processing…" fold, and an ancestor-based selector would spin every inner
   // chevron whenever an OUTER box is open. `> summary` scopes it to its own row.
   import Spinner from './Spinner.svelte';
   import { Badge } from '$lib/components/ui/badge';

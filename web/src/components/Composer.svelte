@@ -12,14 +12,14 @@
   import { capturePhoto, pickPhotos, pickFiles } from '../lib/native-attachments.js';
 
   // Draft text lives in the store (keyed by chat id) so it survives the
-  // Composer remount that ensureChat() triggers on the first send — and
-  // chat switches. Same for pending attachments, which are staged client-side
+  // Composer remount that ensureChat() triggers on the first send, and chat
+  // switches. Same for pending attachments, which are staged client-side
   // (File objects) and only uploaded when the message is actually sent.
   let pending = $derived(app.pendingList());
   // Staged pictures are the lightbox's gallery set, so opening one chip lets
   // you swipe through the others before sending (as with a sent message).
-  // Text files stay out: they have no server copy yet, and the viewer reads
-  // those by id.
+  // Text files stay out: they have no server copy, and the viewer reads those
+  // by id.
   let stagedImages = $derived(
   pending.filter((a) => a.kind === 'image' && a.previewUrl),
 );
@@ -37,9 +37,8 @@
     if (app.activeChatId == null) textArea?.focus();
   });
 
-  // Model selection lives in the composer (ChatGPT/Gemini style). For an
-  // existing chat it patches the chat's model; for a not-yet-created chat it
-  // sets the draft model used at creation.
+  // Model selection: for an existing chat this patches the chat's model; for a
+  // not-yet-created chat it sets the draft model used at creation.
   let models = $derived(app.config?.models?.whitelist ?? []);
   let currentModel = $derived(app.chat ? (app.chat.model ?? '') : app.newChatModel);
   let modelLabel = $derived(currentModel || 'Select model');
@@ -62,8 +61,7 @@
     return app.defaultEffortFor(currentModel);
   });
 
-  // Switching model snaps to that model's configured default effort — the
-  // previous model's level is not a choice worth carrying over.
+  // Switching model snaps to that model's configured default effort.
   function handleModelChange(value) {
     if (!value || value === currentModel) return;
     const def = app.defaultEffortFor(value);
@@ -137,8 +135,8 @@
       await app.send(content, staged);
     } catch {
       // toast already shown by state; restore draft + attachments so the
-      // user doesn't lose them. NOTE: ensureChat() may have remounted this
-      // Composer — the store-backed draft lands in the NEW instance.
+      // user doesn't lose them. ensureChat() may have remounted this Composer —
+      // the store-backed draft lands in the NEW instance.
       app.setDraft(content);
       for (const a of staged) app.restorePendingAttachment(a);
       requestAnimationFrame(autoGrow);
@@ -147,12 +145,11 @@
     }
   }
 
-  // Clipboard paste: images (and files) land as clipboardData.files, not
-  // as insertable text — upload them as pending attachments instead of
-  // letting the paste fall through or drop binary gibberish into the draft.
-  // Staging is client-side only (no network — the text sniff reads local
-  // bytes), so both handlers fire it and forget; addAttachments reports its
-  // own rejects by toast.
+  // Clipboard paste: images (and files) land as clipboardData.files, not as
+  // insertable text — stage them as pending attachments instead of letting the
+  // paste drop binary gibberish into the draft. Staging is client-side only
+  // (no network — the text sniff reads local bytes), so both handlers fire it
+  // and forget; addAttachments reports its own rejects by toast.
   function onPaste(e) {
     const files = Array.from(e.clipboardData?.files ?? []);
     if (files.length === 0) return; // plain text paste: default behavior
@@ -306,7 +303,6 @@
         {/if}
       </div>
 
-      <!-- Bottom bar: model + reasoning-effort pickers, keyboard hint -->
       <div class="flex items-center justify-between gap-2 border-t border-border/60 px-2 py-1">
         <!-- Desktop: popover selects. Below sm: ModelPickerSheet (bottom drawer). -->
         <div class="hidden min-w-0 items-center gap-1 sm:flex">

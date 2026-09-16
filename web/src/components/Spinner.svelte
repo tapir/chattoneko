@@ -1,6 +1,6 @@
 <script>
-  // The one loading spinner for the whole app. `light` = for placement on
-  // primary-colored surfaces (e.g. the sign-in button).
+  // App-wide loading spinner. `light` = for placement on primary-colored
+  // surfaces (e.g. the sign-in button).
   let { class: cls = 'size-4', light = false, label = 'Loading' } = $props();
 </script>
 

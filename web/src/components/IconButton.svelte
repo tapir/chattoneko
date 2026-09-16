@@ -1,6 +1,6 @@
 <script>
   // Shared icon-only button: consistent size, hover and focus styling for
-  // every toolbar/row action in the app.
+  // every toolbar and row action.
   let {
     icon: Icon, // lucide component
     label, // aria-label + tooltip

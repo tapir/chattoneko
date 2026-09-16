@@ -14,22 +14,20 @@
 
   let enabledTools = $derived((config?.tools ?? []).filter((t) => app.toolEnabled(t)));
 
-  // ---- theme ----
-  // Reactive: tracks live system theme changes until an explicit choice is stored.
+  // Tracks live system theme changes until an explicit choice is stored.
   let theme = $derived(themeState.current);
 
-  // ---- model (for context-window stats; the picker lives in the Composer) ----
+  // Context-window stats need the model; the picker lives in the Composer.
   let currentModel = $derived(chat ? (chat.model ?? '') : app.newChatModel);
 
-  // ---- top-bar stats (#6) ----
   let promptTotal = $derived(app.chatUsage?.prompt_tokens ?? 0);
   let completionTotal = $derived(app.chatUsage?.completion_tokens ?? 0);
   let contextWindow = $derived(app.contextWindowFor(currentModel));
-  // Context occupancy = final request's input+output of the last turn (what
-  // the next request resends), NOT the billed totals: tool loops re-send full
-  // history per request, so billed sums exceed the window while the context
-  // stays inside it. Pre-migration rows lack context_tokens; for them the
-  // billed sum equals the snapshot (single-request turns).
+  // Context occupancy = the last turn's final request input+output (what the
+  // next request resends), NOT the billed totals: a tool loop re-sends the
+  // full history per request, so billed sums exceed the window while the
+  // context stays inside it. A message without context_tokens falls back to
+  // its billed sum.
   let contextUsed = $derived.by(() => {
     for (let i = app.messages.length - 1; i >= 0; i--) {
       const m = app.messages[i];
@@ -45,12 +43,12 @@
     return pct < 10 ? (Math.round(pct * 10) / 10).toFixed(1) : String(Math.round(pct));
   });
 
-  // ---- top-bar menu: theme, Tools, Settings collapse
-  // into a 3-dot menu at every size; mobile additionally gets a new-chat
-  // button and moves the in/out token + context-usage stats (plus the theme
-  // toggle, icon-only) into the menu's top row; desktop keeps them in the bar ----
+  // Top-bar menu: theme, Tools and Settings in a 3-dot menu at every size.
+  // Mobile also gets a new-chat button and moves the in/out token +
+  // context-usage stats (plus an icon-only theme toggle) into the menu's top
+  // row; desktop keeps them in the bar.
   let mobileMenuOpen = $state(false);
-  // Back button closes the open 3-dot menu like any other overlay.
+  // Android back button closes the open 3-dot menu like any other overlay.
   $effect(() => {
     if (mobileMenuOpen) return registerOverlay(() => (mobileMenuOpen = false));
   });
@@ -94,7 +92,6 @@
 {/snippet}
 
 <header class="flex h-12 shrink-0 items-center gap-0.5 border-b bg-background/80 px-1.5 backdrop-blur sm:px-2">
-  <!-- Left: sidebar toggle -->
   <div class="flex min-w-0 flex-1 items-center gap-0.5">
     <button
       data-sidebar="trigger"
@@ -108,7 +105,6 @@
 
   <!-- Right: token/context stats (desktop), new chat (mobile), 3-dot menu -->
   <div class="flex items-center gap-0.5">
-    <!-- Token totals + context usage (desktop only) -->
     {@render stats('hidden px-2 text-[11px] sm:flex')}
 
     <!-- Tools menu: available (MCP) tools + per-chat enable/disable -->
@@ -134,7 +130,6 @@
       </div>
     </PanelSheet>
 
-    <!-- Mobile-only: new chat straight from the top bar -->
     <a
       href="#/"
       class="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:hidden"
@@ -144,7 +139,6 @@
       <Plus class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
     </a>
 
-    <!-- 3-dot menu: theme, Tools, Settings, Change Server, Log Out -->
     <Popover.Root bind:open={mobileMenuOpen}>
       <Popover.Trigger
         class="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -155,7 +149,6 @@
       </Popover.Trigger>
       <!-- Mobile: shrink-wrap to the stats row (with a floor so short rows still read as a menu); desktop keeps the fixed width -->
       <Popover.Content align="end" class="w-fit min-w-52 p-1.5 sm:w-64">
-        <!-- Mobile-only top row: token/context stats left, theme toggle (icon only) right -->
         <div class="flex items-center sm:hidden">
           {@render stats('flex pl-3 text-[13px]', 'text-[10px]')}
           <!-- mr-0.5: optically centers the icon over the ~19px Tools count badge below,
@@ -170,7 +163,6 @@
           </button>
         </div>
         <div class="my-0.5 h-px bg-border sm:hidden" role="separator"></div>
-        <!-- Desktop keeps the full-width labelled theme item -->
         <button
           class="hidden w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground sm:flex"
           onclick={toggleTheme}

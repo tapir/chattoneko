@@ -1,8 +1,6 @@
 <script>
-  // THE single error display for anything that ends or cuts off a response
-  // mid-generation: provider errors, the stop button, server shutdowns,
-  // persistence failures… Every terminal problem renders through this exact
-  // same component with a short, human explanation.
+  // The single error display for anything that ends or cuts off a response:
+  // provider errors, the stop button, server shutdowns, persistence failures.
   import { app } from '../lib/state.svelte.js';
   import { RotateCcw, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';

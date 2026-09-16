@@ -43,8 +43,7 @@ func buildStore(cfg config.Config) (*config.Store, error) {
 	return st, nil
 }
 
-// storeWithAuth builds a store holding the plaintext password pw, the way
-// env-var driven auth sources it.
+// storeWithAuth builds a store holding the plaintext password pw.
 func storeWithAuth(t *testing.T, user, pw string) *config.Store {
 	t.Helper()
 	return newStore(t, config.Config{Auth: config.AuthConfig{
@@ -138,7 +137,7 @@ func TestLoginRateLimitIgnoresSuccesses(t *testing.T) {
 	if _, err := a.Login("alice", "wrong"); err == ErrRateLimited {
 		t.Fatal("rate limited after only successful logins")
 	}
-	// And failures still exhaust the bucket as before.
+	// And failures still exhaust the bucket.
 	for i := 0; i < 4; i++ {
 		_, _ = a.Login("alice", "wrong")
 	}
@@ -155,7 +154,7 @@ func TestLoginDisabledIsOpen(t *testing.T) {
 }
 
 // Auth can only be enabled with a non-empty username AND password; a config
-// missing either must be rejected loudly when written.
+// missing either is rejected when written.
 func TestAuthEnabledRequiresCredentials(t *testing.T) {
 	for _, cfg := range []config.Config{
 		{Auth: config.AuthConfig{Enabled: true, Username: "u", Password: ""}},
@@ -289,8 +288,8 @@ func TestValidateRequestPaths(t *testing.T) {
 		t.Fatal("bearer token rejected")
 	}
 
-	// Query param ?token=: accepted on GET routes (EventSource and <img>
-	// can't set headers); non-GET requests still require the Bearer header.
+	// Query param ?token=: accepted on GET routes, since EventSource and <img>
+	// cannot set headers; non-GET requests still require the Bearer header.
 	r2 := httptest.NewRequest("GET", "/api/stream?chat=abc&token="+token, nil)
 	if !a.ValidateRequest(r2) {
 		t.Fatal("token rejected on stream route")

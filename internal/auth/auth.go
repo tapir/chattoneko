@@ -1,23 +1,19 @@
-// Package auth implements optional single-user authentication with JWT
-// bearer tokens: login credentials are compared in constant time against the
-// credentials read from the CHATTO_USERNAME / CHATTO_PASSWORD environment
-// variables, and a signed JWT (90-day TTL) is returned. The middleware
-// admits "Authorization: Bearer <token>" or — on GET requests only, for
-// EventSource streams and <img> attachment loads that can't set headers — a
-// ?token= query parameter.
+// Package auth implements optional single-user authentication with HS256 JWT
+// bearer tokens. Login compares the submitted credentials in constant time
+// against CHATTO_USERNAME / CHATTO_PASSWORD and returns a token with a 90-day
+// TTL; the middleware admits "Authorization: Bearer <token>" or, on GET
+// requests only, a ?token= query parameter — EventSource streams and <img>
+// attachment loads cannot set headers.
 //
-// Auth is env-var driven: login is required exactly when BOTH environment
-// variables are set (non-empty). The password is used as plaintext and is
-// never persisted to the database. Credentials are read from the config
-// store snapshot, which sources them from the environment at startup;
-// changing auth requires setting the env vars and restarting.
+// Login is required exactly when both environment variables are set (non-empty).
+// The plaintext password is never persisted and reaches this package through
+// the config store snapshot sourced from the environment at startup, so
+// changing auth means setting the env vars and restarting.
 //
-// The HS256 signing key is derived from the credentials
-// (sha256("chattoneko-jwt:" + username + "\x00" + password)): tokens
-// survive restarts, and changing the password changes the key, invalidating
-// every outstanding token at once. Tokens are stateless — there is no
-// server-side session store and no logout invalidation; clients simply
-// discard the token.
+// The signing key is sha256("chattoneko-jwt:" + username + "\x00" + password):
+// tokens survive restarts, and a password change invalidates every outstanding
+// token at once. Tokens are stateless — no server-side session store and no
+// logout invalidation; clients discard the token.
 package auth
 
 import (
@@ -35,7 +31,7 @@ import (
 	"chattoneko/internal/config"
 )
 
-// TokenTTL is the JWT lifetime (90 days).
+// TokenTTL is the JWT lifetime.
 const TokenTTL = 90 * 24 * time.Hour
 
 // Auth handles login and JWT issuance/validation. All state comes from the
@@ -45,13 +41,12 @@ type Auth struct {
 	limiter *loginLimiter
 }
 
-// loginLimiter is a simple in-memory token bucket for login attempts.
+// loginLimiter is an in-memory token bucket for login attempts.
 //
-// ponytail: hand-rolled on purpose. x/time/rate cannot refund a consumed
-// token — Cancel() only restores reservations that have not been served yet,
-// so a successful login would still eat the owner's budget (verified:
-// 5 reserve+cancel pairs drain a burst-5 bucket to zero). Revisit only if
-// the refund semantic goes away.
+// ponytail: x/time/rate cannot refund a consumed token — Cancel() only
+// restores reservations that have not been served yet — so a successful login
+// would still eat the owner's budget. Switch to it if that refund semantic
+// ever appears.
 type loginLimiter struct {
 	mu       sync.Mutex
 	tokens   int
@@ -66,10 +61,9 @@ func (l *loginLimiter) allow() bool {
 	now := time.Now()
 	elapsed := now.Sub(l.lastTime)
 	tokensToAdd := int(elapsed.Minutes() * float64(l.rate))
-	// Only consume the elapsed window when it actually produced a token.
-	// Advancing lastTime unconditionally starved the bucket: attempts more
-	// frequent than 1/rate-minute reset the window each time, so tokens
-	// never refilled and login stayed rate-limited forever.
+	// Advance lastTime only when the elapsed window produced a token: advancing
+	// it on every attempt resets the window, so attempts more frequent than
+	// 1/rate-minute would never refill the bucket.
 	if tokensToAdd > 0 {
 		l.tokens = min(l.burst, l.tokens+tokensToAdd)
 		l.lastTime = now
@@ -81,9 +75,9 @@ func (l *loginLimiter) allow() bool {
 	return true
 }
 
-// refund returns one token consumed by allow. Successful logins are
-// refunded so legitimate multi-device logins cannot exhaust the owner's
-// budget; failed attempts keep consuming (they are the brute-force vector).
+// refund returns one token consumed by allow. Successful logins are refunded so
+// legitimate multi-device logins cannot exhaust the owner's budget; failed
+// attempts keep consuming it, since they are the brute-force vector.
 func (l *loginLimiter) refund() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -126,21 +120,20 @@ func (a *Auth) Login(username, password string) (token string, err error) {
 		if !a.limiter.allow() {
 			return "", ErrRateLimited
 		}
-		// Both comparisons run unconditionally and in constant time so a
-		// wrong username costs the same as a wrong password (no
-		// user-enumeration timing side channel).
+		// Both comparisons run unconditionally and in constant time so a wrong
+		// username costs the same as a wrong password (no user-enumeration
+		// timing side channel).
 		pwOK := subtle.ConstantTimeCompare([]byte(password), []byte(c.Auth.Password)) == 1
 		userOK := subtle.ConstantTimeCompare([]byte(username), []byte(c.Auth.Username)) == 1
 		if !pwOK || !userOK {
 			return "", ErrInvalidCreds
 		}
-		// Refund the attempt: successful logins must not eat the owner's
-		// budget (a handful of device logins would otherwise lock them out).
+		// A handful of device logins must not lock the owner out.
 		a.limiter.refund()
 		return a.issueToken(username, c)
 	}
-	// Auth disabled: hand out a token signed with a stable throwaway key so
-	// clients can use one code path. Nothing validates it while disabled.
+	// Auth disabled: issue a token under a stable throwaway key so clients use
+	// one code path. Nothing validates it while disabled.
 	return a.issueToken(username, c)
 }
 
@@ -179,11 +172,11 @@ func (a *Auth) CheckToken(token string) bool {
 	_, err := jwt.Parse(token, func(t *jwt.Token) (any, error) {
 		return key, nil
 	},
-		// Only the method we issue with (no HS384/HS512 downgrade room);
-		// exp must be present (v5 validates it only when present, and a
-		// signed token without exp would never expire); reject non-canonical
-		// base64 so a signature's unused trailing bits cannot be flipped
-		// into a second valid encoding (RFC 4648 §3.5).
+		// Only the method issued here (no HS384/HS512 downgrade room); exp must
+		// be present (v5 validates it only when present, and a signed token
+		// without exp would never expire); strict decoding rejects non-canonical
+		// base64, whose unused trailing bits would otherwise give a signature a
+		// second valid encoding (RFC 4648 §3.5).
 		jwt.WithValidMethods([]string{"HS256"}),
 		jwt.WithExpirationRequired(),
 		jwt.WithStrictDecoding(),
@@ -191,9 +184,8 @@ func (a *Auth) CheckToken(token string) bool {
 	return err == nil
 }
 
-// ValidateRequest checks the Bearer token, or — on GET requests — the
-// ?token= query parameter (EventSource streams and <img> attachment loads
-// can't set headers). Non-GET requests must carry the Bearer header.
+// ValidateRequest checks the Bearer token, or the ?token= query parameter on
+// GET requests. Non-GET requests must carry the Bearer header.
 func (a *Auth) ValidateRequest(r *http.Request) bool {
 	if !a.Enabled() {
 		return true

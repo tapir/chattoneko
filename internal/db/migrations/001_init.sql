@@ -1,16 +1,15 @@
 -- Chattoneko schema.
 -- All columns NOT NULL with defaults so no query ever binds NULL.
 --
--- Configuration lives in SQLite (config.toml is gone):
---   config  — global settings as key/value pairs; structured values are JSON.
---   models  — per-model metadata (modalities, context length, reasoning).
--- An empty config table is seeded with hardcoded defaults by the Go code on
--- first start (internal/config.seedIfEmpty), not here.
+-- Settings live in SQLite: config holds global key/value pairs (structured
+-- values are JSON), models holds per-model metadata (modalities, context
+-- length, reasoning). internal/config.seedIfEmpty writes the defaults into an
+-- empty config table on first start.
 
 CREATE TABLE chats (
   id TEXT NOT NULL PRIMARY KEY,              -- uuid
   title TEXT NOT NULL DEFAULT '',
-  title_generated INTEGER NOT NULL DEFAULT 0,-- 1 = title is final (auto-title ran or user renamed)
+  title_generated INTEGER NOT NULL DEFAULT 0,-- 1 = title is final (auto-generated or user-set)
   model TEXT NOT NULL DEFAULT '',
   params_json TEXT NOT NULL DEFAULT '{}',    -- {"reasoning_effort":"..."}
   tools_json TEXT NOT NULL DEFAULT '{}',     -- {"tool_name": true|false} overrides config defaults
@@ -62,12 +61,12 @@ CREATE TABLE attachments (
   mime TEXT NOT NULL,
   size INTEGER NOT NULL,                     -- original file size
   data BLOB NOT NULL,                        -- image: re-encoded PNG; text: raw UTF-8 bytes
-  description TEXT NOT NULL DEFAULT '',      -- dropped by 005
+  description TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
 CREATE INDEX idx_attachments_message ON attachments(message_id);
--- ListAttachmentMetasForChat on every chat load, DeleteDanglingAttachments after
--- every truncation; without it both scan the table holding the largest rows.
+-- ListAttachmentMetasForChat runs on every chat load; without the index it
+-- scans the table holding the largest rows.
 CREATE INDEX idx_attachments_chat ON attachments(chat_id);
 
 CREATE TABLE config (

@@ -53,9 +53,8 @@ func TestMigrateIdempotent(t *testing.T) {
 	}
 }
 
-// The secondary indexes cover the hot paths: attachments by chat
-// (chat-load metas) and the partial generating-messages
-// index (startup recovery of stuck generations).
+// The secondary indexes cover the hot paths: chat-load attachment metas and
+// startup recovery of stuck generations.
 func TestMigrateCreatesSecondaryIndexes(t *testing.T) {
 	s, err := Open(":memory:")
 	if err != nil {
@@ -76,9 +75,9 @@ func TestMigrateCreatesSecondaryIndexes(t *testing.T) {
 	}
 }
 
-// TestMigrateUpgradesAttachmentLinks: a database written before 004 keeps its
-// data — every message_id becomes a join-table row and the column itself is
-// gone, so an upgrade never drops a file the user can still see.
+// TestMigrateUpgradesAttachmentLinks: 004 turns every non-empty
+// attachments.message_id into a message_attachments row and drops the column,
+// so no file a user can see is lost.
 func TestMigrateUpgradesAttachmentLinks(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")
 	if err != nil {
@@ -86,7 +85,7 @@ func TestMigrateUpgradesAttachmentLinks(t *testing.T) {
 	}
 	defer s.Close()
 
-	// Everything but 004, straight from the embedded migrations.
+	// The embedded migrations minus 004.
 	old := fstest.MapFS{}
 	entries, err := fs.ReadDir(migrationsFS, "migrations")
 	if err != nil {
@@ -153,8 +152,7 @@ func TestMigrateUpgradesAttachmentLinks(t *testing.T) {
 	}
 }
 
-// Non-.sql files in the migrations directory (READMEs, editor droppings)
-// are ignored, never executed as SQL.
+// Non-.sql files in the migrations directory are never executed as SQL.
 func TestMigrateIgnoresNonSQLFiles(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")
 	if err != nil {
@@ -180,10 +178,9 @@ func TestMigrateIgnoresNonSQLFiles(t *testing.T) {
 	}
 }
 
-// TestMigrationFailureRollsBack verifies the transactional guarantee: a
-// migration whose second statement fails leaves NO trace — the table from
-// the first statement is rolled back and nothing is recorded — so a fixed
-// file can be cleanly re-applied on the next run.
+// TestMigrationFailureRollsBack: a migration whose second statement fails
+// leaves no trace — no table, no schema_migrations row — so a corrected file
+// re-applies cleanly on the next run.
 func TestMigrationFailureRollsBack(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")
 	if err != nil {
@@ -198,7 +195,6 @@ func TestMigrationFailureRollsBack(t *testing.T) {
 	if err := migrateFS(s, bad); err == nil {
 		t.Fatal("expected migration failure")
 	}
-	// Rolled back: no table, no schema_migrations record.
 	var n int
 	if err := s.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name='half_applied'").Scan(&n); err != nil {
 		t.Fatal(err)
@@ -213,7 +209,6 @@ func TestMigrationFailureRollsBack(t *testing.T) {
 		t.Fatal("failed migration was recorded")
 	}
 
-	// A corrected file applies cleanly on retry.
 	good := fstest.MapFS{
 		"migrations/001_bad.sql": &fstest.MapFile{Data: []byte(
 			"CREATE TABLE half_applied (id INTEGER NOT NULL);\nINSERT INTO half_applied (id) VALUES (1);\n")},

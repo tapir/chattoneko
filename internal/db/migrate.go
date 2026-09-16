@@ -14,12 +14,10 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Migrate applies all not-yet-applied migrations in lexical filename order.
-// Every file is applied inside ONE transaction together with the
-// schema_migrations record: a mid-file failure rolls the whole file back, so
-// a startup retry never trips over a half-applied migration. SQLite supports
-// transactional DDL.
-// Applied files are recorded in schema_migrations, bootstrapped if missing.
+// Migrate applies every migration not yet recorded in schema_migrations, in
+// lexical filename order. SQLite DDL is transactional: each file runs in one
+// transaction together with its schema_migrations row, so a mid-file failure
+// rolls back completely and a retry starts clean.
 func Migrate(db *sql.DB) error {
 	return migrateFS(db, migrationsFS)
 }
@@ -39,8 +37,6 @@ func migrateFS(db *sql.DB, fsys fs.FS) error {
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		// Only .sql files are migrations; anything else (README, editor
-		// droppings) must not be executed as SQL.
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
 			names = append(names, e.Name())
 		}

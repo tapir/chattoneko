@@ -42,7 +42,6 @@ func configured(t *testing.T, model string, meta *config.ModelMeta) (*config.Sto
 
 func ptr[T any](v T) *T { return &v }
 
-// get resolves the client for the store's configured provider + model.
 func get(t *testing.T, cfgs *config.Store, model string) *Client {
 	t.Helper()
 	return NewCache(cfgs).Get(context.Background(), model)

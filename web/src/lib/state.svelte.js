@@ -24,16 +24,15 @@ import { toast as sonnerToast } from "svelte-sonner";
 
 const CHAT_PAGE = 30;
 
-// Client-side staging rules for attachments, mirroring the server's
-// (internal/attach + internal/api limits, exposed via /api/config). Media is
-// recognized by extension and CONVERTED before upload (lib/media.js): the
-// server stores what it gets verbatim, so the converted bytes staged here are
-// exactly what lands in the database. Everything else is judged by content in
-// lib/text-sniff.js, so there is no text-extension list to keep in sync.
-// Fallbacks if /api/config limits haven't loaded yet.
-// Client-side limits come from /api/config. These two need a fallback because
-// staging cannot work without them; the stored-size cap does not — it falls
-// back to 0, which skips the client check and leaves the server authoritative.
+// Client-side staging rules mirror the server's (internal/attach +
+// internal/api limits, exposed via /api/config). Media is recognized by
+// extension and converted before upload (lib/media.js); the server stores what
+// it receives verbatim, so the bytes staged here are what lands in the
+// database. Everything else is judged by content in lib/text-sniff.js, so
+// there is no text-extension list to keep in sync.
+// These two need a fallback because staging cannot work without the
+// /api/config limits; the stored-size cap does not — it falls back to 0, which
+// skips the client check and leaves the server authoritative.
 const FALLBACK_MAX_FILES = 8; // internal/api maxUploadFiles
 const FALLBACK_MAX_RAW_UPLOAD_BYTES = 64 * 1024 * 1024; // attach.MaxRawUploadBytes
 
@@ -111,7 +110,7 @@ class AppState {
   generating = $state(false);
   // The message currently being sent, until the server has it. MessageList
   // renders it at the tail of the list (bubble + staged previews + scramble)
-  // so it shows the instant you hit send instead of after the create-chat,
+  // so it shows the moment the user hits send, not after the create-chat,
   // upload and send round trips. Deliberately NOT part of `messages`: nothing
   // that reloads the list (refreshChat, the `idle` event a fresh stream
   // subscribe emits) can wipe it, and no id reconciliation is needed — the
@@ -128,14 +127,13 @@ class AppState {
   forgetPreview(id) {
     this.previews.delete(id);
   }
-  // Chats with an in-flight generation (for the sidebar breathing title, #3).
-  // SvelteSet: add/delete must be reactive — a plain Set in $state is not
-  // tracked, so background-chat breathing titles silently never updated.
-  // Entries for the active chat come from its per-chat SSE stream;
+  // Chats with an in-flight generation (drives the sidebar breathing title).
+  // SvelteSet because add/delete must be reactive: a plain Set in $state is not
+  // tracked. Entries for the active chat come from its per-chat SSE stream;
   // background chats (no stream attached) are driven by the global stream —
   // see handleGlobalEvent/reconcileGeneratingFlags.
   chatGeneratingIds = new SvelteSet();
-  // live generation: rebuilt purely from stream events (B4 contract)
+  // live generation: rebuilt purely from stream events
   live = $state(null); // {messageId, display, reasoningParts[], reasoningDisplay[], doneTurns, toolCalls[], status, error}
 
   // draft model + reasoning effort for a not-yet-created chat
@@ -148,12 +146,12 @@ class AppState {
   // Plain field, not $state: nothing renders from it.
   newChatModelTouched = false;
 
-  // sidebar search (#4): query + results (empty query => show recent chats)
+  // sidebar search: query + results (empty query => show recent chats)
   searchQuery = $state("");
   searchResults = $state(null); // null = not searching; [] = searching, no results
   searchLoading = $state(false);
 
-  // top-bar stats (#6): per-chat token totals + context window for the active model
+  // top-bar stats: per-chat token totals + context window for the active model
   chatUsage = $state(null); // {prompt_tokens, completion_tokens}
   modelInfo = $state([]); // [{model_id, context_length}] from /api/config
 
@@ -172,9 +170,9 @@ class AppState {
   // proxies plain objects/arrays).
   pendingAttachments = $state({});
 
-  // Composer drafts, keyed the same way. Component-local drafts were lost
-  // when ensureChat() remounted the Composer mid-send (the failure path
-  // restored text into a destroyed instance), and on every chat switch.
+  // Composer drafts, keyed the same way. They live here because a
+  // component-local copy is destroyed whenever the Composer remounts — on
+  // ensureChat() mid-send and on every chat switch.
   drafts = $state({});
 
   // non-reactive internals
@@ -189,9 +187,9 @@ class AppState {
   constructor() {
     setUnauthorizedHandler(() => {
       if (this.authEnabled && this.authed) {
-        // The stream was opened with the now-dead token baked into its URL
-        // and cannot re-authenticate — close it so it stops replaying/retrying
-        // forever on the login screen. login() attaches a fresh one.
+        // The stream's URL carries the rejected token and cannot
+        // re-authenticate — close it so it stops replaying/retrying forever on
+        // the login screen. login() attaches a fresh one.
         this.detachStream();
         setToken(""); // the rejected token is dead — drop it
         this.authed = false;
@@ -218,8 +216,8 @@ class AppState {
       if (this.authEnabled) {
         const token = getToken();
         if (token && isTokenExpired(token)) {
-          // The 90-day token ran out: skip the doomed /me call and drop
-          // straight to the login screen (same on web and mobile).
+          // The token is past its 90-day TTL: skip the doomed /me call and
+          // drop straight to the login screen (same on web and mobile).
           setToken("");
           this.authed = false;
         } else {
@@ -311,7 +309,8 @@ class AppState {
       // shows on the new-chat page live, without a reload.
       if (!this.newChatModelTouched)
         this.newChatModel = this.config?.models?.default_chat_model ?? "";
-      // model_info: [{model_id, context_length}] for the whitelist (#6 top-bar context %)
+      // model_info: per whitelisted model — context_length (top-bar context %),
+      // input_modality, reasoning_efforts
       this.modelInfo = Array.isArray(this.config?.model_info)
         ? this.config.model_info
         : [];
@@ -458,8 +457,8 @@ class AppState {
   }
 
   // Reconcile a pin toggle into the sidebar lists. `src` is an authoritative
-  // chat object (the clicked row, or a broadcast's full chat) used to
-  // materialize the pinned row when this client never loaded it. Idempotent:
+  // chat object (the clicked row, or a broadcast's full chat) that
+  // materializes the pinned row when this client never loaded it. Idempotent:
   // the optimistic apply and the server broadcast both run through here.
   _applyPin(id, pinned, src) {
     for (const list of [this.chats, this.searchResults, this.pinnedChats]) {
@@ -495,7 +494,7 @@ class AppState {
     });
   }
 
-  // ---- the stream: sidebar state for background chats (#3) + titles ----
+  // ---- the stream: sidebar state for background chats + titles ----
 
   handleGlobalEvent(ev) {
     // The open chat's own half owns its state; global events for it are
@@ -549,9 +548,9 @@ class AppState {
         break;
       }
       case "config_changed": {
-        // The MCP tool catalog was rebuilt server-side after a settings
-        // save (async reconnect); refetch the chat-facing config so the
-        // tools menu and model picker update without a page reload.
+        // A settings save rebuilds the MCP tool catalog server-side (async
+        // reconnect); refetch the chat-facing config so the tools menu and
+        // model picker update without a page reload.
         this.loadConfig();
         break;
       }
@@ -704,7 +703,7 @@ class AppState {
     }
   }
 
-  // ---- sidebar search (#4) ----
+  // ---- sidebar search ----
 
   // Run a title search; empty query clears back to recent chats.
   async runSearch(query) {
@@ -822,7 +821,7 @@ class AppState {
         const aid = res?.assistant_message_id ?? res?.assistant_id;
         if (aid) {
           this.generating = true;
-          // The SSE generation_started (+ first deltas) can arrive BEFORE this
+          // The SSE generation_started (+ first deltas) can arrive BEFORE the
           // POST resolves; restarting live here would wipe those deltas and
           // the beginning of the reply would be missing until refresh.
           if (!(this.live && this.live.messageId === aid)) this.startLive(aid);
@@ -882,7 +881,7 @@ class AppState {
   // Editing while a reply is streaming is allowed: the server stops that
   // generation and re-generates from the edited message. A failure must NOT
   // clear `generating` — the server still owns that state, and clearing it
-  // here flipped Stop → Send while a reply was in fact still running.
+  // here would show Send while a reply is in fact still running.
   async editMessage(messageId, content, attachmentIds) {
     const id = this.activeChatId;
     if (!id) return;
@@ -1322,7 +1321,7 @@ class AppState {
               // Keep tool-created files visible until refreshChat lands.
               attachments: [...(this.live?.attachments ?? [])],
               // done carries per-turn usage and is replayed, so stamping it
-              // here can't be lost between reconnects (#5).
+              // here can't be lost between reconnects.
               ...(ev.prompt_tokens || ev.completion_tokens || ev.duration_ms
                 ? {
                     prompt_tokens: ev.prompt_tokens ?? 0,

@@ -41,10 +41,6 @@
 	});
 </script>
 
-<!--
-Discriminated Unions + Destructing (required for bindable) do not
-get along, so we shut typescript up by casting `value` to `never`.
--->
 <!-- bits-ui only renders data-orientation, but the item variants (joined borders,
      first/last rounding) and this root's data-vertical: classes key off
      data-horizontal/data-vertical — emit them so those variants match. -->

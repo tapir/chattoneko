@@ -6,7 +6,6 @@ import Root, {
 export {
 	Root,
 
-	//
 	Root as Button,
 	buttonVariants,
 

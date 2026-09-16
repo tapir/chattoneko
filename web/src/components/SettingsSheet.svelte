@@ -198,12 +198,17 @@
   }
 
   // ---- load ----
+  // Stale-while-revalidate: only the very first fetch blocks behind the
+  // spinner, later opens keep showing the values already applied and refresh
+  // them silently.
   async function load() {
-    loading = true;
+    const fresh = baseline === '';
+    if (fresh) loading = true;
     error = '';
     try {
       const data = await api.setup();
-      applyConfig(data?.config ?? {});
+      // A silent refresh must not eat edits typed while it was in flight.
+      if (fresh || !dirty) applyConfig(data?.config ?? {});
     } catch (e) {
       error = e?.message || 'Failed to load settings';
     } finally {

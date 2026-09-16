@@ -95,6 +95,7 @@
 
   // Arrow keys walk the gallery (Escape already closes it, natively).
   function onKeydown(e) {
+    if (selectAllText(e)) return;
     if (pdf) {
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
@@ -520,6 +521,19 @@
     close();
   }
 
+  // Ctrl+A selects the file, not the overlay's chrome (filename, buttons).
+  let textPre = $state(null);
+  function selectAllText(e) {
+    if (!textPre || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'a') return false;
+    e.preventDefault();
+    const range = document.createRange();
+    range.selectNodeContents(textPre);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return true;
+  }
+
   let imageStyle = $derived(
     `transform: translate3d(${tx}px, ${ty}px, 0) scale(${scale});` +
       (gesturing ? '' : ' transition: transform 160ms ease-out;'),
@@ -794,7 +808,10 @@
           <!-- The server serves every text attachment as text/plain, so this
                is inert text — never HTML. Soft-wrapped so long lines never
                need a horizontal scroll. -->
-          <pre class="mx-auto w-full max-w-4xl font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words text-foreground/85">{text}</pre>
+          <pre
+            bind:this={textPre}
+            class="mx-auto w-full max-w-4xl font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words text-foreground/85"
+          >{text}</pre>
         {/if}
       </div>
     {/if}

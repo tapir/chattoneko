@@ -9,10 +9,10 @@ import (
 )
 
 // Patch is a partial configuration update: only non-nil fields change the
-// stored config. Pointer fields distinguish "not provided" (keep current
-// value) from an explicit zero value (clear it). Auth is NOT patchable:
-// it is driven by the CHATTO_USERNAME / CHATTO_PASSWORD environment
-// variables and fixed at startup.
+// stored config. Pointer fields distinguish "not provided" (keep current value)
+// from an explicit zero value (clear it). Auth is NOT patchable: it is driven by
+// the CHATTO_USERNAME / CHATTO_PASSWORD environment variables and fixed at
+// startup.
 type Patch struct {
 	SystemPrompt *string        `json:"system_prompt,omitempty"`
 	Provider     *ProviderPatch `json:"provider,omitempty"`
@@ -43,8 +43,7 @@ type ModelsPatch struct {
 	DefaultChatModel   *string   `json:"default_chat_model,omitempty"`
 	DefaultTaskModel   *string   `json:"default_task_model,omitempty"`
 	DefaultVisionModel *string   `json:"default_vision_model,omitempty"`
-	// Both optional, like the vision model: reservations for role-specific
-	// features that Complete() does not require.
+	// Both optional: Complete() does not require them.
 	DefaultDocumentModel *string `json:"default_document_model,omitempty"`
 	// The transcription model is an EndpointTranscription model: it is posted
 	// to /audio/transcriptions, so it has no chat metadata to check.
@@ -63,11 +62,10 @@ type LimitsPatch struct {
 	MCPCallTimeoutSeconds *int   `json:"mcp_call_timeout_seconds,omitempty"`
 }
 
-// ValidationError marks an Update/forceSet rejection the caller can fix
-// (bad patch values or broken invariants). API handlers map it to a 400
-// carrying the wrapped detail as the user-facing message; persistence
-// failures are 500s. It wraps the underlying error so Error() returns the
-// clean detail text.
+// ValidationError marks an Update/forceSet rejection the caller can fix (bad
+// patch values or broken invariants). API handlers map it to a 400 carrying the
+// wrapped detail as the user-facing message; persistence failures are 500s. It
+// wraps the underlying error so Error() returns the clean detail text.
 type ValidationError struct{ err error }
 
 func (e *ValidationError) Error() string { return e.err.Error() }
@@ -76,9 +74,8 @@ func (e *ValidationError) Unwrap() error { return e.err }
 // Update applies patch on top of the current snapshot, then finalizes
 // (defaults/sanitizing), validates and persists the result atomically (one
 // transaction covering the config rows AND the model-metadata changes). On
-// success it swaps in the new snapshot, notifies subscribers and returns
-// the new snapshot. On any failure nothing is persisted and the old
-// snapshot stays in effect.
+// success it swaps in the new snapshot, notifies subscribers and returns it. On
+// any failure nothing is persisted and the old snapshot stays in effect.
 func (s *Store) Update(ctx context.Context, patch Patch) (*Config, error) {
 	s.updateMu.Lock()
 	defer s.updateMu.Unlock()
@@ -110,19 +107,20 @@ func (s *Store) Update(ctx context.Context, patch Patch) (*Config, error) {
 	return next, nil
 }
 
-// sanitizeDesignated clears a designated model that can't do the job it is
-// designated for: the chat, task, vision and document models must be chat
-// models whose input modalities cover the role ("text", "text", "image",
-// "file"), and the transcription model must be a transcription one — it is
-// called through /audio/transcriptions, which no chat metadata describes.
-// Clearing rather than rejecting is the point — a broken designation
-// ends up in the same state as a missing one, so Complete()
-// reports the config as unfinished and the settings overlay stays forced open
-// until it is fixed. Metadata lives in the models table, not in the Config
-// snapshot, so this reads it; the patch's metas win over the stored rows
-// because the settings sheet sends the edited card list in the same patch as
-// the designations. (Metas changed behind Update's back —
-// POST /api/setup/models — are caught by the next save.)
+// sanitizeDesignated clears a designated model that cannot do the job it is
+// designated for: the chat, task, vision and document models must be chat models
+// whose input modalities cover the role ("text", "text", "image", "file"), and
+// the transcription model must be a transcription one — it is called through
+// /audio/transcriptions, which no chat metadata describes. Clearing rather than
+// rejecting is the point: a broken designation ends up in the same state as a
+// missing one, so Complete() reports the config as unfinished and the settings
+// overlay stays forced open until it is fixed.
+//
+// Metadata lives in the models table, not in the Config snapshot, so this reads
+// it; the patch's metas win over the stored rows because the settings sheet
+// sends the edited card list in the same patch as the designations. Metas
+// changed behind Update's back — POST /api/setup/models — are caught by the next
+// save.
 func (s *Store) sanitizeDesignated(ctx context.Context, c *Config, patch Patch) error {
 	designated := []struct {
 		kind     string

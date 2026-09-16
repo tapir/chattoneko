@@ -35,10 +35,10 @@ const (
 )
 
 // Store is the live configuration handle. It owns the current immutable
-// snapshot (swapped atomically on every write) and a subscriber list that is
-// notified after each successful update. All writes are serialized through
-// updateMu and applied in a single transaction: a snapshot is only ever
-// swapped in after its row set is committed.
+// snapshot (swapped atomically on every write) and a subscriber list notified
+// after each successful update. All writes are serialized through updateMu and
+// applied in a single transaction: a snapshot is only ever swapped in after its
+// row set is committed.
 type Store struct {
 	db *sql.DB
 
@@ -51,8 +51,7 @@ type Store struct {
 }
 
 // NewStore opens the config store over db (migrations already applied). When
-// the config table is completely empty it is seeded with the default config
-// (first run).
+// the config table is completely empty it is seeded with the default config.
 func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
 	if err := seedIfEmpty(ctx, db); err != nil {
 		return nil, fmt.Errorf("seed defaults: %w", err)
@@ -65,7 +64,7 @@ func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
 }
 
 // seedIfEmpty writes the default config when the config table has no rows at
-// all. Everything not seeded here reads as empty/null until set through the
+// all. Everything it does not seed reads as empty/null until set through the
 // API.
 func seedIfEmpty(ctx context.Context, db *sql.DB) error {
 	var n int
@@ -103,9 +102,9 @@ func seedIfEmpty(ctx context.Context, db *sql.DB) error {
 func (s *Store) Get() *Config { return s.snap.Load() }
 
 // persist writes the config rows, optionally prunes the models table and
-// upserts model metadata — all in ONE transaction — then swaps the
-// snapshot. The snapshot is only ever swapped after everything is committed,
-// so a failure mid-way leaves the old snapshot fully in effect.
+// upserts model metadata — all in ONE transaction — then swaps the snapshot. The
+// snapshot is only ever swapped after everything is committed, so a failure
+// mid-way leaves the old snapshot fully in effect.
 func (s *Store) persist(ctx context.Context, c *Config, pruneKeep *[]string, metas []ModelMeta) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -204,8 +203,8 @@ func (s *Store) reload(ctx context.Context) error {
 }
 
 // loadSnapshot reads the config table into a finalized snapshot. Missing or
-// empty keys fall back to their defaults via finalize; corrupt structured
-// values are dropped with a warning (finalize then substitutes defaults).
+// empty keys fall back to their defaults via finalize; corrupt structured values
+// are dropped with a warning (finalize then substitutes defaults).
 func loadSnapshot(ctx context.Context, db *sql.DB) (*Config, error) {
 	rows, err := db.QueryContext(ctx, `SELECT key, value FROM config`)
 	if err != nil {
@@ -233,8 +232,8 @@ func loadSnapshot(ctx context.Context, db *sql.DB) (*Config, error) {
 	c.Models.DefaultVisionModel = kv[keyDefaultVisionModel]
 	c.Models.DefaultDocumentModel = kv[keyDefaultDocumentModel]
 	c.Models.DefaultTranscriptionModel = kv[keyDefaultTranscriptionModel]
-	// Auth never comes from the database: it is derived from the
-	// CHATTO_USERNAME / CHATTO_PASSWORD environment variables.
+	// Auth never comes from the database: it is derived from CHATTO_USERNAME /
+	// CHATTO_PASSWORD.
 	c.Auth = authFromEnv()
 
 	if v := kv[keyModelWhitelist]; v != "" {

@@ -1,10 +1,9 @@
-// Package config stores the server configuration in SQLite — there is no
-// config file. On first start an empty config table is seeded with hardcoded
-// defaults; everything except auth is set through the API (initial setup,
+// Package config stores the server configuration in SQLite; there is no config
+// file. On first start the empty config table is seeded with hardcoded
+// defaults, and everything except auth is set through the API (initial setup,
 // then admin changes) and takes effect live. Single-user auth is the one
-// exception: it is driven entirely by the CHATTO_USERNAME / CHATTO_PASSWORD
-// environment variables (see authFromEnv), read once at startup, and never
-// stored in the database.
+// exception: CHATTO_USERNAME / CHATTO_PASSWORD drive it (see authFromEnv), read
+// once at startup and never stored in the database.
 //
 // Two tables back this package (migration 001_init.sql):
 //
@@ -42,11 +41,10 @@ const (
 	DefaultContextLength         int64 = 131072 // 128K tokens
 )
 
-// Environment variables that drive single-user auth. There is no separate
-// "login required" flag: login is required exactly when BOTH are set
-// (non-empty after trimming). When either is missing, auth is disabled
-// entirely. The password is used as plaintext. Env-driven auth is read once
-// at startup; it is NOT editable through the API and NOT stored in the
+// Environment variables that drive single-user auth. Login is required exactly
+// when BOTH are set (non-empty after trimming); when either is missing, auth is
+// disabled entirely. The password is used as plaintext. Env-driven auth is read
+// once at startup, is NOT editable through the API and is NOT stored in the
 // database.
 const (
 	EnvUsername = "CHATTO_USERNAME"
@@ -58,18 +56,17 @@ const (
 var DefaultReasoningEfforts = []string{"max", "xhigh", "high", "medium", "low", "minimal", "none"}
 
 // Model endpoints: the provider route a model is called through, chosen when
-// the model is added. Only "chat" models describe themselves with the
-// metadata below (context window, modalities, reasoning); the others are
-// specialists called through their own route.
+// the model is added. Only "chat" models describe themselves with the metadata
+// below (context window, modalities, reasoning); the others are specialists
+// called through their own route.
 //
-// ponytail: image and speech are stored but not wired up yet — no code path
-// calls /images/generations or /audio/speech. The values exist so a model can
-// be registered under the kind it really is instead of being mislabelled chat.
+// ponytail: image and speech are stored but nothing calls /images/generations
+// or /audio/speech; the values let a model be registered under its real kind.
 const (
 	EndpointChat          = "chat"          // POST /chat/completions
 	EndpointTranscription = "transcription" // POST /audio/transcriptions
-	EndpointImage         = "image"         // not used yet
-	EndpointSpeech        = "speech"        // not used yet
+	EndpointImage         = "image"
+	EndpointSpeech        = "speech"
 )
 
 var validEndpoints = map[string]bool{
@@ -100,12 +97,10 @@ type ModelsConfig struct {
 	// The remaining designations are the specialist models the vision,
 	// document and transcription tools hand files to when the chat model
 	// cannot read them itself (vision needs image input, the document model
-	// needs "file" input). None of them is required by Complete() — a missing
-	// one just leaves that file type unreadable, which the tool reports
-	// in-band; all talk to the same
-	// provider as chat. The transcription model is the odd one out: it is an
-	// EndpointTranscription model posted to /audio/transcriptions, so it has
-	// no input modalities to check and no chat metadata at all.
+	// needs "file" input). Complete() requires none of them: a missing one
+	// leaves that file type unreadable, which the tool reports in-band. The
+	// transcription model is posted to /audio/transcriptions, so it has no
+	// input modalities to check and no chat metadata.
 	DefaultVisionModel        string `json:"default_vision_model"`
 	DefaultDocumentModel      string `json:"default_document_model"`
 	DefaultTranscriptionModel string `json:"default_transcription_model"`
@@ -129,28 +124,25 @@ type LimitsConfig struct {
 	// failed, so a broken MCP server cannot buy itself an endless retry loop.
 	// Calls past the budget are refused with an error result and the model
 	// finishes in text — this limit never cuts a generation short.
-	// ponytail: the name still says "iterations" from when it counted rounds;
-	// renaming the key would orphan stored settings, so only the meaning moved.
+	//
+	// ponytail: it counts calls, not rounds; renaming the key to match would
+	// orphan stored settings.
 	MaxToolIterations int `json:"max_tool_iterations"`
 	// MCPCallTimeoutSeconds bounds a single MCP tool call (a hung MCP server
 	// must not block the turn loop forever).
 	MCPCallTimeoutSeconds int `json:"mcp_call_timeout_seconds"`
 }
 
-// AuthConfig holds single-user auth settings. It is populated from the
-// CHATTO_USERNAME / CHATTO_PASSWORD environment variables at startup
-// (authFromEnv) and never persisted to the database or exposed through the
-// setup API. Password is the PLAINTEXT password from the environment.
+// AuthConfig holds single-user auth settings, derived from CHATTO_USERNAME /
+// CHATTO_PASSWORD at startup (authFromEnv) and never persisted to the database
+// or exposed through the setup API. Password is the PLAINTEXT password from the
+// environment.
 type AuthConfig struct {
 	Enabled  bool   `json:"enabled"`
 	Username string `json:"username"`
 	Password string `json:"-"` // never serialized to API responses
 }
 
-// authFromEnv derives the auth configuration from the environment. Login is
-// required exactly when BOTH the username and password variables are set
-// (non-empty after trimming); otherwise auth is disabled. The password is
-// kept as plaintext.
 func authFromEnv() AuthConfig {
 	user := strings.TrimSpace(os.Getenv(EnvUsername))
 	pass := strings.TrimSpace(os.Getenv(EnvPassword))
@@ -169,17 +161,17 @@ type Config struct {
 	MCPServers   []MCPServerConfig `json:"mcp_servers"`
 	Limits       LimitsConfig      `json:"limits"`
 	Auth         AuthConfig        `json:"auth"`
-	// ToolDefaults is the global per-tool default toggle (settings UI):
-	// tool display name → enabled. It overrides the catalog's own default
-	// (integrated tools' hardcoded DefaultEnabled, MCP tools' server
-	// default_enabled) for chats that carry no override of their own. A
-	// tool absent from the map keeps the catalog default.
+	// ToolDefaults is the global per-tool default toggle (settings UI): tool
+	// display name → enabled. It overrides the catalog default (integrated
+	// tools' hardcoded DefaultEnabled, MCP tools' server default_enabled) for
+	// chats that carry no override of their own; a tool absent from the map
+	// keeps the catalog default.
 	ToolDefaults map[string]bool `json:"tool_defaults"`
-	// ToolTitles is the global per-tool USER-facing label (settings UI):
-	// tool display name → title shown in the chat instead of the raw name.
-	// It overrides the catalog's own title (integrated tools' hardcoded one,
-	// MCP tools' server-declared one). Optional and sparse: a tool absent
-	// from the map — or mapped to "" — keeps its catalog title.
+	// ToolTitles is the global per-tool USER-facing label (settings UI): tool
+	// display name → title shown in the chat instead of the raw name. It
+	// overrides the catalog title (integrated tools' hardcoded one, MCP tools'
+	// server-declared one). Sparse: a tool absent from the map — or mapped to
+	// "" — keeps its catalog title.
 	ToolTitles map[string]string `json:"tool_titles"`
 }
 
@@ -212,10 +204,9 @@ func (c *Config) clone() *Config {
 	return &cp
 }
 
-// Complete reports whether the minimum settings needed to run chats are
-// present (provider endpoint/key + both designated models). An incomplete
-// config means "setup still needed" — the server still runs and serves the
-// API/UI.
+// Complete reports whether the minimum settings needed to run chats are present
+// (provider endpoint/key + both designated models). An incomplete config means
+// "setup still needed" — the server still runs and serves the API/UI.
 func (c *Config) Complete() bool {
 	return c.Provider.BaseURL != "" && c.Provider.APIKey != "" &&
 		c.Models.DefaultChatModel != "" && c.Models.DefaultTaskModel != ""
@@ -223,7 +214,7 @@ func (c *Config) Complete() bool {
 
 // finalize fills every empty/zero/invalid value with its fallback and drops
 // structurally broken entries. It runs on load AND before every update is
-// persisted, so both paths end in the same sanitized shape.
+// persisted, so both paths end in the same shape.
 func (c *Config) finalize() {
 	if strings.TrimSpace(c.SystemPrompt) == "" {
 		c.SystemPrompt = strings.TrimSpace(defaultSystemPrompt)
@@ -242,10 +233,10 @@ func (c *Config) finalize() {
 	c.sanitizeToolTitles()
 }
 
-// sanitizeToolTitles trims the configured user-facing tool titles and drops
-// the blank ones, so an emptied settings box hands the label back to the
-// catalog (integrated tools' hardcoded title, MCP tools' server-declared one)
-// instead of storing a whitespace title.
+// sanitizeToolTitles trims the configured user-facing tool titles and drops the
+// blank ones, so an emptied settings box hands the label back to the catalog
+// (integrated tools' hardcoded title, MCP tools' server-declared one) instead
+// of storing a whitespace title.
 func (c *Config) sanitizeToolTitles() {
 	for name, title := range c.ToolTitles {
 		if t := strings.TrimSpace(title); t == "" {
@@ -256,10 +247,10 @@ func (c *Config) sanitizeToolTitles() {
 	}
 }
 
-// sanitizeWhitelist drops empty and duplicate model ids and clears a
-// designated model (any of the role defaults) that is not whitelisted. Designated
-// models must be members of the whitelist (the settings UI flags them from
-// whitelisted cards), so auto-adding them would paper over stale ids.
+// sanitizeWhitelist drops empty and duplicate model ids and clears a designated
+// model (any of the role defaults) that is not whitelisted. Designated models
+// must be members of the whitelist (the settings UI flags them from whitelisted
+// cards), so auto-adding one would paper over a stale id.
 func (c *Config) sanitizeWhitelist() {
 	c.Models.Whitelist = filterEmpty(c.Models.Whitelist)
 	seen := make(map[string]bool, len(c.Models.Whitelist))
@@ -323,9 +314,9 @@ func (c *Config) sanitizeMCPServers() {
 	c.MCPServers = clean
 }
 
-// validate enforces the invariants that no fallback can fix. Called before
-// an update is persisted (never at load time: stored config must not keep
-// the server from starting — broken values fall back via finalize).
+// validate enforces the invariants that no fallback can fix. Called before an
+// update is persisted, never at load time: stored config must not keep the
+// server from starting, and broken values fall back via finalize.
 func (c *Config) validate() error {
 	if c.Auth.Enabled {
 		if strings.TrimSpace(c.Auth.Username) == "" {
@@ -338,10 +329,10 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// MCPServerEqual reports whether two MCP server configs are identical
-// (used by the MCP hub to decide if a server needs reconnecting). Both sides
-// are normalized by sanitizeMCPServers before comparison, so nil-vs-empty
-// maps are consistent.
+// MCPServerEqual reports whether two MCP server configs are identical (used by
+// the MCP hub to decide if a server needs reconnecting). Both sides are
+// normalized by sanitizeMCPServers before comparison, so nil-vs-empty maps are
+// consistent.
 func MCPServerEqual(a, b MCPServerConfig) bool {
 	return reflect.DeepEqual(a, b)
 }

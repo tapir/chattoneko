@@ -43,8 +43,8 @@ func TestSeedDefaultsOnEmptyTable(t *testing.T) {
 	if c.Limits.MCPCallTimeoutSeconds != DefaultMCPCallTimeoutSeconds {
 		t.Errorf("MCPCallTimeoutSeconds = %d", c.Limits.MCPCallTimeoutSeconds)
 	}
-	// Auth is env-var driven; with no env vars set (as in tests) it is
-	// disabled and carries no username. It is NOT seeded from the database.
+	// Auth is env-var driven; with no env vars set (as in tests) it is disabled
+	// and carries no username. It is NOT seeded from the database.
 	if c.Auth.Enabled {
 		t.Error("auth must be disabled when the env vars are not set")
 	}
@@ -86,9 +86,9 @@ func TestSeedRunsOnlyOnce(t *testing.T) {
 	}
 }
 
-// Auth is driven by CHATTO_USERNAME / CHATTO_PASSWORD. Login is required
-// exactly when BOTH are set; the password stays plaintext and is never
-// written to the config table.
+// Auth is driven by CHATTO_USERNAME / CHATTO_PASSWORD. Login is required exactly
+// when BOTH are set; the password stays plaintext and is never written to the
+// config table.
 func TestAuthFromEnv(t *testing.T) {
 	h := newDB(t)
 	ctx := context.Background()
@@ -211,8 +211,8 @@ func TestUpdateSanitizesWhitelist(t *testing.T) {
 	if strings.Join(c.Models.Whitelist, ",") != "a,b" {
 		t.Fatalf("whitelist = %v, want [a b]", c.Models.Whitelist)
 	}
-	// The designated chat model is NOT whitelisted, so it is cleared
-	// rather than silently auto-added.
+	// The designated chat model is NOT whitelisted, so it is cleared rather
+	// than silently auto-added.
 	if c.Models.DefaultChatModel != "" {
 		t.Fatalf("default chat model = %q, want cleared", c.Models.DefaultChatModel)
 	}
@@ -269,7 +269,7 @@ func TestModelMetasDefaultsAndRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s, _ := NewStore(ctx, h)
 
-	// Unknown id → spec defaults.
+	// Unknown id → defaults.
 	metas, err := s.ModelMetas(ctx, []string{"x/unknown"})
 	if err != nil {
 		t.Fatalf("ModelMetas: %v", err)
@@ -378,9 +378,9 @@ func TestUpdateModelMetas(t *testing.T) {
 	}
 }
 
-// Header values round-trip through the setup API (GET exposes them, PUT
-// carries them back verbatim), so the patch is authoritative: an empty
-// value clears the header instead of keeping a stored one.
+// Header values round-trip through the setup API (GET exposes them, PUT carries
+// them back verbatim), so the patch is authoritative: an empty value clears the
+// header instead of keeping a stored one.
 func TestUpdateClearsEmptyMCPHeaderValues(t *testing.T) {
 	h := newDB(t)
 	ctx := context.Background()
@@ -405,9 +405,9 @@ func TestUpdateClearsEmptyMCPHeaderValues(t *testing.T) {
 	}
 }
 
-// Header names must be valid HTTP field names and values get trimmed: an
-// invalid name would fail the MCP request at call time with a confusing
-// error, so it is dropped at config time instead.
+// Header names must be valid HTTP field names and values get trimmed: an invalid
+// name would fail the MCP request at call time with a confusing error, so it is
+// dropped at config time instead.
 func TestUpdateSanitizesMCPHeaders(t *testing.T) {
 	h := newDB(t)
 	ctx := context.Background()
@@ -440,7 +440,7 @@ func TestVisionModelPatchAndSanitize(t *testing.T) {
 	ctx := context.Background()
 	s, _ := NewStore(ctx, h)
 
-	// The vision designation requires image input (validateDesignated).
+	// The vision designation requires image input (sanitizeDesignated).
 	vision := []ModelMeta{{ModelID: "v", InputModality: []string{"text", "image"}}}
 	if _, err := s.Update(ctx, Patch{Models: &ModelsPatch{
 		Whitelist:          &[]string{"a", "v"},
@@ -487,7 +487,7 @@ func TestVisionModelPatchAndSanitize(t *testing.T) {
 	}
 }
 
-// A designated model that can't do its job is cleared, not rejected: the save
+// A designated model that cannot do its job is cleared, not rejected: the save
 // lands in the same state as one with no designation at all, so Complete()
 // reports setup as unfinished and the settings overlay stays forced open until
 // the user picks a model that fits the role.
@@ -548,8 +548,8 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 		t.Errorf("document/transcription models = %q/%q, want pdf/audio", c.Models.DefaultDocumentModel, c.Models.DefaultTranscriptionModel)
 	}
 
-	// Metas sent in the same patch win over the stored rows: adding text
-	// input to the card and flagging it as chat saves in one go.
+	// Metas sent in the same patch win over the stored rows: adding text input
+	// to the card and flagging it as chat saves in one go.
 	fixed := []ModelMeta{{ModelID: "vision", InputModality: []string{"text", "image"}}}
 	c = update(Patch{Models: &ModelsPatch{DefaultChatModel: ptr("vision"), DefaultTaskModel: ptr("m"), Metas: &fixed}})
 	if c.Models.DefaultChatModel != "vision" {

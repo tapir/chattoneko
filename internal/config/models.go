@@ -9,18 +9,18 @@ import (
 	"time"
 )
 
-// Input modalities a model can accept, in the provider's own words
-// (OpenRouter reports PDF input as "file"). "file" is its own modality
-// because plenty of models take images but not PDFs (and the other way
-// round), so image says nothing about it. Output is always text — a chat
-// completions model produces nothing else — so it is not stored.
+// Input modalities a model can accept, in the provider's own words (OpenRouter
+// reports PDF input as "file"). "file" is its own modality because plenty of
+// models take images but not PDFs (and the other way round), so image says
+// nothing about it. Output is always text — a chat completions model produces
+// nothing else — so it is not stored.
 var validModalities = map[string]bool{"text": true, "image": true, "file": true, "audio": true}
 
-// ModelMeta is the per-model metadata stored in the models table: the
-// endpoint the model is called through, what it accepts, how much context it
-// takes, and which reasoning effort levels it offers. Everything but Endpoint
-// describes a CHAT model; a transcription/image/speech row keeps the defaults
-// and nothing reads them.
+// ModelMeta is the per-model metadata stored in the models table: the endpoint
+// the model is called through, what it accepts, how much context it takes, and
+// which reasoning effort levels it offers. Everything but Endpoint describes a
+// CHAT model; a transcription/image/speech row keeps the defaults and nothing
+// reads them.
 type ModelMeta struct {
 	ModelID          string   `json:"model_id"`
 	Endpoint         string   `json:"endpoint"` // one of the Endpoint* constants
@@ -30,7 +30,7 @@ type ModelMeta struct {
 	ReasoningDefault string   `json:"reasoning_default"`
 }
 
-// DefaultModelMeta returns the spec defaults for one model: a chat endpoint,
+// DefaultModelMeta returns the defaults for one model: a chat endpoint,
 // text-only input, 128K context, the default effort levels with "medium"
 // preselected.
 func DefaultModelMeta(id string) ModelMeta {
@@ -45,11 +45,10 @@ func DefaultModelMeta(id string) ModelMeta {
 }
 
 // SanitizeMeta normalizes one model metadata entry in place: an unknown
-// endpoint becomes "chat", input modalities are
-// filtered to the known set (defaulting to ["text"]), context length must be
-// positive (default 128K), effort levels fall back to the default list and
-// the default effort must be one of the levels (falls back to the 2nd
-// element).
+// endpoint becomes "chat", input modalities are filtered to the known set
+// (defaulting to ["text"]), context length must be positive (default 128K),
+// effort levels fall back to the default list and the default effort must be
+// one of the levels (falls back to the 2nd element).
 func SanitizeMeta(m *ModelMeta) {
 	m.ModelID = strings.TrimSpace(m.ModelID)
 	m.Endpoint = strings.TrimSpace(m.Endpoint)
@@ -72,8 +71,8 @@ func SanitizeMeta(m *ModelMeta) {
 		}
 	}
 	if !found {
-		// Default effort = the 2nd element of the levels list (or the only
-		// element when there is just one).
+		// Default effort = the 2nd element of the levels list, or the only
+		// element when there is just one.
 		idx := 1
 		if idx >= len(m.ReasoningEfforts) {
 			idx = len(m.ReasoningEfforts) - 1
@@ -112,7 +111,7 @@ func filterEmpty(in []string) []string {
 }
 
 // ModelMetas returns metadata for the given model ids — one entry per id, in
-// input order. Ids without a stored row get the defaults applied.
+// input order. Ids without a stored row get the defaults.
 func (s *Store) ModelMetas(ctx context.Context, ids []string) ([]ModelMeta, error) {
 	stored := map[string]ModelMeta{}
 	if len(ids) > 0 {
@@ -188,9 +187,9 @@ func upsertModelMetas(ctx context.Context, tx *sql.Tx, metas []ModelMeta, now in
 	return nil
 }
 
-// pruneModelMetas is the transaction-scoped core of metadata pruning
-// (used by persist when the whitelist shrinks). An empty keep list clears
-// the whole table.
+// pruneModelMetas is the transaction-scoped core of metadata pruning (used by
+// persist when the whitelist shrinks). An empty keep list clears the whole
+// table.
 func pruneModelMetas(ctx context.Context, tx *sql.Tx, keep []string) error {
 	if len(keep) == 0 {
 		_, err := tx.ExecContext(ctx, `DELETE FROM models`)
@@ -212,8 +211,8 @@ func scanModelMeta(rows *sql.Rows) (ModelMeta, error) {
 	if !validEndpoints[m.Endpoint] {
 		m.Endpoint = EndpointChat
 	}
-	// Stored rows are sanitized on write; parse errors fall back to the
-	// column defaults rather than failing the whole read.
+	// Stored rows are sanitized on write; parse errors fall back to the column
+	// defaults rather than failing the whole read.
 	m.InputModality = parseModalities(in)
 	m.ReasoningEfforts = filterEmpty(parseStrings(efforts))
 	if len(m.ReasoningEfforts) == 0 {

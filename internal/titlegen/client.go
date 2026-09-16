@@ -14,23 +14,19 @@ import (
 )
 
 // errEmptyTitle means the model returned nothing usable after sanitization;
-// treated as a transient failure (retried after a delay).
+// treated as a transient failure and retried after a delay.
 var errEmptyTitle = errors.New("titlegen: model returned an empty title")
 
 const (
-	// maxInputRunes bounds how much of the first message is sent to the
-	// title model — a title only needs the gist, and huge pasted files must
-	// not blow up the request.
+	// maxInputRunes caps how much of the first message reaches the title model.
 	maxInputRunes = 1000
-	// maxTitleRunes caps the persisted title (sidebar labels truncate anyway;
-	// this keeps pathological model output out of the DB).
+	// maxTitleRunes caps the persisted title, keeping pathological model output
+	// out of the DB.
 	maxTitleRunes = 60
-	// maxOutputTokens bounds the completion. Reasoning models (gpt-oss,
-	// o-*, GLM thinking, ...) burn hidden reasoning tokens BEFORE emitting
-	// content, and most providers count those against max_tokens — a tight
-	// cap (e.g. 64) gets fully consumed by reasoning and the API returns
-	// finish_reason=length with EMPTY content. 1024 leaves ample headroom;
-	// the system prompt still keeps the visible title to a few words.
+	// maxOutputTokens bounds the completion. Reasoning models burn hidden
+	// reasoning tokens before emitting content and most providers count those
+	// against max_tokens, so a tight cap comes back as finish_reason=length with
+	// empty content; the system prompt keeps the visible title short anyway.
 	maxOutputTokens = 1024
 
 	systemPrompt = `You generate short titles for chat conversations. ` +
@@ -38,9 +34,9 @@ const (
 		`no trailing punctuation, no "Title:" prefix.`
 )
 
-// client issues the title prompts through the shared non-streaming client
-// (internal/llm) with the configured task model. Separate from the chat
-// provider by design: it shares no state with the chat streaming machinery.
+// client issues title prompts through the non-streaming internal/llm client
+// with the configured task model, sharing no state with the chat streaming
+// machinery.
 type client struct {
 	llm *llm.Client
 }
@@ -51,7 +47,7 @@ func (c *client) GenerateFromText(ctx context.Context, text string) (string, err
 }
 
 // GenerateFromFile titles a conversation whose first message is a text file
-// attachment (filename included for context).
+// attachment, including the filename as context.
 func (c *client) GenerateFromFile(ctx context.Context, filename, content string) (string, error) {
 	return c.complete(ctx, fmt.Sprintf("Generate a title for this content (filename: %q):\n\"\"\"\n%s\n\"\"\"",
 		filename, truncateRunes(content, maxInputRunes)))
@@ -71,9 +67,9 @@ func (c *client) complete(ctx context.Context, userPrompt string) (string, error
 	}
 	title, err := sanitizeTitle(resp.Choices[0].Message.Content)
 	if err != nil {
-		// Attach the provider's own diagnostics: an empty title from a
-		// reasoning model almost always means finish_reason=length —
-		// reasoning tokens ate the whole max_tokens budget.
+		// Attach the provider's diagnostics: an empty title from a reasoning
+		// model almost always means reasoning tokens consumed the max_tokens
+		// budget (finish_reason=length).
 		ch := resp.Choices[0]
 		return "", fmt.Errorf("%w (finish_reason=%s completion_tokens=%d reasoning_tokens=%d)",
 			err, ch.FinishReason, resp.Usage.CompletionTokens,
@@ -89,7 +85,7 @@ func (c *client) complete(ctx context.Context, userPrompt string) (string, error
 func sanitizeTitle(raw string) (string, error) {
 	line, _, _ := strings.Cut(raw, "\n")
 	s := strings.TrimSpace(line)
-	// Drop a "Title:" style prefix (case-insensitive) — models love it.
+	// Drop a "Title:" style prefix (case-insensitive) — models often emit one.
 	if i := strings.Index(s, ":"); i > 0 && i <= 8 {
 		if strings.EqualFold(strings.TrimSpace(s[:i]), "title") {
 			s = strings.TrimSpace(s[i+1:])

@@ -1,13 +1,13 @@
 // Package titlegen runs the background title-generation task: it polls for
 // chats whose title is not final yet (title_generated = 0), derives a title
-// from the first user message via a dedicated (non-chat) OpenAI-compatible
-// client, and hands the result to a publish callback (wired to the engine's
-// global SSE stream).
+// from the first user message through a dedicated non-chat OpenAI-compatible
+// client, and hands the result to a publish callback (the engine's global SSE
+// stream).
 //
-// The polling loop and the LLM client share NO locks, channels or buffers
-// with the engine's generation machinery — a stalled chat generation can
-// never delay a title. The store's conditional write (SetGeneratedTitle)
-// makes a concurrent manual rename win over the task.
+// The polling loop and the LLM client share no locks, channels or buffers with
+// the engine's generation machinery, so a stalled chat generation can never
+// delay a title. The store's conditional write (SetGeneratedTitle) lets a
+// concurrent manual rename win over the task.
 package titlegen
 
 import (
@@ -24,16 +24,16 @@ import (
 	"chattoneko/internal/store"
 )
 
-// generator produces a title from the first-message source. The production
-// implementation is the dedicated OpenAI client (client.go); tests fake it.
+// generator produces a title from the first-message source; client.go
+// implements it, tests fake it.
 type generator interface {
 	GenerateFromText(ctx context.Context, text string) (string, error)
 	GenerateFromFile(ctx context.Context, filename, content string) (string, error)
 }
 
 const (
-	// defaultInterval is the poll cadence. Code-configurable (not a runtime
-	// setting): tests shrink it, production keeps the default.
+	// defaultInterval is the poll cadence. Set in code, not a runtime setting;
+	// tests shrink it.
 	defaultInterval = 1 * time.Second
 	// defaultTimeout bounds one title call so a hung provider stalls at most
 	// one sweep, not the whole task.
@@ -41,13 +41,12 @@ const (
 	// defaultBatch caps chats processed per sweep (only brand-new chats ever
 	// qualify, so this is headroom, not a rate limiter).
 	defaultBatch = 16
-	// maxFailures bounds retries per chat on transient errors (provider
-	// outage, DB hiccup); afterwards the chat keeps "New Chat" and the task
-	// stops hammering a broken setup.
+	// maxFailures bounds retries per chat on transient errors (provider outage,
+	// DB hiccup); afterwards the chat keeps "New Chat" and the task stops
+	// hammering a broken setup.
 	maxFailures = 5
 	// retryDelay is the fixed pause between two attempts for one chat, so a
-	// provider blip is retried a few times over ~a minute without the task
-	// calling it every sweep.
+	// provider blip is retried a few times over ~a minute instead of every sweep.
 	retryDelay = 10 * time.Second
 
 	// imageOnlyTitle is the fixed title for chats whose first message is
@@ -55,15 +54,15 @@ const (
 	imageOnlyTitle = "User Image Input"
 )
 
-// retryState tracks transient failures for one chat. Only the sweep
-// goroutine touches the map (processing is serial), so no lock is needed.
+// retryState tracks transient failures for one chat. Only the sweep goroutine
+// touches the map (processing is serial), so no lock is needed.
 type retryState struct {
 	failures int
-	next     time.Time // do not retry before this time
+	next     time.Time // earliest retry time
 }
 
-// Service is the background title-generation task. It is the ONLY component
-// allowed to write auto-generated titles.
+// Service is the background title-generation task and the only writer of
+// auto-generated titles.
 type Service struct {
 	store *store.Store
 	cfgs  *config.Store
@@ -81,9 +80,9 @@ type Service struct {
 	cache *llm.Cache
 }
 
-// New builds the task. The title client (separate from the chat provider;
-// same endpoint/key, task model from config) is created lazily from the live
-// config, so provider/model changes take effect without a restart.
+// New builds the task. The title client (same endpoint/key as the chat
+// provider, task model from config) is created lazily from the live config, so
+// provider and model changes apply without a restart.
 func New(st *store.Store, cfgs *config.Store, publish func(chatID, title string)) *Service {
 	return &Service{
 		store:    st,
@@ -99,9 +98,9 @@ func New(st *store.Store, cfgs *config.Store, publish func(chatID, title string)
 
 // generator returns the active title generator: the test override if set,
 // otherwise the live task client built from the current config. Returns nil
-// when the provider/task model is not configured yet (sweeps skip until it
-// is). Note the explicit nil handling: a nil *client wrapped in the
-// generator interface would be non-nil and panic on first use.
+// when the provider/task model is not configured yet (sweeps skip until it is).
+// The explicit nil check matters: a nil *client wrapped in the generator
+// interface would be non-nil and panic on first use.
 func (s *Service) generator(ctx context.Context) generator {
 	if s.gen != nil {
 		return s.gen
@@ -149,9 +148,9 @@ func (s *Service) sweep(ctx context.Context) {
 		}
 		return
 	}
-	// Drop the retry state of chats that left the candidate list (deleted,
-	// renamed, or titled) while backing off. At the batch cap the list may be
-	// truncated, so a chat beyond the window loses its state and is simply
+	// Drop the retry state of chats that left the candidate list while backing
+	// off (deleted, manually titled, or marked final). At the batch cap the list
+	// may be truncated, so a chat beyond the window loses its state and is simply
 	// retried on the next sweep instead of after the delay.
 	for id := range s.retries {
 		if !slices.Contains(ids, id) {
@@ -214,8 +213,7 @@ func (s *Service) process(ctx context.Context, chatID string) {
 	s.markFinal(ctx, chatID)
 }
 
-// generateFromAttachment loads a text attachment and titles from its
-// content. gen is the generator process already resolved.
+// generateFromAttachment titles a chat from a text attachment's content.
 func (s *Service) generateFromAttachment(ctx context.Context, gen generator, chatID, attachmentID, filename string) {
 	att, err := s.store.GetAttachment(ctx, attachmentID)
 	if err != nil {
@@ -227,8 +225,6 @@ func (s *Service) generateFromAttachment(ctx context.Context, gen generator, cha
 	})
 }
 
-// generate runs one bounded title call; success and transient failure are
-// routed to their handlers.
 func (s *Service) generate(ctx context.Context, chatID string, call func(context.Context) (string, error)) {
 	cctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -241,8 +237,8 @@ func (s *Service) generate(ctx context.Context, chatID string, call func(context
 }
 
 // applyTitle persists the title conditionally and broadcasts it. When the
-// conditional write reports 0 rows, a manual rename (or chat deletion) won
-// the race — the user's title stays and nothing is broadcast.
+// conditional write reports 0 rows, a manual rename (or chat deletion) won the
+// race: the user's title stays and nothing is broadcast.
 func (s *Service) applyTitle(ctx context.Context, chatID, title string) {
 	ok, err := s.store.SetGeneratedTitle(ctx, chatID, title)
 	if err != nil {

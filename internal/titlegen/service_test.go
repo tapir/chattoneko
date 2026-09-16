@@ -229,9 +229,9 @@ func TestImageOnlyGetsFixedTitle(t *testing.T) {
 	}
 }
 
-// Regression: with the provider/task model unconfigured the production
-// generator must skip cleanly — a nil *client wrapped in the generator
-// interface is non-nil and used to panic the whole sweep goroutine.
+// With the provider/task model unconfigured the production generator must skip
+// cleanly: a nil *client wrapped in the generator interface would be non-nil
+// and panic the sweep goroutine.
 func TestSweepUnconfiguredDoesNotPanic(t *testing.T) {
 	st := testStore(t)
 	chat := newChat(t, st)

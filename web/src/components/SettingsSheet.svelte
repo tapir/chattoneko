@@ -201,7 +201,10 @@
   // Stale-while-revalidate: only the very first fetch blocks behind the
   // spinner, later opens keep showing the values already applied and refresh
   // them silently.
+  let inFlight = false; // not rendered, so plain let
   async function load() {
+    if (inFlight) return;
+    inFlight = true;
     const fresh = baseline === '';
     if (fresh) loading = true;
     error = '';
@@ -212,6 +215,7 @@
     } catch (e) {
       error = e?.message || 'Failed to load settings';
     } finally {
+      inFlight = false;
       loading = false;
     }
   }
@@ -514,6 +518,13 @@
 
   const labelCls = 'text-sm font-medium';
   const hint = 'text-xs text-muted-foreground';
+
+  // Warm the form on mount so the first open has values to paint instead of a
+  // spinner. This overlay only mounts once authed and the server is up, so
+  // this is the earliest the fetch could succeed. Deliberately outside any
+  // effect: load() reads `baseline`, and tracking it would re-run on the
+  // applyConfig that writes it.
+  void load();
 </script>
 
 <svelte:window onkeydown={onKeydown} />

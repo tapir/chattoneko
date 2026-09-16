@@ -1,7 +1,7 @@
 // Package mcphub manages the MCP client connections declared in config.
-// The server list and the per-call timeout come from the live config store:
-// Reload reconciles connections after a config change (connect new servers,
-// close removed ones, reconnect changed ones) without a restart.
+// The server list and the per-call timeout come from the live config store;
+// Reload reconciles connections on a config change (connect new servers,
+// close absent ones, reconnect changed ones) without a restart.
 package mcphub
 
 import (
@@ -19,12 +19,11 @@ import (
 	"chattoneko/internal/config"
 )
 
-// CallMeta carries the conversation coordinates of one tool call: which
-// chat and which assistant message (the one holding the call) it belongs
-// to. Integrated tools use it to attach artifacts (e.g. generated files) to
-// the right message; MCP tools ignore it. It lives here (not in
-// internal/tools) because this package is the shared tool vocabulary —
-// internal/tools already imports it for Entry.
+// CallMeta carries the conversation coordinates of one tool call: which chat
+// and which assistant message (the one holding the call) it belongs to.
+// Integrated tools use it to attach artifacts (e.g. generated files) to the
+// right message; MCP tools ignore it. It lives here, not in internal/tools,
+// because that package imports this one for Entry.
 type CallMeta struct {
 	ChatID    string
 	MessageID string // assistant message owning the tool call
@@ -34,7 +33,7 @@ type CallMeta struct {
 // carry in place of a config server name. The UI shows it as the tool's
 // origin, and the engine reads it to tell integrated tools from MCP ones —
 // only MCP calls are charged against the per-response tool-call budget. It
-// lives here for the same reason CallMeta does: shared tool vocabulary.
+// lives here for the same reason CallMeta does.
 const BuiltinServer = "builtin"
 
 // Entry is one tool in the aggregated catalog.
@@ -88,27 +87,25 @@ func New(store *config.Store) *hub {
 
 // Reload re-reads the MCP server list from the config store and reconciles:
 // new servers are connected CONCURRENTLY (a dead server must not serialize
-// its network timeout into boot or reload time), removed ones closed, changed
-// ones (any field) reconnected. Per-server failures are logged and skipped
-// (their tools stay absent). Safe to call concurrently — reconciliation is
-// serialized. Returns true when the reconciliation changed the tool catalog
-// (servers were added, removed, or reconnected), so callers can notify
-// clients that /api/config is stale.
+// its network timeout into boot or reload time), absent ones closed, changed
+// ones (any field) reconnected. Per-server failures are logged and skipped,
+// leaving their tools absent. Safe to call concurrently — reconciliation is
+// serialized. Returns true when the catalog changed (servers added, closed or
+// reconnected), so callers can tell clients that /api/config is stale.
 func (h *hub) Reload(ctx context.Context) bool {
 	h.reloadMu.Lock()
 	defer h.reloadMu.Unlock()
 	return h.reconcileLocked(ctx, h.store.Get().MCPServers)
 }
 
-// reconcileLocked diffs the desired server list against the current
-// connections and applies the minimum set of connect/close operations.
-// Callers must hold reloadMu. Returns true when the tool catalog changed
-// (something was closed or a new connection succeeded).
+// reconcileLocked diffs the desired server list against the live connections
+// and applies the minimum set of connect/close operations. Callers must hold
+// reloadMu. Returns true when the tool catalog changed (something closed or a
+// new connection succeeded).
 func (h *hub) reconcileLocked(ctx context.Context, desired []config.MCPServerConfig) bool {
-	// Decide what to close: servers removed from config, or whose config
-	// changed (they will be reconnected below). reloadMu already serializes
-	// reconciliation and st.cfg is immutable once inserted, so the live map
-	// can be read under RLock — no snapshot copy.
+	// Servers to close: absent from config, or config changed (reconnected
+	// below). reloadMu serializes reconciliation and st.cfg is immutable once
+	// inserted, so the live map can be read under RLock — no snapshot copy.
 	var toClose []string
 	h.mu.RLock()
 	for name, st := range h.servers {
@@ -128,9 +125,8 @@ func (h *hub) reconcileLocked(ctx context.Context, desired []config.MCPServerCon
 	}
 	h.mu.RUnlock()
 	if len(toClose) > 0 {
-		// Detach under the lock, close OUTSIDE it: session teardown does
-		// HTTP I/O and must not block every Tools()/Call() reader while it
-		// runs.
+		// Detach under the lock, close OUTSIDE it: session teardown does HTTP
+		// I/O and must not block every Tools()/Call() reader while it runs.
 		var closing []*serverState
 		h.mu.Lock()
 		for _, name := range toClose {
@@ -147,7 +143,7 @@ func (h *hub) reconcileLocked(ctx context.Context, desired []config.MCPServerCon
 		}
 	}
 
-	// Decide what to connect: desired servers not currently connected.
+	// Servers to connect: desired and not yet connected.
 	var toConnect []config.MCPServerConfig
 	h.mu.RLock()
 	for _, d := range desired {
@@ -184,7 +180,6 @@ func (h *hub) reconcileLocked(ctx context.Context, desired []config.MCPServerCon
 			connected++
 		}
 	}
-	// Rebuild the merged catalog in config order.
 	order := make([]string, 0, len(desired))
 	for _, d := range desired {
 		if _, ok := h.servers[d.Name]; ok {
@@ -232,9 +227,9 @@ func dial(ctx context.Context, sc config.MCPServerConfig) (*mcp.ClientSession, e
 }
 
 // Probe dials ONE server config outside any hub, lists its tools and closes
-// the session again. This is the settings UI's per-card "fetch tools" path:
-// it must work for a server that is brand new or has unsaved url/header
-// edits, so it never touches the hub's live connections or the catalog.
+// the session. It is the settings UI's per-card "fetch tools" path: it must
+// work for a server that is new or carries unsaved url/header edits, so it
+// never touches the hub's live connections or the catalog.
 func Probe(ctx context.Context, sc config.MCPServerConfig) ([]Entry, error) {
 	cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
@@ -307,10 +302,10 @@ func listTools(ctx context.Context, session *mcp.ClientSession, sc config.MCPSer
 	return out, nil
 }
 
-// mcpTitle is the display title the MCP server itself declared, using the
+// mcpTitle is the display title the MCP server itself declares, using the
 // spec's own precedence (title, then annotations.title). Empty when the
-// server sent neither — the configured tool_titles override (see tools.Merge)
-// and, failing that, the raw name is what the UI shows.
+// server declares neither — the configured tool_titles override (see
+// tools.Merge) and, failing that, the raw name is what the UI shows.
 func mcpTitle(t *mcp.Tool) string {
 	if t.Title != "" {
 		return t.Title
@@ -369,11 +364,11 @@ func (h *hub) Call(ctx context.Context, display, argsJSON string, _ CallMeta) (s
 	return text, res.IsError, nil
 }
 
-// resultText renders a tool result as text: all text content blocks joined
-// by newlines. Non-text blocks (images, audio, resources) are replaced with
-// a placeholder so they aren't silently dropped. If the result carries no text
-// at all, structured content is rendered as JSON instead, so servers that
-// only return structured results don't surface as empty strings.
+// resultText renders a tool result as text: all text content blocks joined by
+// newlines. Non-text blocks (images, audio, resources) become a placeholder so
+// they aren't silently dropped. With no text at all, structured content is
+// rendered as JSON instead, so servers that only return structured results
+// don't surface as empty strings.
 func resultText(res *mcp.CallToolResult) (string, error) {
 	var parts []string
 	for _, c := range res.Content {

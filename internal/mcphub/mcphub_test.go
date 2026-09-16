@@ -226,8 +226,8 @@ func TestHubCollisionFirstWins(t *testing.T) {
 	defer hub.Close()
 
 	// Both servers expose the same tools: the FIRST server in config order
-	// keeps the name, the later duplicate is dropped (never renamed), so the
-	// catalog holds unique display names.
+	// keeps the name and the later duplicate is dropped, so the catalog holds
+	// unique display names.
 	tools := hub.Tools()
 	if len(tools) != 2 {
 		t.Fatalf("tools = %d, want 2: %v", len(tools), tools)

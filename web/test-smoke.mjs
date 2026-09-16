@@ -76,7 +76,7 @@ assert(!inline.includes('display="block"'), 'inline math is not display mode');
 assert(inline.includes('incremark-math-inline'), 'inline math wrapped as inline');
 const broken = render('$$\\definitely{\\notreal$$');
 assert(broken.length > 0, 'broken LaTeX does not throw');
-// bracket delimiters are handled natively — no pre-normalization needed
+// bracket delimiters render natively
 const bracketDisplay = render('\\[\\frac{a}{b}\\]');
 assert(bracketDisplay.includes('<math') && bracketDisplay.includes('display="block"'), '\\[...\\] rendered as display math');
 const bracketInline = render('so \\(E=mc^2\\) works');
@@ -97,7 +97,7 @@ for (const src of [
   assert(!html.includes('<math'), `price pair not rendered as math: ${src}`);
   assert(html.replaceAll('<strong>', '').includes('$'), `dollar signs survive: ${src}`);
 }
-// real formulas must still render
+// real formulas must render
 for (const f of ['$x^2$', '$2^k$', '$1/\\text{rank}$', '$y = c \\cdot x^k$']) {
   assert(render(normalizeSource(`see ${f} here`)).includes('<math'), `real inline math kept: ${f}`);
 }

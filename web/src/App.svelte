@@ -122,8 +122,8 @@
 
   function applyRoute(opts = {}) {
     // Parse into a LOCAL first: reading `route` (a $state) inside the
-    // auth-gated $effect below while also writing it caused an infinite
-    // effect_update_depth_exceeded loop that broke the whole app.
+    // auth-gated $effect below while also writing it loops forever
+    // (effect_update_depth_exceeded).
     let r = parseHash();
     // Fresh page load or first login: if this tab already ran the app
     // (reload / browser session restore), the restored hash points at the
@@ -272,13 +272,13 @@
     <!-- Mobile sidebar -->
     <Sheet.Root bind:open={sidebarOpen}>
       <!-- Fullscreen on mobile: the !important overrides beat the Sheet
-           base classes (w-3/4, sm:max-w-sm). border-r-0! kills the right
-           border (base data-[side=left]:border-r) that otherwise rendered
-           as a stray 1px line at the right screen edge when fullscreen.
+           base classes (w-3/4, sm:max-w-sm). border-r-0! removes the base
+           data-[side=left]:border-r, which shows as a stray 1px line at the
+           right screen edge when fullscreen.
            p-safe keeps the header row clear of the status bar when the
-           WebView is laid out edge-to-edge (native). The sheet's absolute
-           X is disabled — it overlapped the New button; Sidebar renders
-           its own close button in the header row, centered with New.
+           WebView is laid out edge-to-edge (native). The sheet's absolute X
+           is off: it would sit under the New button, and Sidebar renders its
+           own close button in the header row, centered with New.
            Safe-area padding comes from the sheet-content primitive. -->
       <Sheet.Content side="left" class="w-full! max-w-full! gap-0 border-r-0! bg-sidebar p-0" showCloseButton={false}>
         <Sheet.Title class="sr-only">Chats</Sheet.Title>

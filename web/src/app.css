@@ -234,15 +234,15 @@
   }
 
   /* Deliberately not --accent: user message bubbles are bg-accent, so an
-     accent-colored selection was invisible on them. Primary inverts in
+     accent-colored selection would be invisible on them. Primary inverts in
      .dark, so the highlight stays visible in both themes. */
   ::selection {
     background: var(--primary);
     color: var(--primary-foreground);
   }
 
-  /* Tailwind v4's preflight dropped v3's automatic pointer cursor on
-     buttons; restore it app-wide so every enabled button feels clickable. */
+  /* Tailwind v4's preflight gives buttons no pointer cursor; set one
+     app-wide so every enabled button feels clickable. */
   button:not(:disabled),
   [role="button"]:not(:disabled),
   summary {
@@ -253,13 +253,12 @@
 
 /* Universal press feedback — deliberately UNLAYERED (same trick as the
    .p-safe rules below): inside @layer base this rule silently loses to
-   every Tailwind bg-* utility (even bg-transparent), which is why the
-   first version only faded the text. :hover never fires on touch, so
-   :active is the only guaranteed feedback channel on mobile. Instead of
-   fading the control, paint the same kind of wash the desktop hovers use
-   (hover:bg-accent / hover:bg-muted / hover:bg-sidebar-accent are all
-   ~8% foreground tints) as a background-image overlay — it sits on top of
-   any background-color, transparent ghost row or filled primary button
+   every Tailwind bg-* utility (even bg-transparent). :hover never fires on
+   touch, so :active is the only guaranteed feedback channel on mobile.
+   Instead of fading the control, paint the same kind of wash the desktop
+   hovers use (hover:bg-accent / hover:bg-muted / hover:bg-sidebar-accent are
+   all ~8% foreground tints) as a background-image overlay — it sits on top
+   of any background-color, transparent ghost row or filled primary button
    alike, without competing with the bg utilities, and it derives from
    --foreground so it is automatically correct in light and dark themes. */
 :where(
@@ -507,7 +506,7 @@
 }
 /* KaTeX wraps its <math> in an inline <span class="katex">. Left inline, the
    surrounding strut adds ~3px to the formula box; as a block the box is the
-   formula's own height, matching the old Temml output. */
+   formula's own height. */
 .md-body .incremark-math-block > .katex {
   display: block;
 }

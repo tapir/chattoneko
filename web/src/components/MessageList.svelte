@@ -227,8 +227,8 @@
         <!-- cqh, not vh: the pane is a size container so this tracks the
              animated shell height (lib/viewport.js) while the soft keyboard
              squeezes it — a vh box resolves against the new viewport at once
-             and the cat snapped up instead of gliding. 80% of the pane is
-             what 60vh used to be once header + composer are subtracted. -->
+             and the cat jumps instead of gliding. 80% of the pane equals 60vh
+             once header + composer are subtracted. -->
         <div class="flex min-h-[80cqh] flex-col items-center justify-center py-16 text-center">
           <img src={neko} alt="neko" class="mb-4 h-24 w-auto" />
           <h1 class="text-xl font-semibold tracking-tight">How can I てつだう?</h1>

@@ -16,7 +16,7 @@ import logoUrl from '$lib/logo.svg';
   // disabled there).
   let { onClose = null } = $props();
 
-  // Search (#4): debounce input -> store.runSearch; clearing restores recents.
+  // Debounced search: input -> app.runSearch; clearing restores recents.
   let searchTimer = null;
   function onSearchInput(e) {
     const q = e.target.value;
@@ -105,7 +105,7 @@ import logoUrl from '$lib/logo.svg';
   // (dynamic import, so the web bundle never pulls it in) and shows ONLY that —
   // falling back to the server's would flash the wrong number for the tick
   // getInfo() takes. Web shows the server binary's version from /api/meta; a
-  // server too old to report one leaves the line out.
+  // server that reports none leaves the line out.
   let apkVersion = $state('');
   onMount(() => {
     if (!app.nativeApp) return;
@@ -135,8 +135,8 @@ import logoUrl from '$lib/logo.svg';
 {/snippet}
 
 <!-- border-r only on lg+ (desktop inline sidebar). In the mobile sheet the
-     sidebar is fullscreen, where a right border rendered as a stray 1px
-     line at the right screen edge. -->
+     sidebar is fullscreen, where a right border would render as a stray 1px
+     line at the screen edge. -->
 <aside class="flex h-full w-full shrink-0 flex-col border-r-0 border-sidebar-border bg-sidebar text-sidebar-foreground lg:border-r">
   <div class="p-2.5 space-y-2">
     <!-- Header row: app title + new-chat / refresh-from-database actions -->
@@ -181,7 +181,6 @@ import logoUrl from '$lib/logo.svg';
       </div>
     </div>
 
-    <!-- Search conversations by title (#4) -->
     <div class="relative">
       <Search class="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} aria-hidden="true" />
       <Input

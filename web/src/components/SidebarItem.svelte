@@ -9,10 +9,10 @@
   // delete icon; revealing another row hides the previous one.
   let { chat, active, revealed = false, onreveal = null } = $props();
 
-  // Breathing title (#3): pulse the title while this chat has an active
-  // generation. The active chat reflects app.generating; other chats reflect
-  // app.chatGeneratingIds, reconciled against server-side live generation
-  // state (background chats have no stream to learn about completion from).
+  // Pulse the title while this chat has an active generation. The active chat
+  // reflects app.generating; other chats reflect app.chatGeneratingIds,
+  // reconciled against server-side live generation state (background chats
+  // have no stream to learn about completion from).
   let isGenerating = $derived(
     chat.id === app.activeChatId
       ? app.generating
@@ -95,9 +95,9 @@
 
 <!-- group + relative live on the <li>: the action icons are a SIBLING of the
      link, not a child. A <button> nested in an <a> is invalid HTML and mobile
-     browsers hand the tap to the link instead, so the icons were untappable
-     on a phone. Covering the whole row with oncontextmenu keeps Android's
-     native menu off a long press that lands on an icon. -->
+     browsers hand the tap to the link, so icons inside the link are
+     untappable on a phone. Covering the whole row with oncontextmenu keeps
+     Android's native menu off a long press that lands on an icon. -->
 <li class="group relative" oncontextmenu={onContextMenu}>
   <a
     href="#/c/{chat.id}"

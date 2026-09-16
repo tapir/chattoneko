@@ -46,12 +46,10 @@
 
   let msg = $derived(item.msg);
   let live = $derived(isLive ? app.live : null);
-  // Model that produced this message; messages predating per-message model
-  // tracking fall back to the chat's current model.
+  // Model that produced this message; falls back to the chat's model when absent.
   let msgModel = $derived(msg.model || app.chat?.model || '');
 
-  // Live messages render purely from stream events (B4); terminal messages
-  // render from REST-persisted fields.
+  // Live messages render from stream events; terminal ones from REST-persisted fields.
   let content = $derived(live ? live.display : msg.content);
   // Reasoning is one entry per tool-loop turn (index = turn); `turns` below
   // interleaves them with the tool calls of the same turn.
@@ -98,10 +96,9 @@
   let rendered = ''; // content already rendered in one terminal pass
 
   // The pipeline is a lazily-loaded chunk, so it may not have arrived when this
-  // first renders. Until it does the message shows escaped plain text — the
-  // shape the old streaming tail had, so nothing flashes — and flipping
-  // mdReady re-runs the effect below to upgrade in place. Without the
-  // subscription a TERMINAL message would stay stuck on the fallback forever:
+  // first renders. Until it does the message shows escaped plain text, and
+  // flipping mdReady re-runs the effect below to upgrade in place. Without the
+  // subscription a terminal message would stay on the fallback forever:
   // nothing else about it changes after mount.
   let mdReady = $state(isMarkdownReady());
   $effect(() => onMarkdownReady(() => (mdReady = true)));
@@ -159,11 +156,11 @@
     let touched = false;
     if (!isLive) {
       if (rendered === c) return;
-      // Terminal/historical message — and every finished stream — renders the
-      // whole document in one pass. The complete source is the only place a
-      // `$…$` currency pair can be recognised (see normalizeSource), so a
-      // stream that ends comes through here too rather than just freezing the
-      // tail it was fed.
+      // Terminal message — and every finished stream — renders the whole
+      // document in one pass. The complete source is the only place a `$…$`
+      // currency pair can be recognised (see normalizeSource), so a stream
+      // that ends comes through here too rather than freezing the tail it was
+      // fed.
       renderer.setMarkdown(normalizeSource(c));
       seen = c;
       carry = '';
@@ -303,7 +300,6 @@
   let generationError = $derived(status === 'failed' || status === 'stopped');
 </script>
 
-<!-- The turn timeline, rendered bare or inside the "Processing…" fold below. -->
 {#snippet pdfCard(att, width)}
   <!-- The page IS the thumbnail — the same cursor + long-press sheet as a
        picture, and no filename under it (the page shows what it is). -->
@@ -453,9 +449,9 @@
     {/if}
 
     {#if imageFiles.length}
-      <!-- Pictures the model gathered (fetch) as a gallery: tapping any
-           cell opens the same lightbox as a single image, now with prev/next
-           over the whole set. -->
+      <!-- Pictures the model gathered (fetch) as a gallery: tapping any cell
+           opens the same lightbox as a single image, with prev/next over the
+           whole set. -->
       <ImageGallery items={imageFiles} class="mt-2" />
     {/if}
 

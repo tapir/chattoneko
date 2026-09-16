@@ -77,12 +77,11 @@ func (s *Server) startClaimedGeneration(w http.ResponseWriter, r *http.Request, 
 	return am, true
 }
 
-// Truncating history no longer needs a dangling-attachment reap:
-// message_attachments.message_id carries ON DELETE CASCADE, so deleting the
-// messages unlinks their files by itself.
-// ponytail: the unlinked blobs wait for DeleteOrphanAttachments, which only
-// runs at startup — move it to a ticker if a long-lived server's disk
-// notices.
+// message_attachments.message_id carries ON DELETE CASCADE, so deleting
+// messages unlinks their files; the blobs themselves wait for
+// DeleteOrphanAttachments.
+// ponytail: that sweep only runs at startup — move it to a ticker if a
+// long-lived server's disk notices.
 
 // attachmentByID fetches an attachment, answering 404 when it does not
 // exist and 500 on store errors. On failure the response is already
@@ -106,9 +105,9 @@ func (s *Server) handleMeta(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auth_enabled":   s.auth.Enabled(),
 		"setup_complete": s.cfg.Complete(),
-		// Immutable for the process lifetime and public anyway (it is the
-		// image tag / release name), so it rides along on the boot probe the
-		// SPA already makes — the sidebar's version line needs no extra call.
+		// Immutable for the process lifetime and public (the image tag /
+		// release name), so it rides along on the boot probe the SPA already
+		// makes — the sidebar's version line needs no extra call.
 		"version": s.version,
 	})
 }
@@ -376,9 +375,8 @@ func (s *Server) handleSetupModels(w http.ResponseWriter, r *http.Request) {
 // card's current (possibly unsaved) name/url/headers and gets the tool list
 // back, so a brand-new server's tools can be toggled before the first save.
 // The dial is a throwaway session — the hub's live connections and the tool
-// catalog are untouched, and nothing is persisted. Dialing a posted URL is no
-// new capability: saving the same card makes the hub dial it anyway, and the
-// endpoint sits behind auth.
+// catalog are untouched, and nothing is persisted. The endpoint sits behind
+// auth, and saving the same card makes the hub dial the posted URL anyway.
 func (s *Server) handleSetupMCPTools(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name    string            `json:"name"`
@@ -395,7 +393,7 @@ func (s *Server) handleSetupMCPTools(w http.ResponseWriter, r *http.Request) {
 		URL:       strings.TrimSpace(body.URL),
 		Headers:   body.Headers,
 		// What a save stores for every server, so a fetched tool without an
-		// explicit override reads as enabled — same as after the save.
+		// explicit override reads as enabled.
 		DefaultEnabled: true,
 	}
 	if sc.URL == "" {
@@ -467,8 +465,8 @@ func (s *Server) handleListChats(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("before"); v != "" {
 		before, _ = strconv.ParseInt(v, 10, 64)
 	}
-	// Title + content search (#4): when q is present, return matching chats
-	// instead of the recent-conversations page.
+	// Title + content search: when q is present, return matching chats instead
+	// of the recent-conversations page.
 	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
 		found, err := s.store.SearchChats(r.Context(), q, 50)
 		if err != nil {
@@ -928,11 +926,8 @@ func (s *Server) handleStopGeneration(w http.ResponseWriter, r *http.Request) {
 // ---- SSE ----
 
 // handleStream is the app's ONE SSE endpoint. Browsers cap an origin at 6
-// concurrent HTTP/1.1 connections; the SPA used to hold three sockets per
-// tab (per-chat deltas, all-chats lifecycle, titles), so two open tabs
-// saturated the pool and every fetch from the second tab — the send that
-// starts a generation — queued inside the browser until the first tab
-// happened to free a socket. One multiplexed connection per tab instead:
+// concurrent HTTP/1.1 connections, so a tab multiplexes both halves over a
+// single connection instead of one socket per event kind:
 //
 //	GET /api/stream                      lifecycle + title events, all chats
 //	GET /api/stream?chat=<id>&after=<n>  ... plus chat <id>'s replayable half
@@ -1140,7 +1135,7 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	if att.Kind != attach.KindImage {
 		if cd := mime.FormatMediaType("attachment", map[string]string{"filename": att.Filename}); cd != "" {
 			// FormatMediaType emits an RFC 5987 filename* for non-ASCII names and
-			// returns "" for invalid ones (possible in legacy rows), which we omit.
+			// returns "" for names it cannot encode, which we omit.
 			w.Header().Set("Content-Disposition", cd)
 		}
 	}

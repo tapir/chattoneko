@@ -477,7 +477,7 @@ func TestSetupExposesModelMetasAndHidesListen(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET status = %d: %s", rec.Code, rec.Body)
 	}
-	// listen moved to the -listen CLI flag; it must not leak into setup.
+	// listen is the -listen CLI flag; it must not leak into setup.
 	if strings.Contains(rec.Body.String(), `"listen"`) {
 		t.Fatalf("setup response still exposes listen: %s", rec.Body)
 	}

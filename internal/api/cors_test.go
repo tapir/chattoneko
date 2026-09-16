@@ -28,9 +28,9 @@ func TestCORSPreflightAllowedOrigin(t *testing.T) {
 	}
 }
 
-// Regression: the preflight must advertise every method the app uses —
-// notably PUT (settings save). A missing method makes the browser block the
-// actual request, so mobile settings saves fail while everything else works.
+// The preflight must advertise every method the app uses, notably PUT
+// (settings save): a missing method makes the browser block the actual
+// request, so mobile settings saves fail.
 func TestCORSPreflightAllowsPut(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("preflight must not reach the inner handler")
@@ -69,11 +69,10 @@ func TestCORSAllowedOriginOnRequest(t *testing.T) {
 	}
 }
 
-// Regression: an origin-less request (an <img> or <a> load, which the WebView
-// caches) must still declare Vary: Origin. Without it the cached ACAO-less
-// response can be replayed to a later cross-origin fetch() of the same URL —
-// the mobile share button failed with "Failed to fetch" on already-displayed
-// images, whose bytes were sitting in the HTTP cache from the <img> load.
+// An origin-less request (an <img> or <a> load, which the WebView caches)
+// must still declare Vary: Origin. Without it the cached ACAO-less response
+// can be replayed to a later cross-origin fetch() of the same URL, which then
+// fails CORS.
 func TestCORSVaryOriginWithoutOriginHeader(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

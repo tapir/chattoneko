@@ -136,9 +136,9 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
-// Unwrap exposes the wrapped writer so http.ResponseController (and any
-// future wrapper-aware code) sees the real ResponseWriter's optional
-// interfaces (Flusher, Hijacker, ...) instead of stopping at this recorder.
+// Unwrap exposes the wrapped writer so http.ResponseController sees the real
+// ResponseWriter's optional interfaces (Flusher, Hijacker, ...) instead of
+// stopping at this recorder.
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func logRequests(next http.Handler) http.Handler {
@@ -169,10 +169,9 @@ func isSSEPath(path string) bool {
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	// Every JSON API response reflects state that can change at any time
-	// (config is live-editable through the setup API). Without an explicit
-	// opt-out, browser/proxy HTTP caching can serve a stale whitelist long
-	// after the config changed.
+	// Config is live-editable through the setup API, so every JSON response
+	// must opt out of caching: a browser/proxy cache can serve a stale
+	// whitelist.
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)

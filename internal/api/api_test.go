@@ -198,7 +198,7 @@ func waitForMsg(t *testing.T, st *store.Store, msgID, status string) {
 func TestCreateChatValidation(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 
-	// Malformed JSON → 400 (regression: was silently creating a default chat).
+	// Malformed JSON → 400.
 	req, _ := http.NewRequest("POST", ts.server.URL+"/api/chats", strings.NewReader("{nope"))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := ts.server.Client().Do(req)
@@ -437,7 +437,7 @@ func TestEditMessageClassification(t *testing.T) {
 	if err != nil || m.Content != "edited" {
 		t.Fatalf("edited content = %q %v", m.Content, err)
 	}
-	// Old assistant message must be gone.
+	// The pre-edit assistant message must be gone.
 	if _, err := ts.store.GetMessage(context.Background(), sendOut.AssistantMessageID); err == nil {
 		t.Fatal("old assistant message survived edit-and-resend")
 	}
@@ -899,8 +899,8 @@ func TestUploadValidation(t *testing.T) {
 	if kind != "file" || mime != "audio/webm" {
 		t.Fatalf("webm stored as kind=%q mime=%q, want file/audio/webm", kind, mime)
 	}
-	// A format the app no longer takes (an MP3 the client did not convert) →
-	// 415, by content: the extension says nothing any more.
+	// An unsupported format (an MP3 the client did not convert) → 415, decided
+	// by content: the extension says nothing.
 	rec = upload(map[string][]byte{"song.mp3": []byte("ID3\x04\x00\x00\x00\x00\x00\x00")})
 	if rec.Code != 415 {
 		t.Fatalf("mp3 upload: %d %s", rec.Code, rec.Body)

@@ -21,11 +21,10 @@ var appOrigins = map[string]bool{
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		// EVERY response varies by Origin, allowed or not. An <img>/<a> load
-		// carries no Origin and is cached without Access-Control-Allow-Origin;
-		// a cache entry that doesn't declare the dependency can then be served
-		// to a later cross-origin fetch() of the same URL, which fails CORS
-		// ("Failed to fetch") even though this middleware allows the origin.
+		// EVERY response varies by Origin, allowed or not: an <img>/<a> load
+		// carries no Origin and is cached without Access-Control-Allow-Origin, and
+		// a cache entry that doesn't declare the dependency can be served to a
+		// later cross-origin fetch() of the same URL, which then fails CORS.
 		h.Add("Vary", "Origin")
 		origin := r.Header.Get("Origin")
 		if !appOrigins[origin] {
@@ -34,9 +33,9 @@ func corsMiddleware(next http.Handler) http.Handler {
 		}
 		h.Set("Access-Control-Allow-Origin", origin)
 		if r.Method == http.MethodOptions {
-			// PUT must stay in this list: settings are saved via PUT
-			// /api/setup, the app's only PUT route — dropping it makes the
-			// preflight fail and mobile settings saves silently no-op.
+			// PUT must stay in this list: settings are saved via PUT /api/setup,
+			// the app's only PUT route — dropping it makes the preflight fail and
+			// mobile settings saves silently no-op.
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			if reqHeaders := r.Header.Get("Access-Control-Request-Headers"); reqHeaders != "" {
 				h.Set("Access-Control-Allow-Headers", reqHeaders)

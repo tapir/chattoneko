@@ -1,25 +1,26 @@
-// Package webfetch fetches arbitrary web URLs (images, JSON, HTML, any
-// other body) while looking like a real browser: for https it uses a uTLS
-// ClientHello whose JA3/JA4 fingerprint matches current Chrome (impersonate-http, whose profiles track
-// utls's *_Auto templates) plus Chrome's own header values; for plain http
-// there is no handshake to fingerprint, so a stock net/http client carries
-// the same headers. Bot protection (Cloudflare, DataDome, hotlink guards,
-// ...) blocks the stdlib's Go TLS fingerprint on sight. Everything stays in
-// memory — fetched bytes never touch the disk.
+// Package webfetch fetches arbitrary web URLs (images, JSON, HTML, any other
+// body) while looking like a real browser: for https it uses a uTLS
+// ClientHello whose JA3/JA4 fingerprint matches current Chrome
+// (impersonate-http, whose profiles track utls's *_Auto templates) plus
+// Chrome's own header values; for plain http there is no handshake to
+// fingerprint, so a stock net/http client carries the same headers. Bot
+// protection (Cloudflare, DataDome, hotlink guards, ...) blocks the stdlib's
+// Go TLS fingerprint on sight. Everything stays in memory — fetched bytes
+// never touch the disk.
 //
-// SSRF defense: the URLs come from the model (ultimately from chat input),
-// so every connection is vetted against a private/reserved-address blocklist
-// in two layers — once before the request (clean errors) and again in the
-// dial function (the address actually connected to, covering redirect hops
-// and shrinking the DNS-rebinding window). Redirects are validated hop by
-// hop through the client's CheckRedirect.
+// SSRF defense: the URLs come from the model (ultimately from chat input), so
+// every connection is vetted against a private/reserved-address blocklist in
+// two layers — once before the request (clean errors) and again in the dial
+// function (the address actually connected to, covering redirect hops and
+// shrinking the DNS-rebinding window). Redirects are validated hop by hop
+// through the client's CheckRedirect.
 //
 // ponytail: the impersonating (https) client cannot be unit-tested —
 // impersonate-http exposes no InsecureSkipVerify, so httptest's self-signed
 // server is refused, and its transport always handshakes, so it cannot serve
 // plain-http fakes either. The scheme-independent logic (SSRF vetting,
 // headers, redirect hops, size cap, gzip, thumbnail fallback) is covered by
-// the http:// tests; the fingerprint itself is verified in production.
+// the http:// tests.
 package webfetch
 
 import (
@@ -95,13 +96,11 @@ func clientFor(u *url.URL) *http.Client {
 	return plain
 }
 
-// testAllowLoopback relaxes the blocklist for loopback addresses so tests
-// can reach their httptest servers on 127.0.0.1. Production never sets it.
+// testAllowLoopback relaxes the blocklist for loopback addresses.
 var testAllowLoopback bool
 
-// AllowLoopbackForTesting relaxes the SSRF blocklist for loopback addresses.
-// TEST SUPPORT ONLY — fake servers in other packages' tests live on
-// 127.0.0.1; production code must never call this.
+// AllowLoopbackForTesting lets tests reach their httptest servers on
+// 127.0.0.1. TEST SUPPORT ONLY — production code must never call this.
 func AllowLoopbackForTesting(on bool) { testAllowLoopback = on }
 
 // reservedCIDRs are the ranges beyond net.IP's own predicates that browsers
@@ -207,9 +206,9 @@ func ssrfCheckRedirect(req *http.Request, via []*http.Request) error {
 // browser sends when a URL is opened in a tab), which is what every kind of
 // body — HTML, JSON, an image — is served to. The base is the library's
 // Chrome profile, so the User-Agent, the sec-ch-ua version strings and the
-// Sec-Fetch-* headers stay in sync with the fingerprinted ClientHello on
-// library upgrades — no hardcoded version numbers here. Only Accept and the
-// encoding are overridden.
+// Sec-Fetch-* headers stay in sync with the fingerprinted ClientHello;
+// nothing here hardcodes a version. Only Accept and the encoding are
+// overridden.
 //
 // The Accept list deliberately omits image/avif and image/svg+xml even though
 // real Chrome advertises them: content-negotiating CDNs (imgix / Unsplash's

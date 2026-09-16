@@ -108,9 +108,9 @@ func TestFetchURLValidation(t *testing.T) {
 	}
 }
 
-// SSRF regression: private/reserved addresses must be refused up front, in
-// every dotted-spelling the resolver might accept, and again on any redirect
-// hop (open redirector → internal address).
+// Private/reserved addresses must be refused up front, in every
+// dotted-spelling the resolver might accept, and again on any redirect hop
+// (open redirector → internal address).
 func TestFetchBlocksPrivateAddresses(t *testing.T) {
 	// No allowLoopback: this test runs with the production blocklist.
 	for _, bad := range []string{
@@ -222,7 +222,6 @@ func TestFetchThumbnailFallback(t *testing.T) {
 	}
 	// Non-thumbnail 400s must NOT retry and must surface the status.
 	if _, _, _, err := Fetch(context.Background(), ts.URL+"/wikipedia/commons/1/18/Missing.jpg", 1024); err == nil {
-		// server returns 200 for non-thumb paths; use a dedicated 404-ish host instead
 		t.Log("non-thumb path served 200 in this fake; covered by TestFetchStatus")
 	}
 }

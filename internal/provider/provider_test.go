@@ -188,10 +188,10 @@ data: [DONE]
 	if !strings.Contains(string(msgs), "data:image/png;base64,") {
 		t.Fatalf("no png data url in messages: %s", msgs)
 	}
-	// The text part must come AFTER the image parts: vision routes exist
-	// (OpenRouter deepseek/deepseek-v4-flash-vision-exp) that silently drop a
-	// text part preceding the image, so the model answers as if the user's
-	// question was never asked.
+	// The text part must come after the image parts: some vision routes
+	// (OpenRouter deepseek/deepseek-v4-flash-vision-exp) silently drop a text
+	// part preceding the image, so the model answers as if no question was
+	// asked.
 	var user struct {
 		Content []struct {
 			Type string `json:"type"`
@@ -245,7 +245,7 @@ data: [DONE]
 	if len(started) != 1 || started[0].Name != "get_weather" {
 		t.Fatalf("started events: %+v", started)
 	}
-	// Argument fragments stream as deltas AFTER the start event and
+	// Argument fragments stream as deltas after the start event and
 	// concatenate exactly to the done arguments.
 	var streamed string
 	for _, d := range deltas {
@@ -306,9 +306,9 @@ data: [DONE]
 	if len(done) != 1 || done[0].CallID != "call_late" || done[0].Args != `{"early":1}` {
 		t.Fatalf("done = %+v", done)
 	}
-	// Only the fragment seen AFTER the start (id known) may be a delta; the
-	// earlier {"early": fragment was silently accumulated and is re-delivered
-	// by the done event.
+	// Only the fragment seen after the start (id known) may be a delta; the
+	// earlier {"early": fragment is accumulated and re-delivered by the done
+	// event.
 	var deltas []StreamEvent
 	for _, ev := range events {
 		if ev.Kind == EventToolCallDelta {
@@ -321,9 +321,9 @@ data: [DONE]
 }
 
 func TestChatCompletionsToolCallWithoutIDDropped(t *testing.T) {
-	// A malformed stream that never delivers a call id must NOT produce a
-	// done event: an empty id would be persisted into history and poison
-	// every later request replaying that history.
+	// A malformed stream that never delivers a call id must not produce a done
+	// event: an empty id would be persisted into history and poison every
+	// request replaying that history.
 	body := `data: {"id":"1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"ghost","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
@@ -386,9 +386,9 @@ func TestChatCompletionsRequestValidation(t *testing.T) {
 	}
 }
 
-// TestChatCompletionsIdleTimeout locks in the silent-provider watchdog: a
-// server that sends one chunk and then never closes the stream must abort
-// the generation with a clear error instead of holding it open forever.
+// TestChatCompletionsIdleTimeout covers the silent-provider watchdog: a
+// server that sends one chunk and then never closes the stream must abort the
+// generation with a clear error instead of holding it open.
 func TestChatCompletionsIdleTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -432,9 +432,9 @@ func TestChatCompletionsIdleTimeout(t *testing.T) {
 // EventStream contract tests.
 
 func TestEventStreamCloseUnblocksProducer(t *testing.T) {
-	// A producer blocked on a full buffer must be unblocked by the
-	// consumer's Close (otherwise a stopped generation leaks the producer
-	// goroutine and its HTTP connection).
+	// A producer blocked on a full buffer must be unblocked by the consumer's
+	// Close, or a stopped generation leaks the producer goroutine and its HTTP
+	// connection.
 	es := NewEventStream(1, nil)
 	prodDone := make(chan struct{})
 	go func() {

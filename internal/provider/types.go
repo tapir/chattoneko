@@ -117,11 +117,10 @@ func NewEventStream(buffer int, cancel func()) *EventStream {
 	}
 }
 
-// Publish sends an event to the consumer. It returns false when the
-// consumer went away (Close) — the producer should stop. The send blocks on
-// a full buffer until the consumer reads or closes; a consumer that called
-// Close always unblocks a pending publish (otherwise a stopped generation
-// with a full buffer would leak the producer goroutine).
+// Publish sends an event to the consumer and returns false once the consumer
+// closed, telling the producer to stop. The send blocks on a full buffer
+// until the consumer reads or closes; Close always unblocks a pending publish
+// so a stopped generation cannot leak the producer goroutine.
 func (s *EventStream) Publish(ev StreamEvent) bool {
 	if s.done {
 		return false

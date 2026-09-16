@@ -6,15 +6,15 @@ import (
 	"sync"
 )
 
-// ErrNotConfigured is returned when the provider endpoint/key have not been
-// configured yet (fresh install before setup completes).
+// ErrNotConfigured is returned while the provider endpoint/key are unset
+// (a fresh install before setup completes).
 var ErrNotConfigured = errors.New("provider is not configured yet (set the provider base URL and API key)")
 
 // Live is a Provider whose upstream endpoint can be swapped at runtime: the
-// chat machinery constructs it once at startup and keeps using it while
-// config changes re-dial the underlying client via Reconfigure. When the
-// endpoint is not (yet) configured, StreamChat fails with ErrNotConfigured
-// instead of panicking or dialing an empty URL.
+// chat machinery constructs it once and keeps using it while config changes
+// re-dial the underlying client via Reconfigure. While the endpoint is
+// unconfigured, StreamChat fails with ErrNotConfigured instead of dialing an
+// empty URL.
 type Live struct {
 	mu    sync.RWMutex
 	inner Provider
@@ -25,16 +25,16 @@ type Live struct {
 var _ Provider = (*Live)(nil)
 
 // NewLive builds the live provider wrapper. Empty baseURL/apiKey leave it
-// unconfigured until Reconfigure is called with real values.
+// unconfigured until Reconfigure receives real values.
 func NewLive(baseURL, apiKey string) *Live {
 	l := &Live{}
 	l.Reconfigure(baseURL, apiKey)
 	return l
 }
 
-// Reconfigure swaps the underlying client when the endpoint changed. A
-// no-op when baseURL and apiKey are unchanged. Empty values leave (or reset
-// to) the unconfigured state.
+// Reconfigure swaps the underlying client when baseURL or apiKey differ from
+// the stored ones; equal values are a no-op. Empty values leave (or reset to)
+// the unconfigured state.
 func (l *Live) Reconfigure(baseURL, apiKey string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

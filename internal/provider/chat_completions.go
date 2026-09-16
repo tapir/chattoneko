@@ -17,18 +17,16 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// defaultStreamIdleTimeout bounds how long the stream may stay silent: a
-// provider that accepted the request but sends nothing at all would
-// otherwise keep the generation open forever (nothing else aborts an
-// in-flight stream). Generous: slow first-token providers still emit
-// reasoning/heartbeat data well within it.
+// defaultStreamIdleTimeout bounds how long a stream may stay silent; nothing
+// else aborts an in-flight stream. Generous enough for slow first-token
+// providers.
 const defaultStreamIdleTimeout = 5 * time.Minute
 
 // chatCompletionsProvider implements Provider over POST /chat/completions.
 type chatCompletionsProvider struct {
 	client *openai.Client
-	// idleTimeout aborts a stream that delivers no data at all for this
-	// long; tests shrink it.
+	// idleTimeout aborts a stream that delivers no data for this long; tests
+	// shrink it.
 	idleTimeout time.Duration
 }
 
@@ -39,15 +37,13 @@ func newChatCompletionsProvider(baseURL, apiKey string) *chatCompletionsProvider
 	return &chatCompletionsProvider{client: &client, idleTimeout: defaultStreamIdleTimeout}
 }
 
-// dataURL encodes stored image bytes as a data URL under their own mime
-// (image/png or image/webp; see provider.Image).
 func dataURL(img Image) string {
 	return "data:" + img.Mime + ";base64," + base64.StdEncoding.EncodeToString(img.Data)
 }
 
-// functionTools converts normalized tool definitions to the SDK shape. An
-// invalid JSON schema is a hard error: silently substituting a generic
-// schema would hide misconfigured tools and confuse the model.
+// functionTools converts normalized tool definitions to the SDK shape.
+// An invalid JSON schema is a hard error: substituting a generic schema
+// would hide misconfigured tools.
 func functionTools(tools []Tool) ([]openai.ChatCompletionToolUnionParam, error) {
 	if len(tools) == 0 {
 		return nil, nil
@@ -80,12 +76,10 @@ func buildChatMessages(msgs []Message) ([]openai.ChatCompletionMessageParamUnion
 				out = append(out, openai.UserMessage(m.Content))
 				continue
 			}
-			// Image parts first, the text last. Some OpenAI-compatible vision
-			// routes (OpenRouter deepseek/deepseek-v4-flash-vision-exp, observed
-			// 2026-09) silently drop a text part that PRECEDES the image: the
-			// model then answers as if the question was never asked. Text after
-			// the images keeps both modalities on that route and is accepted
-			// everywhere else.
+			// Image parts first, the text last: some OpenAI-compatible vision
+			// routes (OpenRouter deepseek/deepseek-v4-flash-vision-exp) silently
+			// drop a text part that precedes the image, so the model answers as if
+			// no question was asked. Text after the images is accepted everywhere.
 			parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(m.Images)+1)
 			for _, img := range m.Images {
 				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
@@ -128,8 +122,8 @@ func buildChatMessages(msgs []Message) ([]openai.ChatCompletionMessageParamUnion
 	return out, nil
 }
 
-// buildCompletionParams maps GenParams to the SDK request params (everything
-// except messages/tools, which StreamChat assembles).
+// buildCompletionParams maps GenParams to the SDK request params; StreamChat
+// fills in messages and tools.
 func buildCompletionParams(p GenParams) openai.ChatCompletionNewParams {
 	out := openai.ChatCompletionNewParams{Model: p.Model}
 	if p.ReasoningEffort != "" {
@@ -154,7 +148,7 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 	params.Messages = wire
 	params.Tools = wireTools
 	opts := []option.RequestOption{}
-	// Ask for a terminal usage chunk so we can record per-turn token counts.
+	// include_usage makes the provider end the stream with a usage chunk.
 	opts = append(opts, option.WithJSONSet("stream_options", map[string]any{"include_usage": true}))
 
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -162,9 +156,8 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 
 	go func() {
 		defer cancel()
-		// Idle watchdog: abort when the provider goes completely silent.
-		// Without it a half-open connection keeps the generation open until
-		// someone stops it by hand.
+		// Idle watchdog: without it a half-open connection holds the generation
+		// open until someone stops it by hand.
 		var idleTimedOut atomic.Bool
 		idle := time.AfterFunc(c.idleTimeout, func() {
 			idleTimedOut.Store(true)
@@ -178,7 +171,7 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 		// Tool-call accumulation state, keyed by the wire's tool_calls index.
 		type toolState struct {
 			id, name  string
-			args      strings.Builder // Builder: argument fragments arrive as O(n) appends
+			args      strings.Builder // argument fragments arrive as many small appends
 			startSent bool
 		}
 		toolAcc := map[int64]*toolState{}
@@ -187,7 +180,7 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 		for stream.Next() {
 			chunk := stream.Current()
 			idle.Reset(c.idleTimeout)
-			// The terminal usage chunk (include_usage) arrives with no choices.
+			// The terminal usage chunk arrives with no choices.
 			if u := chunk.Usage; u.PromptTokens > 0 || u.CompletionTokens > 0 {
 				usage = Usage{
 					PromptTokens:     u.PromptTokens,
@@ -204,11 +197,10 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 					return
 				}
 			}
-			// Reasoning arrives as an undocumented field on OpenAI-compatible
-			// providers: OpenRouter uses "reasoning", others (e.g. DeepSeek
-			// direct) use "reasoning_content". The SDK keeps unknown fields in
-			// JSON.ExtraFields stored with valid=false (the SDK cannot type
-			// them), so read Raw() directly rather than Valid().
+			// Reasoning arrives as an undocumented field: OpenRouter uses
+			// "reasoning", others (e.g. DeepSeek direct) use "reasoning_content".
+			// The SDK stores unknown fields in JSON.ExtraFields with valid=false,
+			// so read Raw() rather than Valid().
 			for _, key := range []string{"reasoning", "reasoning_content"} {
 				if f, ok := d.JSON.ExtraFields[key]; ok {
 					raw := f.Raw()
@@ -235,10 +227,9 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 				if tc.Function.Name != "" {
 					acc.name = tc.Function.Name
 				}
-				// Publish the start event as soon as BOTH id and name are known —
-				// some providers stream the id later than the name, and a start
-				// event with an empty call id is useless to the client (the done
-				// event always carries both, so nothing is lost by waiting).
+				// Start fires once both id and name are known: some providers
+				// stream the id after the name, and an empty call id is useless
+				// to the client. The done event carries both anyway.
 				if !acc.startSent && acc.id != "" && acc.name != "" {
 					acc.startSent = true
 					if !es.Publish(StreamEvent{Kind: EventToolCallStart, CallID: acc.id, Name: acc.name}) {
@@ -247,15 +238,12 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 				}
 				if tc.Function.Arguments != "" {
 					acc.args.WriteString(tc.Function.Arguments)
-					// Forward argument fragments as they arrive so the UI can show
-					// the call's arguments streaming. Fragments seen before the
-					// start event (id/name not both known yet) are only
-					// accumulated: the client couldn't attribute them to a call,
-					// and the done event re-delivers the complete arguments.
-					// NOTE: providers like OpenRouter for Kimi/GLM deliver the
-					// whole tool call in one chunk at the end of the stream —
-					// nothing to stream there; deltas only help where the wire
-					// carries them (OpenAI, DeepSeek, Gemini, ...).
+					// Forward argument fragments so the UI can show them streaming.
+					// Fragments seen before the start event are only accumulated:
+					// the client could not attribute them to a call, and the done
+					// event carries the complete arguments. Some providers (e.g.
+					// OpenRouter for Kimi/GLM) send the whole call in one chunk at
+					// the end of the stream, where there is nothing to stream.
 					if acc.startSent {
 						if !es.Publish(StreamEvent{Kind: EventToolCallDelta, CallID: acc.id, Args: tc.Function.Arguments}) {
 							return
@@ -269,9 +257,8 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 		}
 		if err := stream.Err(); err != nil {
 			if idleTimedOut.Load() {
-				// The cancel above came from the watchdog, not a user stop:
-				// report the real cause so the generation fails instead of
-				// being misattributed.
+				// The cancel came from the watchdog, not a user stop: report the
+				// idle cause instead of a bare context error.
 				err = fmt.Errorf("provider stream went %v without any data", c.idleTimeout)
 			}
 			es.Publish(StreamEvent{Kind: EventError, Err: err})
@@ -287,10 +274,8 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 			for _, i := range idxs {
 				acc := toolAcc[i]
 				// A call without an id can never be answered (tool messages
-				// reference calls by tool_call_id): emitting it would persist
-				// an empty id into history, and every later request replaying
-				// that history would be rejected by the provider. Drop it
-				// loudly instead.
+				// reference calls by tool_call_id) and would poison every request
+				// replaying that history, so drop it loudly.
 				if acc.id == "" {
 					slog.Warn("provider: dropping tool call without id", "index", i, "name", acc.name)
 					continue

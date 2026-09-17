@@ -477,6 +477,17 @@ console.log('OK streaming parity');
   console.log('OK media sniffing');
 }
 
+// --- the suffix a converted blob's own type gives its file ---
+{
+  const { extFromMime } = await import('./src/lib/media.js');
+  assert(extFromMime('audio/mpeg') === 'mp3', 'audio/mpeg names its file .mp3, not .mpeg');
+  assert(
+    extFromMime('image/png') === 'png' && extFromMime('audio/webm; codecs=opus') === 'webm',
+    'extFromMime passes a plain subtype through and strips parameters',
+  );
+  console.log('OK media suffixes');
+}
+
 function assert(cond, msg) {
   if (!cond) {
     console.error('FAIL:', msg);

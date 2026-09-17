@@ -6,7 +6,7 @@
 //   image -> PNG, longest side capped at 1280px (but never shrunk by more than
 //            2x — see scaleToFit), and quantized to 256 colours only when the
 //            server's image_quantization setting is on
-//   audio -> WebM/Opus, 24 kHz, mono, 48 kbps
+//   audio -> MP3, 16 kHz, mono, 32 kbps
 //
 // internal/tools/image.go runs that same scheme on the server for a picture
 // create_file is handed, and the same image_quantization setting governs both
@@ -15,12 +15,13 @@
 //
 // Both image encoders are always there — the browser's own toBlob and, when
 // quantization is on, lib/png-enc.js — so the image path needs no fallback.
-// Audio does: it goes through WebCodecs (inside mediabunny, which is pure
-// TypeScript and carries no WASM). AudioEncoder exists in Chrome/Edge 94+,
-// Firefox desktop 130+ and Safari 26+ only, and WebCodecs needs a secure
-// context, so a plain-HTTP LAN origin has none either. There is no WASM-free
-// Opus encoder to fall back on, so those cases get a clear refusal instead of a
-// silently broken file.
+// Audio nearly is: no browser can ENCODE mp3, so @mediabunny/mp3-encoder brings
+// its own (LAME as WASM, running in a worker), and WASM is everywhere. What can
+// still be missing is the DECODE of the source — mediabunny drives WebCodecs'
+// AudioDecoder for a compressed recording, and WebCodecs exists in Chrome/Edge
+// 94+, Firefox 130+ and Safari 16.4+ only, and needs a secure context. So a
+// plain-HTTP LAN origin converts a WAV and refuses an m4a, with a clear error
+// rather than a silently broken file.
 
 // Longest side kept for an image, whatever its orientation.
 const MAX_SIDE = 1280;
@@ -52,8 +53,12 @@ export async function sniffKind(file) {
 }
 
 // extFromMime is the display suffix for a mime, for a file whose name has none.
-export const extFromMime = (mime) =>
-  (mime?.split("/")[1] ?? "").split(";")[0].replace(/^x-/, "");
+// audio/mpeg is the one media mime whose subtype is not its extension.
+const suffixAlias = { mpeg: "mp3" };
+export const extFromMime = (mime) => {
+  const sub = (mime?.split("/")[1] ?? "").split(";")[0].replace(/^x-/, "");
+  return suffixAlias[sub] ?? sub;
+};
 
 // isAudio picks the attachments that want a player; canPlayAudio is the gate on
 // actually showing one — a player for a codec this browser cannot decode is a
@@ -126,31 +131,33 @@ export async function convertImage(file, quantize = false) {
   }
 }
 
-// convertAudio transcodes any supported recording to WebM/Opus, 24 kHz mono at
-// 48 kbps — small enough to resend on every turn, and the one audio container
-// the server accepts. Throws a readable message when the browser has no Opus
-// encoder, which is the common failure (see the note at the top).
+// convertAudio transcodes any supported recording to MP3, 16 kHz mono at
+// 32 kbps — the rate a transcription model resamples to anyway, so no bit is
+// spent on what it would discard — and the one audio container an upload may
+// carry. Throws a readable message when the source cannot be decoded.
 export async function convertAudio(file) {
-  // Imported here, not at the top: ~1 MB of muxers that only an audio
-  // attachment ever needs, kept out of the main bundle.
+  // Imported here, not at the top: ~1 MB of muxers plus a ~310 kB WASM LAME
+  // that only an audio attachment ever needs, kept out of the main bundle.
   const mb = await import("mediabunny");
   const audio = {
-    codec: "opus",
+    codec: "mp3",
     numberOfChannels: 1,
-    sampleRate: 24000,
-    quality: new mb.Quality({ bitrate: 48000 }),
-    // The input may already be Opus in WebM; without this it would be copied
-    // through untouched, keeping its old sample rate and channel count.
+    sampleRate: 16000,
+    quality: new mb.Quality({ bitrate: 32000 }),
+    // The input may already be MP3; without this it would be copied through
+    // untouched, keeping its old sample rate, channel count and bitrate.
     forceTranscode: true,
   };
-  if (!(await mb.canEncodeAudio("opus", audio))) {
-    throw new Error(
-      "this browser can't convert audio (needs Chrome, Firefox on desktop, or Safari 26+, over HTTPS or localhost)",
-    );
+  // The support check is also the register-once guard: after the first call
+  // mediabunny answers true and the WASM is neither fetched nor registered
+  // again.
+  if (!(await mb.canEncodeAudio("mp3", audio))) {
+    const { registerMp3Encoder } = await import("@mediabunny/mp3-encoder");
+    registerMp3Encoder();
   }
   const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS });
   const output = new mb.Output({
-    format: new mb.WebMOutputFormat(),
+    format: new mb.Mp3OutputFormat(),
     target: new mb.BufferTarget(),
   });
   const conversion = await mb.Conversion.init({
@@ -165,5 +172,5 @@ export async function convertAudio(file) {
   await conversion.execute();
   const buffer = output.target.buffer;
   if (!buffer?.byteLength) throw new Error("the conversion produced no audio");
-  return renamed(file, new Blob([buffer], { type: "audio/webm" }), "audio");
+  return renamed(file, new Blob([buffer], { type: "audio/mpeg" }), "audio");
 }

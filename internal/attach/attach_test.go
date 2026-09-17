@@ -59,6 +59,10 @@ var (
 	tiffHeader = []byte{0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00}
 )
 
+// mp3Frame16k is the shape every upload carries: what the browser's LAME emits
+// at 16 kHz — a bare Xing frame, MPEG2 layer III, no ID3 tag.
+var mp3Frame16k = append([]byte{0xff, 0xf2, 0x58, 0xc4}, make([]byte, 60)...)
+
 func sampleWebP(t *testing.T) []byte {
 	t.Helper()
 	payload, err := os.ReadFile("testdata/sample.webp")
@@ -80,7 +84,7 @@ func TestProcessMediaStoredVerbatim(t *testing.T) {
 		wantName string
 	}{
 		{"png", "diagram.png", makePNG(t, 8, 6), KindImage, MimePNG, "diagram.png"},
-		{"audio webm", "memo.webm", webmHeader, KindFile, MimeAudio, "memo.webm"},
+		{"audio mp3", "memo.mp3", mp3Frame16k, KindFile, MimeMP3, "memo.mp3"},
 		{"pdf", "invoice.pdf", []byte("%PDF-1.7 fake"), KindFile, MimePDF, "invoice.pdf"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,7 +117,7 @@ func TestProcessNameFollowsMime(t *testing.T) {
 		{"photo.jpg", png, "photo.png"},
 		{"photo", png, "photo.png"},
 		{"a.b.c.JPEG", png, "a.b.c.png"}, // the bytes win over the name
-		{"memo.mp3", webmHeader, "memo.webm"},
+		{"memo.webm", mp3Frame16k, "memo.mp3"},
 		{"invoice.txt", []byte("%PDF-1.7 fake"), "invoice.pdf"},
 		{"notes.md", []byte("# hi\n"), "notes.md"},
 	} {
@@ -219,7 +223,8 @@ func TestProcessAnyKeepsUnsupportedAsDownload(t *testing.T) {
 
 // An upload only carries what the browser's conversion step produces, so
 // anything else is refused even when a tool may attach it — WebP and JPEG
-// included, because convertImage re-encodes both to PNG.
+// included, because convertImage re-encodes both to PNG, and WebM, Ogg and FLAC
+// because convertAudio re-encodes every recording to MP3.
 func TestProcessUploadStaysStrict(t *testing.T) {
 	if _, err := Process("sticker.webp", sampleWebP(t), 1<<20); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("webp upload accepted: %v", err)
@@ -236,7 +241,7 @@ func TestProcessUploadStaysStrict(t *testing.T) {
 		data     []byte
 	}{
 		{"track.flac", flacHeader},
-		{"song.mp3", id3Header},
+		{"memo.webm", webmHeader},
 		{"anim.gif", gifHeader},
 		{"clip.mp4", mp4Header},
 		{"movie.mkv", mkvHeader},
@@ -359,7 +364,7 @@ func TestProcessSizeMatchesData(t *testing.T) {
 	}{
 		{"pic.png", makePNG(t, 8, 6)},
 		{"notes.md", []byte("# hi\n")},
-		{"memo.webm", webmHeader},
+		{"memo.mp3", mp3Frame16k},
 	} {
 		res, err := Process(tc.filename, tc.data, 1<<20)
 		if err != nil {

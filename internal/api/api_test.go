@@ -882,28 +882,31 @@ func TestUploadValidation(t *testing.T) {
 	if rec.Code != 415 {
 		t.Fatalf("binary upload: %d", rec.Code)
 	}
-	// Supported audio (WebM magic) → 200, stored verbatim as kind=file under
-	// its own mime, which the inline player needs.
-	rec = upload(map[string][]byte{"song.webm": {
-		0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x84, 'w', 'e', 'b', 'm',
+	// Supported audio (a bare MP3 frame, which is what the browser's LAME
+	// emits) → 200, stored verbatim as kind=file under its own mime, which the
+	// inline player needs.
+	rec = upload(map[string][]byte{"song.mp3": {
+		0xff, 0xf2, 0x58, 0xc4, 0x00, 0x00, 0x00, 0x00, 'X', 'i', 'n', 'g',
 	}})
 	if rec.Code != 200 {
-		t.Fatalf("webm upload: %d %s", rec.Code, rec.Body)
+		t.Fatalf("mp3 upload: %d %s", rec.Code, rec.Body)
 	}
 	var kind, mime string
 	if err := ts.db.QueryRow(
-		"SELECT kind, mime FROM attachments WHERE chat_id = ? AND filename = 'song.webm'", chatID,
+		"SELECT kind, mime FROM attachments WHERE chat_id = ? AND filename = 'song.mp3'", chatID,
 	).Scan(&kind, &mime); err != nil {
 		t.Fatal(err)
 	}
-	if kind != "file" || mime != "audio/webm" {
-		t.Fatalf("webm stored as kind=%q mime=%q, want file/audio/webm", kind, mime)
+	if kind != "file" || mime != "audio/mpeg" {
+		t.Fatalf("mp3 stored as kind=%q mime=%q, want file/audio/mpeg", kind, mime)
 	}
-	// An unsupported format (an MP3 the client did not convert) → 415, decided
+	// An unsupported format (a WebM the client did not convert) → 415, decided
 	// by content: the extension says nothing.
-	rec = upload(map[string][]byte{"song.mp3": []byte("ID3\x04\x00\x00\x00\x00\x00\x00")})
+	rec = upload(map[string][]byte{"song.webm": {
+		0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x84, 'w', 'e', 'b', 'm',
+	}})
 	if rec.Code != 415 {
-		t.Fatalf("mp3 upload: %d %s", rec.Code, rec.Body)
+		t.Fatalf("webm upload: %d %s", rec.Code, rec.Body)
 	}
 	// Too many files → 400.
 	files := map[string][]byte{}

@@ -26,6 +26,7 @@
     "@capacitor/status-bar": "^8.0.3",
     "@capawesome/capacitor-file-picker": "^8.1.0",
     "@lucide/svelte": "^1.40.0",
+    "@mediabunny/mp3-encoder": "^1.57.0",
     "@upng/upng-js": "^2.2.2",
     "bits-ui": "^2.19.0",
     "clsx": "^2.1.1",

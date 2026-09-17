@@ -4,7 +4,7 @@
 // picture is re-encoded to PNG by internal/tools before it reaches ProcessAny.
 //
 // Two policies share one magic-byte check per file. Uploads accept only what the
-// browser produces (PNG, WebM, PDF) plus text; tools also accept any media a
+// browser produces (PNG, MP3, PDF) plus text; tools also accept any media a
 // browser can render unaided, and keep every other binary as a download.
 package attach
 
@@ -41,8 +41,8 @@ const (
 	MimeGIF  = "image/gif"
 	MimeBMP  = "image/bmp"
 
-	MimeAudio = "audio/webm" // the only audio an upload can carry
-	MimeMP3   = "audio/mpeg"
+	MimeMP3   = "audio/mpeg" // the only audio an upload can carry
+	MimeAudio = "audio/webm"
 	MimeWAV   = "audio/wav"
 	MimeOGG   = "audio/ogg"
 	MimeFLAC  = "audio/flac"
@@ -61,8 +61,8 @@ var ErrTooLarge = errors.New("file too large")
 // they carry, because an audio player is the only one the app has.
 var (
 	uploadMedia = map[string]string{
-		MimePNG:   KindImage,
-		MimeAudio: KindFile, MimePDF: KindFile,
+		MimePNG: KindImage,
+		MimeMP3: KindFile, MimePDF: KindFile,
 	}
 	toolMedia = map[string]string{
 		MimePNG: KindImage, MimeJPEG: KindImage, MimeWebP: KindImage,
@@ -184,7 +184,7 @@ const MaxRawUploadBytes = 64 * 1024 * 1024 // 64 MiB
 const MaxFilenameBytes = 200
 
 // Process classifies one UPLOADED file: the media the browser produces before
-// it sends (PNG, WebM, PDF) plus text. Anything else is refused — a client that
+// it sends (PNG, MP3, PDF) plus text. Anything else is refused — a client that
 // skipped conversion gets a 415 rather than a file nobody can preview.
 func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 	return process(filename, data, maxBytes, uploadPolicy)

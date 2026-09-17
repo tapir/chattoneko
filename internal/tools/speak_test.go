@@ -91,6 +91,11 @@ func TestSpeakStoresRecording(t *testing.T) {
 	if !strings.Contains(out, f.filename) {
 		t.Errorf("result = %q, want it to name the recording", out)
 	}
+	// The id is the only handle on a file the model attached to its own reply:
+	// without it a follow-up "transcribe that" has nothing to pass.
+	if !strings.Contains(out, `id="`+f.id+`"`) {
+		t.Errorf("result = %q, want it to carry the attachment id %s", out, f.id)
+	}
 }
 
 // An unconfigured speech model is an in-band refusal, so the chat model can

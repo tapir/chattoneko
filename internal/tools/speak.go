@@ -103,6 +103,6 @@ func (s *speakTool) call(ctx context.Context, argsJSON string, meta mcphub.CallM
 	if err := s.files.LinkAttachmentToMessage(ctx, m.ID, meta.MessageID, meta.ChatID); err != nil {
 		return "", fmt.Errorf("the recording was stored but could not be shown: %v", err)
 	}
-	return fmt.Sprintf("Spoken as %q (%s) — it now plays on your reply. Say what it is instead of repeating the words.",
-		m.Filename, humanSize(m.Size)), nil
+	return fmt.Sprintf("%s\nSpoken as %q (%s) — it now plays on your reply. Say what it is instead of repeating the words.\n</file id=%q>",
+		attach.FileTag(m.Filename, m.ID, attach.Type(m.Kind, m.Mime)), m.Filename, humanSize(m.Size), m.ID), nil
 }

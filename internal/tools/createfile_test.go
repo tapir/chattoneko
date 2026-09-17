@@ -111,12 +111,17 @@ func TestCreateFileText(t *testing.T) {
 	if string(c.data) != "# hi\n" {
 		t.Fatalf("wrong data: %q", c.data)
 	}
-	// The result says the file is visible and leaves nothing to call next.
+	// The result says the file is visible and hands over its id in the <file>
+	// shape the specialists ask for, so a later call can pick the same file up.
 	if !strings.Contains(out, "shown on your reply") || !strings.Contains(out, "text preview") {
 		t.Fatalf("result should say the file is on screen: %q", out)
 	}
-	if strings.Contains(out, "attach_file") || strings.Contains(out, c.id) {
-		t.Fatalf("result must not name another tool or hand over an id: %q", out)
+	if !strings.Contains(out, `<file name="notes.md" id="`+c.id+`" type="text">`) ||
+		!strings.HasSuffix(out, `</file id="`+c.id+`">`) {
+		t.Fatalf("result must carry the attachment id in a <file> block: %q", out)
+	}
+	if strings.Contains(out, "attach_file") {
+		t.Fatalf("result must not name another tool: %q", out)
 	}
 	if strings.Contains(out, "# hi") {
 		t.Fatalf("result must not echo the content: %q", out)

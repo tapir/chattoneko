@@ -161,9 +161,11 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 	if err := files.LinkAttachmentToMessage(ctx, m.ID, meta.MessageID, meta.ChatID); err != nil {
 		return "", fmt.Errorf("the file was stored but could not be shown: %v", err)
 	}
-	return fmt.Sprintf("Created %q%s (%s, %s) — it is now shown on your reply, where it %s. "+
-		"Say what it is instead of repeating its content.",
-		m.Filename, from, m.Mime, humanSize(m.Size), kindLabel(m.Kind)), nil
+	// A file the model made never re-enters the prompt, so this block is the only handle on it.
+	return fmt.Sprintf("%s\nCreated %q%s (%s, %s) — it is now shown on your reply, where it %s. "+
+		"Say what it is instead of repeating its content.\n</file id=%q>",
+		attach.FileTag(m.Filename, m.ID, attach.Type(m.Kind, m.Mime)),
+		m.Filename, from, m.Mime, humanSize(m.Size), kindLabel(m.Kind), m.ID), nil
 }
 
 // fileBytes resolves the exactly-one-of content/content_base64 pair. Whitespace

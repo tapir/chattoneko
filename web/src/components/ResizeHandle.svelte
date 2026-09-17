@@ -1,6 +1,8 @@
 <script>
   // Edge drag handle for user-resizable panels. `invert` for handles on the
   // LEFT edge of a right-anchored panel (dragging left grows the panel).
+  // The right-edge variant sits fully OUTSIDE its parent: inside, it covers
+  // the panel's own scrollbar and every thumb drag turns into a resize.
   import { loadPanelWidth, savePanelWidth, startPanelResize } from '../lib/resize.js';
 
   let {
@@ -34,7 +36,7 @@
 <div
   class={[
     'absolute top-0 z-10 h-full w-1.5 hover:bg-accent/50',
-    invert ? 'left-0 cursor-ew-resize' : 'right-0 cursor-col-resize'
+    invert ? 'left-0 cursor-ew-resize' : 'right-0 translate-x-full cursor-col-resize'
   ]}
   role="separator"
   aria-orientation="vertical"

@@ -71,7 +71,7 @@ type specialist struct {
 var specialists = []specialist{
 	{
 		name: "vision", title: "Asking a vision model…",
-		kind: "image", modality: "image", what: "images (PNG or WebP only)",
+		kind: "image", modality: "image", what: "images (PNG only)",
 		model:  func(m config.ModelsConfig) string { return m.DefaultVisionModel },
 		prompt: promptVision,
 	},
@@ -83,7 +83,7 @@ var specialists = []specialist{
 	},
 	{
 		name: "transcription", title: "Transcribing audio…",
-		kind: "audio", modality: "audio", what: "audio recordings",
+		kind: "audio", modality: "audio", what: "audio recordings (MP3 only)",
 		model: func(m config.ModelsConfig) string { return m.DefaultTranscriptionModel },
 	},
 }
@@ -304,23 +304,28 @@ func specialistFor(kind string) *specialist {
 	return nil
 }
 
-// wireSupported refuses, in-band, a file whose stored mime has no wire
-// representation: an image outside the png/webp a vision input takes. The
-// stored mime is the sniffed one and nothing re-encodes a file on its way out,
-// so what is stored is what would be sent. Audio is not checked: the
-// transcriptions endpoint takes every container the app can store (webm, mp3,
-// wav, ogg, flac).
+// wireSupported refuses, in-band, a file whose stored mime cannot go to its
+// specialist: an image that is not PNG, a recording that is not MP3. The stored
+// mime is the sniffed one and nothing re-encodes a file on its way out, so what
+// is stored is what would be sent. Both are the mimes the app's own conversion
+// paths produce; a picture or recording a tool fetched in some other format
+// previews for the user and is refused here, since history is rebuilt every turn
+// and a provider rejection would break that chat for good.
 func wireSupported(kind string, att *store.Attachment) error {
-	if kind == "image" && !attach.SendsAsImage(att.Mime) {
-		return fmt.Errorf("%q is stored as %s, which no image input takes (PNG and WebP only)",
+	switch {
+	case kind == "image" && !attach.SendsAsImage(att.Mime):
+		return fmt.Errorf("%q is stored as %s, and only a PNG reaches an image input",
+			att.Filename, att.Mime)
+	case kind == "audio" && att.Mime != attach.MimeMP3:
+		return fmt.Errorf("%q is stored as %s, and only an MP3 reaches a transcription model",
 			att.Filename, att.Mime)
 	}
 	return nil
 }
 
 // contentPart builds the wire part carrying a non-audio file to its
-// specialist. wireSupported has already run, so both kinds have a
-// representation.
+// specialist. wireSupported has already run, so this only ever sees a PNG or a
+// PDF.
 func contentPart(att *store.Attachment, kind string) openai.ChatCompletionContentPartUnionParam {
 	dataURL := "data:" + att.Mime + ";base64," + base64.StdEncoding.EncodeToString(att.Data)
 	if kind == "image" {

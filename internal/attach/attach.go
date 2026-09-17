@@ -390,12 +390,13 @@ func IsText(data []byte) bool {
 }
 
 // SendsAsImage reports whether a stored image mime may go to a model as an
-// image part: PNG and WebP only. Any other image previews in the browser but
-// goes out through the <file> reference path, and the vision tool refuses it
-// in-band. History is rebuilt every turn, so a mime the provider rejects would
-// break that chat permanently.
+// image part: PNG only, the one image mime both conversion paths produce — the
+// browser's for an upload, toPNG's for a picture create_file is handed. Any
+// other image previews in the browser but goes out through the <file> reference
+// path, and the vision tool refuses it in-band. History is rebuilt every turn,
+// so a mime the provider rejects would break that chat permanently.
 func SendsAsImage(mime string) bool {
-	return mime == MimePNG || mime == MimeWebP
+	return mime == MimePNG
 }
 
 // Type names an attachment for the <file> block the model reads. The kind is

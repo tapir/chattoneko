@@ -278,13 +278,13 @@ func TestIsRasterImage(t *testing.T) {
 	}
 }
 
-// Only PNG and WebP may go to a model as an image. Everything else previews in
-// the browser but takes the <file> reference path. History is rebuilt every
+// Only PNG may go to a model as an image. Everything else previews in the
+// browser but takes the <file> reference path. History is rebuilt every
 // turn, so a mime the provider rejects would break that chat permanently.
 func TestSendsAsImage(t *testing.T) {
 	for mime, want := range map[string]bool{
-		MimePNG: true, MimeWebP: true,
-		MimeJPEG: false, MimeGIF: false, MimeBMP: false, "image/x-icon": false,
+		MimePNG:  true,
+		MimeWebP: false, MimeJPEG: false, MimeGIF: false, MimeBMP: false, "image/x-icon": false,
 		MimePDF: false, MimeAudio: false, "": false,
 	} {
 		if got := SendsAsImage(mime); got != want {

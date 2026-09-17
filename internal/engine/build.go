@@ -74,7 +74,7 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 				if att.Kind == attach.KindText {
 					content += "\n\n" + attach.SerializeText(att.Filename, att.ID, string(att.Data))
 				} else if att.Kind == attach.KindImage && vision && attach.SendsAsImage(att.Mime) {
-					// Only PNG and WebP go out as images: a JPEG, GIF or BMP
+					// Only PNG goes out as an image: a JPEG, WebP, GIF or BMP
 					// attachment previews in the browser but takes the reference
 					// path, since a provider 400 here would repeat on every turn of
 					// the chat.

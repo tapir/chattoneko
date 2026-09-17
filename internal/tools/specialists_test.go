@@ -210,11 +210,11 @@ func TestSpecialistTools(t *testing.T) {
 		mentions []string
 		required string
 	}{
-		{"vision", "image", []string{"images (PNG or WebP only)"}, `"id", "question"`},
+		{"vision", "image", []string{"images (PNG only)"}, `"id", "question"`},
 		{"document", "file", []string{"PDF documents"}, `"id", "question"`},
 		// A transcription model takes no prompt, so the question is optional and
 		// the description says it goes nowhere.
-		{"transcription", "audio", []string{"audio recordings", "ignored"}, `"id"`},
+		{"transcription", "audio", []string{"audio recordings (MP3 only)", "ignored"}, `"id"`},
 	} {
 		tl, ok := byName[tc.name]
 		if !ok {
@@ -343,7 +343,7 @@ func TestTranscriptionSendsRecording(t *testing.T) {
 	const transcript = "Two eggs and a coffee."
 	srv, recorded := transcriptionServer(t, transcript)
 	fs := &fakeFileStore{}
-	seedAttachment(fs, "att-1", agentChat, "memo.ogg", "file", "audio/ogg", []byte("ogg-bytes"))
+	seedAttachment(fs, "att-1", agentChat, "memo.mp3", "file", "audio/mpeg", []byte("mp3-bytes"))
 
 	// No question at all: the endpoint takes no prompt, so the schema does not
 	// require one.
@@ -364,10 +364,10 @@ func TestTranscriptionSendsRecording(t *testing.T) {
 	if got.model != "whisper" {
 		t.Fatalf("model = %q, want the designated one", got.model)
 	}
-	if got.filename != "memo.ogg" || got.mime != "audio/ogg" {
+	if got.filename != "memo.mp3" || got.mime != "audio/mpeg" {
 		t.Fatalf("file part = %q (%q), want the stored name and mime", got.filename, got.mime)
 	}
-	if string(got.data) != "ogg-bytes" {
+	if string(got.data) != "mp3-bytes" {
 		t.Fatalf("file part bytes = %q", got.data)
 	}
 }
@@ -377,7 +377,7 @@ func TestTranscriptionSendsRecording(t *testing.T) {
 func TestTranscriptionReportsSilence(t *testing.T) {
 	srv, _ := transcriptionServer(t, "  ")
 	fs := &fakeFileStore{}
-	seedAttachment(fs, "att-1", agentChat, "memo.webm", "file", "audio/webm", []byte("webm"))
+	seedAttachment(fs, "att-1", agentChat, "memo.mp3", "file", "audio/mpeg", []byte("mp3"))
 
 	out, isErr := callSpecialist(t, fs,
 		agentConfig(t, srv.URL, config.ModelsConfig{DefaultTranscriptionModel: "whisper"}),
@@ -406,6 +406,7 @@ func TestSpecialistRefusals(t *testing.T) {
 	seedAttachment(fs, "zip", agentChat, "box.zip", "file", "application/zip", []byte("zip"))
 	seedAttachment(fs, "notes", agentChat, "notes.md", "text", "text/markdown", []byte("hello"))
 	seedAttachment(fs, "jpg", agentChat, "photo.jpg", "image", "image/jpeg", []byte("jpg")) // previews, but outside the wire contract
+	seedAttachment(fs, "wav", agentChat, "memo.wav", "file", "audio/wav", []byte("wav"))    // a tool's fetch: previews, but no transcription model reads it
 	seedAttachment(fs, "foreign", "other-chat", "photo.png", "image", "image/png", []byte("png"))
 
 	for _, tc := range []struct {
@@ -424,10 +425,11 @@ func TestSpecialistRefusals(t *testing.T) {
 		// tool instead of failing mute.
 		{"another specialist's file", "vision", `{"id":"pdf","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "the document tool can"},
 		{"nobody's file", "document", `{"id":"zip","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no specialist can read"},
-		{"unroutable image", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "PNG and WebP only"},
+		{"unroutable image", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "only a PNG"},
+		{"untranscribable audio", "transcription", `{"id":"wav"}`, mcphub.CallMeta{ChatID: agentChat}, all, "only an MP3"},
 		// The format is checked first: an unsupported file must not be reported
 		// as a missing server setting.
-		{"format beats missing model", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "PNG and WebP only"},
+		{"format beats missing model", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "only a PNG"},
 		{"no model designated", "vision", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "no model is designated for images"},
 		{"only some designated", "vision", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, visionOnly, ""},
 	} {

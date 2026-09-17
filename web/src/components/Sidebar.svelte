@@ -3,7 +3,7 @@
   import { app } from '../lib/state.svelte.js';
 import logoUrl from '$lib/logo.svg';
   import { api } from '../lib/api.js';
-  import { Plus, RotateCcw, Search, X } from '@lucide/svelte';
+  import { MessageSquare, Pin, Plus, RotateCcw, Search, X } from '@lucide/svelte';
   import SidebarItem from './SidebarItem.svelte';
   import Spinner from './Spinner.svelte';
   import { Button } from '$lib/components/ui/button';
@@ -117,8 +117,11 @@ import logoUrl from '$lib/logo.svg';
   let version = $derived(app.nativeApp ? apkVersion : app.serverVersion);
 </script>
 
-{#snippet sectionHeading(text)}
-  <div class="px-2.5 py-2.5 text-sm font-semibold tracking-wider text-sidebar-foreground">{text}</div>
+{#snippet sectionHeading(text, Icon)}
+  <div class="flex items-center gap-2 px-2.5 py-2.5 text-sm font-semibold uppercase tracking-wider text-sidebar-foreground">
+    <Icon class="size-3.5 shrink-0" strokeWidth={2.25} aria-hidden="true" />
+    {text}
+  </div>
 {/snippet}
 
 {#snippet chatList(list)}
@@ -237,7 +240,7 @@ import logoUrl from '$lib/logo.svg';
       </div>
     </div>
     {#if loadingList}
-      {@render sectionHeading(searching ? 'Search Results' : 'Recent Conversations')}
+      {@render sectionHeading(searching ? 'Search Results' : 'Recent Conversations', searching ? Search : MessageSquare)}
       <div class="loading-delay flex flex-col gap-1.5 px-1 pt-1">
         {#each Array(searching ? 2 : 3) as _, i (i)}
           <Skeleton class="h-8 bg-sidebar-accent/60" />
@@ -245,12 +248,12 @@ import logoUrl from '$lib/logo.svg';
       </div>
     {:else}
       {#if pinnedChats.length}
-        {@render sectionHeading('Pinned')}
+        {@render sectionHeading('Pinned', Pin)}
         {@render chatList(pinnedChats)}
       {/if}
 
       {#if displayedChats.length || !pinnedChats.length}
-        {@render sectionHeading(searching ? 'Search Results' : 'Recent Conversations')}
+        {@render sectionHeading(searching ? 'Search Results' : 'Recent Conversations', searching ? Search : MessageSquare)}
       {/if}
 
       {#if displayedChats.length === 0}

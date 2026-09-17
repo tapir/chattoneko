@@ -2,6 +2,8 @@ github.com/North-web-dev/impersonate-http v0.4.0 h1:jbusSvk+/kdFLd2cj/EYzMmYV1FT
 github.com/North-web-dev/impersonate-http v0.4.0/go.mod h1:t3j/ZQhFV08eXas3KmA4Db8NZQwGVnLLnwyScIMbsCA=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=
 github.com/andybalholm/brotli v1.2.2/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
+github.com/delthas/octreequant v0.0.0-20240724152321-2675d824f212 h1:5qHk0XFxGc6zo879WpBkipsX+YITjhtwZ24kEpbFMEk=
+github.com/delthas/octreequant v0.0.0-20240724152321-2675d824f212/go.mod h1:tUo+Naxh+yLXJHr08p/q6Yw5wZrQmaX86aFXrs0DyBw=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
@@ -36,8 +38,6 @@ github.com/segmentio/asm v1.2.1 h1:DTNbBqs57ioxAD4PrArqftgypG4/qNpXoJx8TVXxPR0=
 github.com/segmentio/asm v1.2.1/go.mod h1:BqMnlJP91P8d+4ibuonYZw9mfnzI9HfxselHZr5aAcs=
 github.com/segmentio/encoding v0.5.4 h1:OW1VRern8Nw6ITAtwSZ7Idrl3MXCFwXHPgqESYfvNt0=
 github.com/segmentio/encoding v0.5.4/go.mod h1:HS1ZKa3kSN32ZHVZ7ZLPLXWvOVIiZtyJnO1gPH1sKt0=
-github.com/skrashevich/go-webp v0.1.0 h1:C+dtldBorS5ISATYR5mvG9HFj8GRLDGRywT0xs/ZLUQ=
-github.com/skrashevich/go-webp v0.1.0/go.mod h1:9QtuNP/H9q/qzqgaZeYalNIk7n5lfyqVs1WTaPtC/Ao=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
 github.com/tidwall/gjson v1.19.0 h1:xwxm7n691Uf3u5OFjzngavjGTh55KX5q/9w9xHW88JU=
 github.com/tidwall/gjson v1.19.0/go.mod h1:V37/opeE/JbLUOfH0QTXiNez2l0RUjYUhpT4szFQAfc=

@@ -1,10 +1,10 @@
 // Package attach classifies files by CONTENT — never by extension — and
 // sanitizes filenames. Nothing here decodes pixels or audio samples: an upload
 // arrives already converted by the browser (web/src/lib/media.js), and a tool's
-// picture is re-encoded to WebP by internal/tools before it reaches ProcessAny.
+// picture is re-encoded to PNG by internal/tools before it reaches ProcessAny.
 //
 // Two policies share one magic-byte check per file. Uploads accept only what the
-// browser produces (WebP, WebM, PDF) plus text; tools also accept any media a
+// browser produces (PNG, WebM, PDF) plus text; tools also accept any media a
 // browser can render unaided, and keep every other binary as a download.
 package attach
 
@@ -29,13 +29,11 @@ const (
 	KindFile = "file"
 )
 
-// The mimes a file can be stored under, all decided by magic bytes. WebP is
-// the upload image format: the browser encodes every upload to it, using
-// libwebp in WASM where it has no native encoder (Safari silently hands back a
-// PNG for a WebP toBlob request), and create_file re-encodes a tool's picture
-// to it. PNG, JPEG, GIF and BMP are in the tool table so a picture that skips
-// that conversion still previews instead of downloading. ICO is supported
-// nowhere: an .ico is a download.
+// The mimes a file can be stored under, all decided by magic bytes. PNG is
+// the upload image format: the browser encodes every upload to it, and
+// create_file re-encodes a tool's picture to it. WebP, JPEG, GIF and BMP are in
+// the tool table so a picture that skips that conversion still previews instead
+// of downloading. ICO is supported nowhere: an .ico is a download.
 const (
 	MimePNG  = "image/png"
 	MimeJPEG = "image/jpeg"
@@ -63,7 +61,7 @@ var ErrTooLarge = errors.New("file too large")
 // they carry, because an audio player is the only one the app has.
 var (
 	uploadMedia = map[string]string{
-		MimeWebP:  KindImage,
+		MimePNG:   KindImage,
 		MimeAudio: KindFile, MimePDF: KindFile,
 	}
 	toolMedia = map[string]string{
@@ -186,7 +184,7 @@ const MaxRawUploadBytes = 64 * 1024 * 1024 // 64 MiB
 const MaxFilenameBytes = 200
 
 // Process classifies one UPLOADED file: the media the browser produces before
-// it sends (WebP, WebM, PDF) plus text. Anything else is refused — a client that
+// it sends (PNG, WebM, PDF) plus text. Anything else is refused — a client that
 // skipped conversion gets a 415 rather than a file nobody can preview.
 func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 	return process(filename, data, maxBytes, uploadPolicy)
@@ -196,13 +194,13 @@ func Process(filename string, data []byte, maxBytes int64) (*Result, error) {
 // a browser can render unaided (`toolMedia`). Any other binary is kept as a
 // download rather than refused, so a file the model found on the web reaches
 // the user whatever it is. Neither path converts anything itself — create_file
-// has already re-encoded a picture to WebP by the time its bytes arrive here.
+// has already re-encoded a picture to PNG by the time its bytes arrive here.
 func ProcessAny(filename string, data []byte, maxBytes int64) (*Result, error) {
 	return process(filename, data, maxBytes, toolPolicy)
 }
 
 // IsRasterImage reports whether data is one of the still-image formats a tool
-// re-encodes to WebP before storing: JPEG, PNG, WebP, GIF (first frame) and
+// re-encodes to PNG before storing: JPEG, PNG, WebP, GIF (first frame) and
 // BMP. The answer comes from the magic bytes like everything else here, never
 // from the extension, so a misnamed or extension-less download is caught too.
 // ICO is deliberately absent — see the mime table.
@@ -245,8 +243,8 @@ func process(filename string, data []byte, maxBytes int64, p policy) (*Result, e
 
 // media builds the Result for one recognized media file. The suffix is only
 // touched when it disagrees with the bytes — "photo.jpeg" and "photo.jpg" both
-// claim image/jpeg and both stay, while WebP bytes in a "photo.jpg" become
-// "photo.webp" and an extension-less download gains the suffix its content
+// claim image/jpeg and both stay, while PNG bytes in a "photo.jpg" become
+// "photo.png" and an extension-less download gains the suffix its content
 // implies. Text never comes through here: its mime comes FROM the extension,
 // so rewriting the name would be circular.
 func media(kind, mime, name string, data []byte) *Result {

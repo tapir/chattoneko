@@ -6,22 +6,22 @@ import (
 	"image"
 	_ "image/gif" // gif.Decode yields the first frame only, which is what we want
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"math"
 
-	"github.com/skrashevich/go-webp"
+	"github.com/delthas/octreequant"
 	_ "golang.org/x/image/bmp" // registers "bmp" with image.Decode
 	"golang.org/x/image/draw"
 )
 
 // The server half of the browser's pre-upload image conversion
 // (web/src/lib/media.js): a picture create_file is handed is decoded, capped
-// and re-encoded to WebP, so a file the model drew or fetched lands in the chat
-// in the shape a user's upload does — and, being WebP, is one of the two mimes
-// attach.SendsAsImage lets a vision model read.
+// and re-encoded to PNG — a 256-colour one when image_quantization is on — so a
+// file the model drew or fetched lands in the chat in the shape a user's upload
+// does, and in a mime attach.SendsAsImage lets a vision model read.
 const (
 	maxImageSide = 1280 // media.js MAX_SIDE
-	imageQuality = 75   // media.js IMAGE_QUALITY, on go-webp's 0-100 scale
+	paletteSize  = 256  // png-enc.js COLORS
 
 	// maxDecodePixels guards the decode, not the file: a 64 MiB JPEG can claim
 	// 65535x65535, and honouring that allocates gigabytes. This is far past
@@ -45,10 +45,12 @@ func scaleToFit(w, h, limit int) (int, int) {
 	return fit(w), fit(h)
 }
 
-// toWebP decodes one picture, caps it with scaleToFit and re-encodes it as lossy
-// WebP at imageQuality — the three steps media.js convertImage runs in the
-// browser. An animated GIF or WebP keeps its first frame, which is all a decode
-// (and a canvas draw of it) yields.
+// toPNG decodes one picture, caps it with scaleToFit and re-encodes it as a
+// PNG — the three steps media.js convertImage runs in the browser. An animated
+// GIF or WebP keeps its first frame, which is all a decode (and a canvas draw
+// of it) yields. quantize is the image_quantization setting: on, the picture
+// ends as a 256-colour indexed PNG, several times smaller than the lossless
+// one it replaces.
 //
 // EXIF orientation is not applied: image/jpeg ignores the tag and nothing else
 // in the accepted set carries one, so a phone photo stored sideways stays
@@ -56,7 +58,7 @@ func scaleToFit(w, h, limit int) (int, int) {
 // stdlib equivalent.
 // ponytail: skipped deliberately; read the JPEG APP1 orientation tag here if
 // rotated tool images ever get reported.
-func toWebP(data []byte) ([]byte, error) {
+func toPNG(data []byte, quantize bool) ([]byte, error) {
 	// Config before pixels: it reads the header only, so the cap costs nothing.
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -72,16 +74,32 @@ func toWebP(data []byte) ([]byte, error) {
 	}
 	src := img.Bounds()
 	w, h := scaleToFit(src.Dx(), src.Dy(), maxImageSide)
-	// NRGBA is what a canvas hands toBlob, and the one layout go-webp's
-	// has-alpha check has a fast path for.
+	// NRGBA is the layout a canvas holds, and one png.Encode has a fast path for.
 	dst := image.NewNRGBA(image.Rect(0, 0, w, h))
 	// ApproxBiLinear is the nearest thing to a canvas drawImage, and scaleToFit's
 	// 2x floor means it never downscales far enough for bilinear to alias.
 	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, src, draw.Src, nil)
 
+	// A palette carries one alpha per colour, so quantizing a picture with soft
+	// edges fringes them: those stay lossless even when quantization is on.
+	out := image.Image(dst)
+	if quantize && binaryAlpha(dst.Pix) {
+		out = octreequant.Paletted(dst, paletteSize)
+	}
+
 	var buf bytes.Buffer
-	if err := webp.Encode(&buf, dst, &webp.Options{Lossy: true, Quality: imageQuality}); err != nil {
+	if err := png.Encode(&buf, out); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// binaryAlpha reports whether NRGBA pixels hold no partially transparent one.
+func binaryAlpha(pix []byte) bool {
+	for i := 3; i < len(pix); i += 4 {
+		if a := pix[i]; a != 0 && a != 255 {
+			return false
+		}
+	}
+	return true
 }

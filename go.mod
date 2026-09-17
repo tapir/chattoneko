@@ -4,12 +4,12 @@ go 1.27.0
 
 require (
 	github.com/North-web-dev/impersonate-http v0.4.0
+	github.com/delthas/octreequant v0.0.0-20240724152321-2675d824f212
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/iceisfun/golua v1.1.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/openai/openai-go/v3 v3.55.0
-	github.com/skrashevich/go-webp v0.1.0
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.57.0
 	modernc.org/sqlite v1.58.0

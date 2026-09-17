@@ -9,6 +9,7 @@
   import { Input, PasswordInput } from '$lib/components/ui/input';
   import { Label } from '$lib/components/ui/label';
   import * as Select from '$lib/components/ui/select';
+  import { Switch } from '$lib/components/ui/switch';
   import * as ToggleGroup from '$lib/components/ui/toggle-group';
   import { registerOverlay } from '../lib/overlays.svelte.js';
   import { onDestroy, untrack } from 'svelte';
@@ -59,6 +60,7 @@
   let uploadMaxBytes = $state('');
   let maxToolIter = $state('');
   let mcpTimeout = $state('');
+  let imageQuantization = $state(false);
   let mcpServers = $state([]);
   // Per-card MCP tool lists, keyed by the row's local key: what that card's
   // "Fetch" button last dialed. A card without an entry falls back to
@@ -156,6 +158,7 @@
       tools: Object.entries(toolDefaults).sort(([a], [b]) => a.localeCompare(b)),
       titles: Object.entries(toolTitles).sort(([a], [b]) => a.localeCompare(b)),
       limits: [uploadMaxBytes, maxToolIter, mcpTimeout],
+      imageQuantization,
     });
   }
 
@@ -167,6 +170,7 @@
     uploadMaxBytes = String(c.limits?.upload_max_file_bytes ?? '');
     maxToolIter = String(c.limits?.max_tool_iterations ?? '');
     mcpTimeout = String(c.limits?.mcp_call_timeout_seconds ?? '');
+    imageQuantization = c.image_quantization === true;
     roleModels = Object.fromEntries(ROLES.map((r) => [r.key, c.models?.[`default_${r.key}_model`] ?? '']));
     transcriptionModel = c.models?.default_transcription_model ?? '';
     speechModel = c.models?.default_speech_model ?? '';
@@ -518,6 +522,7 @@
           max_tool_iterations: Number(maxToolIter) || 0,
           mcp_call_timeout_seconds: Number(mcpTimeout) || 0,
         },
+        image_quantization: imageQuantization,
       };
       // The box is preloaded with the stored key, so send it back as-is;
       // an emptied box clears the key.
@@ -945,6 +950,15 @@
                 <Label for="set-mcp-timeout" class={labelCls}>MCP call timeout (s)</Label>
                 <Input id="set-mcp-timeout" type="number" min="0" class="h-9 text-sm" bind:value={mcpTimeout} />
               </div>
+            </div>
+          </section>
+
+          <!-- Images -->
+          <section class="space-y-3">
+            <h3 class="text-base font-semibold">Images</h3>
+            <div class="flex items-center justify-between gap-3">
+              <Label for="set-image-quantization" class={labelCls}>Quantize</Label>
+              <Switch id="set-image-quantization" class="shrink-0" bind:checked={imageQuantization} />
             </div>
           </section>
         {/if}

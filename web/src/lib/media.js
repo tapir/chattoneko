@@ -3,29 +3,27 @@
 // every image and every recording is normalized here, the moment it is
 // attached:
 //
-//   image -> WebP at 75% quality, longest side capped at 1280px (but never
-//            shrunk by more than 2x — see scaleToFit)
+//   image -> PNG, longest side capped at 1280px (but never shrunk by more than
+//            2x — see scaleToFit), and quantized to 256 colours only when the
+//            server's image_quantization setting is on
 //   audio -> WebM/Opus, 24 kHz, mono, 48 kbps
 //
-// internal/tools/image.go runs that same image scheme on the server for a
-// picture create_file is handed, so both paths land in the chat alike.
+// internal/tools/image.go runs that same scheme on the server for a picture
+// create_file is handed, and the same image_quantization setting governs both
+// — except that a picture with soft alpha stays lossless there, since a palette
+// has one alpha per colour and quantizing one fringes it.
 //
-// Two browser facts shape the code:
-//
-// 1. Safari — every version, desktop and iOS — cannot ENCODE WebP. toBlob()
-//    silently hands back a PNG instead of throwing, so the encoder is probed
-//    once and Safari gets libwebp as WASM instead (lib/webp-enc.js). There is
-//    no PNG fallback: the server stores WebP only.
-// 2. Audio goes through WebCodecs (inside mediabunny, which is pure TypeScript
-//    and carries no WASM). AudioEncoder exists in Chrome/Edge 94+, Firefox
-//    desktop 130+ and Safari 26+ only, and WebCodecs needs a secure context,
-//    so a plain-HTTP LAN origin has none either. There is no WASM-free Opus
-//    encoder to fall back on, so those cases get a clear refusal instead of a
-//    silently broken file.
+// Both image encoders are always there — the browser's own toBlob and, when
+// quantization is on, lib/png-enc.js — so the image path needs no fallback.
+// Audio does: it goes through WebCodecs (inside mediabunny, which is pure
+// TypeScript and carries no WASM). AudioEncoder exists in Chrome/Edge 94+,
+// Firefox desktop 130+ and Safari 26+ only, and WebCodecs needs a secure
+// context, so a plain-HTTP LAN origin has none either. There is no WASM-free
+// Opus encoder to fall back on, so those cases get a clear refusal instead of a
+// silently broken file.
 
 // Longest side kept for an image, whatever its orientation.
 const MAX_SIDE = 1280;
-const IMAGE_QUALITY = 0.75;
 
 // sniffKind classifies a file by its magic bytes: "image", "audio", "pdf" or ""
 // (anything else is judged by content — see lib/text-sniff.js). The rule the
@@ -94,23 +92,11 @@ export function scaleToFit(w, h, max) {
   return { width: Math.max(1, Math.round(w * k)), height: Math.max(1, Math.round(h * k)) };
 }
 
-// canEncodeWebP asks the browser once whether it can encode a WebP at all: the
-// only reliable answer is the type of a blob it actually produced, because an
-// unsupported one comes back as a PNG rather than an error. Cached like
-// canPlayAudio's table — every image attach would otherwise pay for the probe.
-let webpProbe;
-function canEncodeWebP() {
-  return (webpProbe ??= new Promise((resolve) => {
-    const probe = document.createElement("canvas");
-    probe.width = probe.height = 1;
-    probe.toBlob((b) => resolve(b?.type === "image/webp"), "image/webp");
-  }));
-}
-
 // convertImage decodes any supported image, downscales it if it is bigger than
-// MAX_SIDE on its longest side, and re-encodes to WebP. EXIF orientation needs
-// no code: createImageBitmap applies it by default.
-export async function convertImage(file) {
+// MAX_SIDE on its longest side, and re-encodes to PNG — lossless, or quantized
+// to an indexed 256 colours (several times smaller) when quantize is on. EXIF
+// orientation needs no code: createImageBitmap applies it by default.
+export async function convertImage(file, quantize = false) {
   const bitmap = await createImageBitmap(file);
   try {
     const { width, height } = scaleToFit(bitmap.width, bitmap.height, MAX_SIDE);
@@ -120,21 +106,19 @@ export async function convertImage(file) {
     const ctx = canvas.getContext("2d");
     ctx.drawImage(bitmap, 0, 0, width, height);
     let blob;
-    if (await canEncodeWebP()) {
+    if (quantize) {
+      // Imported here, not at the top: only a quantized attach fetches it.
+      const { encodePNG } = await import("./png-enc.js");
+      blob = new Blob([encodePNG(ctx.getImageData(0, 0, width, height))], {
+        type: "image/png",
+      });
+    } else {
       blob = await new Promise((resolve, reject) =>
         canvas.toBlob(
           (b) => (b ? resolve(b) : reject(new Error("the browser could not encode this image"))),
-          "image/webp",
-          IMAGE_QUALITY,
+          "image/png",
         ),
       );
-    } else {
-      // Safari has no WebP encoder, so it gets libwebp in WASM off the raw
-      // pixels the canvas already holds. Imported here, not at the top: ~320 KB
-      // of glue and wasm that no other browser ever fetches.
-      const { encodeWebP } = await import("./webp-enc.js");
-      const bytes = await encodeWebP(ctx.getImageData(0, 0, width, height), IMAGE_QUALITY);
-      blob = new Blob([bytes], { type: "image/webp" });
     }
     return renamed(file, blob, "image");
   } finally {

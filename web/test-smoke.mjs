@@ -311,6 +311,39 @@ console.log('OK streaming parity');
   console.log('OK image scaling');
 }
 
+// --- the image encoder: an indexed PNG, not the truecolor one toBlob writes ---
+{
+  const { encodePNG } = await import('./src/lib/png-enc.js');
+  const w = 8, h = 4;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    data[i * 4] = (i * 31) % 256;
+    data[i * 4 + 1] = 200 - i * 4;
+    data[i * 4 + 2] = (i * 7) % 256;
+    data[i * 4 + 3] = 255;
+  }
+  data[3] = 0; // one fully transparent pixel, which the palette has to carry
+
+  const out = new Uint8Array(encodePNG({ data, width: w, height: h }));
+  const dv = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  assert(out[0] === 0x89 && out[1] === 0x50 && out[2] === 0x4e, 'output opens with the PNG signature');
+  assert(dv.getUint32(16) === w && dv.getUint32(20) === h, 'IHDR keeps the canvas dimensions');
+  assert(out[25] === 3, `IHDR colour type is ${out[25]}, want 3 (indexed)`);
+
+  const len = {};
+  for (let o = 8; o + 8 < out.length; o += 12 + dv.getUint32(o)) {
+    len[String.fromCharCode(out[o + 4], out[o + 5], out[o + 6], out[o + 7])] = dv.getUint32(o);
+  }
+  assert(len.PLTE > 0 && len.PLTE / 3 <= 256, `palette holds ${len.PLTE / 3} colours, want 1-256`);
+  assert(len.tRNS > 0, 'a transparent pixel is carried by a tRNS chunk');
+
+  const UPNG = (await import('@upng/upng-js/dist/UPNG.esm.js')).default;
+  const back = new Uint8Array(UPNG.toRGBA8(UPNG.decode(out.buffer))[0]);
+  assert(back[3] === 0, 'the transparent pixel decodes transparent');
+  assert(back[(w * h - 1) * 4 + 3] === 255, 'an opaque pixel decodes opaque');
+  console.log('OK image encode');
+}
+
 // --- long press (the attachment action sheet's trigger) ---
 // The whole point is what it does NOT do: message text keeps the browser's
 // long press, and a desktop right-click keeps the native menu.

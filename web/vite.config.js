@@ -29,12 +29,7 @@ export default defineConfig({
     // svelte-pdf ships raw .svelte source (its dist/index.js re-exports one),
     // which the dep pre-bundler's esbuild cannot parse — vite-plugin-svelte
     // has to compile it instead.
-    //
-    // @jsquash/webp's Emscripten glue locates its .wasm with
-    // `new URL("webp_enc.wasm", import.meta.url)`, which esbuild's
-    // pre-bundling rewrites into a path that resolves to nothing (the build
-    // handles it correctly; only dev needs this).
-    exclude: ["svelte-pdf", "@jsquash/webp"],
+    exclude: ["svelte-pdf"],
   },
   build: {
     outDir: "dist",

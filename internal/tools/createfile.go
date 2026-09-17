@@ -84,8 +84,11 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 	// user's file is measured against. A file the model writes itself is far
 	// below it in practice — its content has to fit in the model's output.
 	limit := int64(config.DefaultUploadMaxFileBytes)
+	quantize := config.DefaultImageQuantization
 	if limits != nil {
-		limit = limits.Get().Limits.UploadMaxFileBytes
+		cfg := limits.Get()
+		limit = cfg.Limits.UploadMaxFileBytes
+		quantize = cfg.ImageQuantization
 	}
 	// Exactly one source. The URL branch is its own download-and-name path; the
 	// two content branches share the byte resolution.
@@ -126,15 +129,15 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 		}
 	}
 
-	// Images are normalized to WebP here, the same three steps the browser runs
+	// Images are normalized to PNG here, the same three steps the browser runs
 	// on an upload before sending it (see image.go), so a file the model drew or
 	// fetched lands in the chat in the shape a user's file does. Only inside the
 	// size limit: an oversized file is ProcessAny's ErrTooLarge to report, not
 	// ours to decode first.
 	if int64(len(data)) <= limit && attach.IsRasterImage(data) {
-		converted, err := toWebP(data)
+		converted, err := toPNG(data, quantize)
 		if err != nil {
-			return "", fmt.Errorf("content rejected: the image could not be converted to WebP: %v", err)
+			return "", fmt.Errorf("content rejected: the image could not be converted to PNG: %v", err)
 		}
 		data = converted
 	}

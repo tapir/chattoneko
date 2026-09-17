@@ -1020,10 +1020,12 @@ class AppState {
   // why. Keyed by the chat it was staged in, which is not necessarily the
   // active one by the time this lands.
   async convertPending(key, entry) {
-    const convert = entry.kind === "image" ? convertImage : convertAudio;
     let file;
     try {
-      file = await convert(entry.file);
+      file =
+        entry.kind === "image"
+          ? await convertImage(entry.file, this.config?.image_quantization === true)
+          : await convertAudio(entry.file);
     } catch (err) {
       this.dropPending(key, entry.id);
       this.toast("error", `${entry.filename}: ${err?.message ?? "conversion failed"}`);

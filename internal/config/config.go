@@ -38,6 +38,7 @@ const (
 	DefaultUploadMaxFileBytes          = 5 * 1024 * 1024 // 5 MiB
 	DefaultMaxToolIterations           = 10
 	DefaultMCPCallTimeoutSeconds       = 60
+	DefaultImageQuantization           = false
 	DefaultContextLength         int64 = 131072 // 128K tokens
 )
 
@@ -163,6 +164,11 @@ type Config struct {
 	MCPServers   []MCPServerConfig `json:"mcp_servers"`
 	Limits       LimitsConfig      `json:"limits"`
 	Auth         AuthConfig        `json:"auth"`
+	// ImageQuantization is the 256-colour palette both image conversions can
+	// end in: the browser's pre-upload one (web/src/lib/png-enc.js) and
+	// create_file's (internal/tools/image.go). Off — the default — stores
+	// lossless PNGs, several times the bytes for a photograph.
+	ImageQuantization bool `json:"image_quantization"`
 	// ToolDefaults is the global per-tool default toggle (settings UI): tool
 	// display name → enabled. It overrides the catalog default (integrated
 	// tools' hardcoded DefaultEnabled, MCP tools' server default_enabled) for

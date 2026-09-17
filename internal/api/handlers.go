@@ -154,6 +154,10 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		// button when no speech model is designated. The id itself is a setup
 		// detail and stays out of this response.
 		"speech_enabled": cfg.Models.DefaultSpeechModel != "",
+		// Whether attached and tool-created pictures are quantized to a
+		// 256-colour palette before they are stored; the browser's own
+		// conversion reads it (web/src/lib/media.js).
+		"image_quantization": cfg.ImageQuantization,
 		"limits": map[string]any{
 			"upload_max_file_bytes": cfg.Limits.UploadMaxFileBytes,
 			"max_tool_iterations":   cfg.Limits.MaxToolIterations,
@@ -230,6 +234,7 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 			"max_tool_iterations":      c.Limits.MaxToolIterations,
 			"mcp_call_timeout_seconds": c.Limits.MCPCallTimeoutSeconds,
 		},
+		"image_quantization": c.ImageQuantization,
 		// Auth is deliberately omitted: it is env-var driven (CHATTO_USERNAME /
 		// CHATTO_PASSWORD), fixed at startup, and not editable through the API.
 	}

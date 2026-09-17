@@ -32,6 +32,7 @@ const (
 	keyMCPCallTimeoutSeconds     = "mcp_call_timeout_seconds"
 	keyToolDefaults              = "tool_defaults"
 	keyToolTitles                = "tool_titles"
+	keyImageQuantization         = "image_quantization"
 	// Auth has NO keys here: it is env-var driven (authFromEnv), read once
 	// at startup, and never persisted to the config table.
 )
@@ -83,6 +84,7 @@ func seedIfEmpty(ctx context.Context, db *sql.DB) error {
 		keyUploadMaxFileBytes:    strconv.FormatInt(DefaultUploadMaxFileBytes, 10),
 		keyMaxToolIterations:     strconv.Itoa(DefaultMaxToolIterations),
 		keyMCPCallTimeoutSeconds: strconv.Itoa(DefaultMCPCallTimeoutSeconds),
+		keyImageQuantization:     strconv.FormatBool(DefaultImageQuantization),
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -160,6 +162,7 @@ func writeConfigRows(ctx context.Context, tx *sql.Tx, c *Config, now int64) erro
 		keyMCPCallTimeoutSeconds:     strconv.Itoa(c.Limits.MCPCallTimeoutSeconds),
 		keyToolDefaults:              string(toolDefaults),
 		keyToolTitles:                string(toolTitles),
+		keyImageQuantization:         strconv.FormatBool(c.ImageQuantization),
 		// Auth is env-var driven and never persisted.
 	}
 	// One transaction, so write order is unobservable — range the map.
@@ -241,6 +244,7 @@ func loadSnapshot(ctx context.Context, db *sql.DB) (*Config, error) {
 	// Auth never comes from the database: it is derived from CHATTO_USERNAME /
 	// CHATTO_PASSWORD.
 	c.Auth = authFromEnv()
+	c.ImageQuantization = kv[keyImageQuantization] == "true"
 
 	if v := kv[keyModelWhitelist]; v != "" {
 		if err := json.Unmarshal([]byte(v), &c.Models.Whitelist); err != nil {

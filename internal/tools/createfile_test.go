@@ -1,9 +1,12 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image"
+	"image/png"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -129,7 +132,7 @@ func TestCreateFileText(t *testing.T) {
 }
 
 // Binary goes in as base64 and lands as a download-only file — except real
-// image bytes, which the shared pipeline re-encodes to WebP like every upload.
+// image bytes, which the shared pipeline re-encodes to PNG like every upload.
 func TestCreateFileBinary(t *testing.T) {
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 	pdf := []byte("%PDF-1.4\n\x00\xfe\xff binary")
@@ -246,6 +249,43 @@ func TestCreateFileWrittenContentHonorsConfiguredLimit(t *testing.T) {
 	}
 }
 
+// image_quantization reaches the conversion: on stores an indexed PNG, off a
+// lossless one.
+func TestCreateFileHonorsQuantizationSetting(t *testing.T) {
+	allowWebFetchLoopback(t)
+	ts := serve(t, "image/png", testPNG(t, 40, 30))
+	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
+
+	for _, quantize := range []bool{true, false} {
+		sqlDB, err := db.Open(":memory:")
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		t.Cleanup(func() { _ = sqlDB.Close() })
+		if err := db.Migrate(sqlDB); err != nil {
+			t.Fatalf("migrate: %v", err)
+		}
+		cfgs, err := config.TestStore(context.Background(), sqlDB,
+			config.Config{ImageQuantization: quantize})
+		if err != nil {
+			t.Fatalf("config store: %v", err)
+		}
+		fs := &fakeFileStore{}
+		out, isErr, err := Builtin(fs, cfgs).Call(context.Background(), "create_file",
+			`{"url":"`+ts.URL+`/a/photo.png"}`, meta)
+		if err != nil || isErr {
+			t.Fatalf("quantize=%v: %v %q", quantize, err, out)
+		}
+		img, err := png.Decode(bytes.NewReader(fs.files[0].data))
+		if err != nil {
+			t.Fatalf("quantize=%v: stored bytes are not a PNG: %v", quantize, err)
+		}
+		if _, paletted := img.(*image.Paletted); paletted != quantize {
+			t.Errorf("quantize=%v: stored an indexed PNG = %v", quantize, paletted)
+		}
+	}
+}
+
 // A failed link is an error, not a silent invisible file: nothing the model
 // could call next recovers it.
 func TestCreateFileLinkFailure(t *testing.T) {
@@ -270,9 +310,9 @@ func TestCreateFileFromURLImage(t *testing.T) {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
 	c := shownOn(t, fs, "m1")
-	// Converted to WebP exactly as the browser converts an upload, and the name
+	// Converted to PNG exactly as the browser converts an upload, and the name
 	// follows the bytes, not the URL.
-	if c.kind != "image" || c.mime != "image/webp" || c.filename != "cat.webp" {
+	if c.kind != "image" || c.mime != "image/png" || c.filename != "cat.png" {
 		t.Fatalf("wrong attachment: kind=%q mime=%q name=%q", c.kind, c.mime, c.filename)
 	}
 	if c.size != int64(len(c.data)) {
@@ -283,9 +323,9 @@ func TestCreateFileFromURLImage(t *testing.T) {
 	}
 }
 
-// A JPEG a tool fetches is a picture, not a download: it is re-encoded to WebP
-// like every other raster format, which also makes it one of the two mimes a
-// vision model is sent. The upload path is stricter — see attach's tests.
+// A JPEG a tool fetches is a picture, not a download: it is re-encoded to PNG
+// like every other raster format, which also makes it a mime a vision model is
+// sent. The upload path is stricter — see attach's tests.
 func TestCreateFileFromURLJPEGIsAnImage(t *testing.T) {
 	allowWebFetchLoopback(t)
 	ts := serve(t, "image/jpeg", testJPEG(t, 40, 30))
@@ -297,7 +337,7 @@ func TestCreateFileFromURLJPEGIsAnImage(t *testing.T) {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
 	c := shownOn(t, fs, "m1")
-	if c.kind != "image" || c.mime != "image/webp" || c.filename != "cat.webp" {
+	if c.kind != "image" || c.mime != "image/png" || c.filename != "cat.png" {
 		t.Fatalf("wrong attachment: kind=%q mime=%q name=%q", c.kind, c.mime, c.filename)
 	}
 	if !strings.Contains(out, "inline as an image") {
@@ -391,16 +431,16 @@ func TestCreateFileFromURLFilename(t *testing.T) {
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 
 	// Media names get the extension their sniffed mime implies — and every
-	// raster format is converted to WebP first, so that suffix is always .webp.
+	// raster format is converted to PNG first, so that suffix is always .png.
 	cases := []struct{ name, args, want string }{
-		{"jpg source", `{"url":"` + ts.URL + `/a/photo.jpeg"}`, "photo.webp"},
-		{"webp source", `{"url":"` + ts.URL + `/a/sticker.webp"}`, "sticker.webp"},
-		{"png re-encoded", `{"url":"` + ts.URL + `/a/diagram.PNG"}`, "diagram.webp"},
-		{"no extension", `{"url":"` + ts.URL + `/a/img"}`, "img.webp"},
-		{"root path", `{"url":"` + ts.URL + `"}`, "file.webp"},
-		{"explicit wins", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"my cat"}`, "my cat.webp"},
-		{"explicit invalid falls back", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"../evil"}`, "cat.webp"},
-		{"query stripped", `{"url":"` + ts.URL + `/a/cat.jpg?sig=xyz&exp=1"}`, "cat.webp"},
+		{"jpg source", `{"url":"` + ts.URL + `/a/photo.jpeg"}`, "photo.png"},
+		{"webp source", `{"url":"` + ts.URL + `/a/sticker.webp"}`, "sticker.png"},
+		{"png re-encoded", `{"url":"` + ts.URL + `/a/diagram.PNG"}`, "diagram.PNG"}, // the suffix already agrees
+		{"no extension", `{"url":"` + ts.URL + `/a/img"}`, "img.png"},
+		{"root path", `{"url":"` + ts.URL + `"}`, "file.png"},
+		{"explicit wins", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"my cat"}`, "my cat.png"},
+		{"explicit invalid falls back", `{"url":"` + ts.URL + `/a/cat.jpg","filename":"../evil"}`, "cat.png"},
+		{"query stripped", `{"url":"` + ts.URL + `/a/cat.jpg?sig=xyz&exp=1"}`, "cat.png"},
 		// Text keeps the served name, extension and all.
 		{"text keeps name", `{"url":"` + ts.URL + `/a/notes.md"}`, "notes.md"},
 	}
@@ -417,7 +457,7 @@ func TestCreateFileFromURLFilename(t *testing.T) {
 		})
 	}
 
-	// A long multibyte explicit name (199 bytes, no extension) gets .webp
+	// A long multibyte explicit name (199 bytes, no extension) gets .png
 	// appended past the 200-byte cap: the truncation must cut at a rune
 	// boundary and stay valid UTF-8.
 	longCJK := strings.Repeat("日", 66) + "a"
@@ -427,8 +467,8 @@ func TestCreateFileFromURLFilename(t *testing.T) {
 		t.Fatalf("unexpected error: %q", out)
 	}
 	got := fs.files[0].filename
-	if len(got) > 200 || !utf8.ValidString(got) || !strings.HasSuffix(got, ".webp") {
-		t.Fatalf("filename = %q (%d bytes, valid UTF-8 %v), want <=200 bytes ending in .webp",
+	if len(got) > 200 || !utf8.ValidString(got) || !strings.HasSuffix(got, ".png") {
+		t.Fatalf("filename = %q (%d bytes, valid UTF-8 %v), want <=200 bytes ending in .png",
 			got, len(got), utf8.ValidString(got))
 	}
 }
@@ -464,7 +504,7 @@ func TestCreateFileFromURLUndecodablePNGIsRefused(t *testing.T) {
 	fs := &fakeFileStore{}
 	out, isErr := callTool(t, fs, "create_file", `{"url":"`+ts.URL+`/x.png"}`,
 		mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
-	if !isErr || !strings.Contains(out, "could not be converted to WebP") {
+	if !isErr || !strings.Contains(out, "could not be converted to PNG") {
 		t.Fatalf("want a conversion error, got isErr=%v %q", isErr, out)
 	}
 	if len(fs.files) != 0 {

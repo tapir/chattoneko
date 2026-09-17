@@ -10,8 +10,6 @@ import (
 	"image/png"
 	"strings"
 	"testing"
-
-	"github.com/skrashevich/go-webp"
 )
 
 // scaleToFit mirrors media.js scaleToFit, so these are the numbers that
@@ -46,12 +44,12 @@ func encodePNG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// decodeWebP asserts the bytes are a WebP of exactly w×h and returns the image.
-func decodeWebP(t *testing.T, data []byte, w, h int) image.Image {
+// decodePNG asserts the bytes are a PNG of exactly w×h and returns the image.
+func decodePNG(t *testing.T, data []byte, w, h int) image.Image {
 	t.Helper()
-	img, err := webp.Decode(bytes.NewReader(data))
+	img, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
-		t.Fatalf("output is not a decodable WebP: %v", err)
+		t.Fatalf("output is not a decodable PNG: %v", err)
 	}
 	if b := img.Bounds(); b.Dx() != w || b.Dy() != h {
 		t.Fatalf("output is %dx%d, want %dx%d", b.Dx(), b.Dy(), w, h)
@@ -59,36 +57,80 @@ func decodeWebP(t *testing.T, data []byte, w, h int) image.Image {
 	return img
 }
 
-func TestToWebP(t *testing.T) {
+func TestToPNG(t *testing.T) {
 	t.Run("big png is capped and re-encoded", func(t *testing.T) {
-		out, err := toWebP(encodePNG(t, 2000, 1000))
+		out, err := toPNG(encodePNG(t, 2000, 1000), true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		decodeWebP(t, out, 1280, 640)
+		decodePNG(t, out, 1280, 640)
 	})
 
 	t.Run("small png keeps its size", func(t *testing.T) {
-		out, err := toWebP(encodePNG(t, 40, 30))
+		out, err := toPNG(encodePNG(t, 40, 30), true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		decodeWebP(t, out, 40, 30)
+		decodePNG(t, out, 40, 30)
 	})
 
-	t.Run("transparency survives", func(t *testing.T) {
+	// A palette carries one alpha per colour, so a picture with soft edges is
+	// left lossless and only a binary-alpha one is quantized.
+	t.Run("soft alpha stays lossless", func(t *testing.T) {
 		src := image.NewNRGBA(image.Rect(0, 0, 8, 8))
 		src.SetNRGBA(0, 0, color.NRGBA{255, 0, 0, 0x40}) // translucent red
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, src); err != nil {
 			t.Fatal(err)
 		}
-		out, err := toWebP(buf.Bytes())
+		out, err := toPNG(buf.Bytes(), true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, _, a := decodeWebP(t, out, 8, 8).At(0, 0).RGBA(); a == 0xffff {
-			t.Fatal("alpha was flattened to opaque")
+		img := decodePNG(t, out, 8, 8)
+		if _, ok := img.(*image.Paletted); ok {
+			t.Fatal("a translucent picture was quantized")
+		}
+		if _, _, _, a := img.At(0, 0).RGBA(); a>>8 != 0x40 {
+			t.Fatalf("alpha = %#x, want 0x40", a>>8)
+		}
+	})
+
+	t.Run("binary alpha is quantized", func(t *testing.T) {
+		src := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+		for y := range 8 {
+			for x := range 8 {
+				src.SetNRGBA(x, y, color.NRGBA{uint8(x * 30), uint8(y * 30), 40, 255})
+			}
+		}
+		src.SetNRGBA(0, 0, color.NRGBA{}) // fully transparent, not translucent
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, src); err != nil {
+			t.Fatal(err)
+		}
+		out, err := toPNG(buf.Bytes(), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pm, ok := decodePNG(t, out, 8, 8).(*image.Paletted)
+		if !ok {
+			t.Fatal("output is not an indexed PNG")
+		}
+		if len(pm.Palette) > paletteSize {
+			t.Fatalf("palette has %d colours, want <= %d", len(pm.Palette), paletteSize)
+		}
+		if _, _, _, a := pm.At(0, 0).RGBA(); a != 0 {
+			t.Fatal("the transparent pixel did not stay transparent")
+		}
+	})
+
+	t.Run("quantization off stays lossless", func(t *testing.T) {
+		out, err := toPNG(encodePNG(t, 40, 30), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := decodePNG(t, out, 40, 30).(*image.Paletted); ok {
+			t.Fatal("a picture was quantized with the setting off")
 		}
 	})
 
@@ -107,20 +149,20 @@ func TestToWebP(t *testing.T) {
 		if err := gif.EncodeAll(&buf, g); err != nil {
 			t.Fatal(err)
 		}
-		out, err := toWebP(buf.Bytes())
+		out, err := toPNG(buf.Bytes(), true)
 		if err != nil {
 			t.Fatal(err)
 		}
 		// Frame 2 leaves (0,0) black, so a white pixel proves only the first
 		// frame survived.
-		r, gg, b, _ := decodeWebP(t, out, 20, 10).At(0, 0).RGBA()
+		r, gg, b, _ := decodePNG(t, out, 20, 10).At(0, 0).RGBA()
 		if r>>8 != 255 || gg>>8 != 255 || b>>8 != 255 {
 			t.Fatalf("first frame not kept: (0,0) = %d,%d,%d", r>>8, gg>>8, b>>8)
 		}
 	})
 
 	t.Run("undecodable is an error", func(t *testing.T) {
-		if _, err := toWebP(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)); err == nil {
+		if _, err := toPNG(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...), true); err == nil {
 			t.Fatal("want an error for a PNG header with no payload")
 		}
 	})
@@ -132,7 +174,7 @@ func TestToWebP(t *testing.T) {
 		chunk := binary.BigEndian.AppendUint32(nil, uint32(len(ihdr)-4))
 		chunk = append(chunk, ihdr...)
 		chunk = binary.BigEndian.AppendUint32(chunk, crc32.ChecksumIEEE(ihdr))
-		_, err := toWebP(append([]byte("\x89PNG\r\n\x1a\n"), chunk...))
+		_, err := toPNG(append([]byte("\x89PNG\r\n\x1a\n"), chunk...), true)
 		if err == nil || !strings.Contains(err.Error(), "megapixel") {
 			t.Fatalf("want a megapixel refusal, got %v", err)
 		}

@@ -72,17 +72,16 @@ func sampleWebP(t *testing.T) []byte {
 
 func TestProcessMediaStoredVerbatim(t *testing.T) {
 	for _, tc := range []struct {
-		name           string
-		filename       string
-		data           []byte
-		wantKind       string
-		wantMime       string
-		wantName       string
-		allowedAsImage bool
+		name     string
+		filename string
+		data     []byte
+		wantKind string
+		wantMime string
+		wantName string
 	}{
-		{"webp", "sticker.webp", sampleWebP(t), KindImage, MimeWebP, "sticker.webp", true},
-		{"audio webm", "memo.webm", webmHeader, KindFile, MimeAudio, "memo.webm", false},
-		{"pdf", "invoice.pdf", []byte("%PDF-1.7 fake"), KindFile, MimePDF, "invoice.pdf", false},
+		{"png", "diagram.png", makePNG(t, 8, 6), KindImage, MimePNG, "diagram.png"},
+		{"audio webm", "memo.webm", webmHeader, KindFile, MimeAudio, "memo.webm"},
+		{"pdf", "invoice.pdf", []byte("%PDF-1.7 fake"), KindFile, MimePDF, "invoice.pdf"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res, err := Process(tc.filename, tc.data, 1<<20)
@@ -102,18 +101,18 @@ func TestProcessMediaStoredVerbatim(t *testing.T) {
 }
 
 // The stored name follows the bytes, not the upload: a lying client cannot keep
-// WebP bytes stored under a .jpg name. Text is the exception — its mime comes
+// PNG bytes stored under a .jpg name. Text is the exception — its mime comes
 // FROM the extension.
 func TestProcessNameFollowsMime(t *testing.T) {
-	webp := sampleWebP(t)
+	png := makePNG(t, 8, 6)
 	for _, tc := range []struct {
 		filename string
 		data     []byte
 		want     string
 	}{
-		{"photo.jpg", webp, "photo.webp"},
-		{"photo", webp, "photo.webp"},
-		{"a.b.c.PNG", webp, "a.b.c.webp"}, // the bytes win over the name
+		{"photo.jpg", png, "photo.png"},
+		{"photo", png, "photo.png"},
+		{"a.b.c.JPEG", png, "a.b.c.png"}, // the bytes win over the name
 		{"memo.mp3", webmHeader, "memo.webm"},
 		{"invoice.txt", []byte("%PDF-1.7 fake"), "invoice.pdf"},
 		{"notes.md", []byte("# hi\n"), "notes.md"},
@@ -219,12 +218,11 @@ func TestProcessAnyKeepsUnsupportedAsDownload(t *testing.T) {
 }
 
 // An upload only carries what the browser's conversion step produces, so
-// anything else is refused even when a tool may attach it. PNG included — a
-// browser with no native WebP encoder (Safari) encodes it in WASM rather than
-// sending the PNG toBlob() silently falls back to.
+// anything else is refused even when a tool may attach it — WebP and JPEG
+// included, because convertImage re-encodes both to PNG.
 func TestProcessUploadStaysStrict(t *testing.T) {
-	if _, err := Process("pic.png", makePNG(t, 8, 6), 1<<20); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("png upload accepted: %v", err)
+	if _, err := Process("sticker.webp", sampleWebP(t), 1<<20); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("webp upload accepted: %v", err)
 	}
 	_, err := Process("photo.jpg", makeJPEG(t, 8, 6), 1<<20)
 	if !errors.Is(err, ErrUnsupported) {
@@ -250,7 +248,7 @@ func TestProcessUploadStaysStrict(t *testing.T) {
 	}
 }
 
-// IsRasterImage is the gate on create_file's WebP conversion: the five formats
+// IsRasterImage is the gate on create_file's PNG conversion: the five formats
 // it decodes, and nothing else — ICO in particular.
 func TestIsRasterImage(t *testing.T) {
 	jpg := makeJPEG(t, 8, 6)
@@ -336,7 +334,7 @@ func TestProcessTooLarge(t *testing.T) {
 		t.Fatalf("want ErrTooLarge, got %v", err)
 	}
 	// The cap applies to media too — nothing is downscaled to fit.
-	if _, err := Process("pic.webp", sampleWebP(t), 64); !errors.Is(err, ErrTooLarge) {
+	if _, err := Process("pic.png", makePNG(t, 8, 6), 64); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("image over the cap accepted: %v", err)
 	}
 	if _, err := Process("x.txt", payload, 1024); err != nil {
@@ -359,7 +357,7 @@ func TestProcessSizeMatchesData(t *testing.T) {
 		filename string
 		data     []byte
 	}{
-		{"pic.webp", sampleWebP(t)},
+		{"pic.png", makePNG(t, 8, 6)},
 		{"notes.md", []byte("# hi\n")},
 		{"memo.webm", webmHeader},
 	} {

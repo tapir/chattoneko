@@ -1,7 +1,7 @@
 <script>
   import { app } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
-  import { Download, Eye, FileText, MessageCircle, Plus, Trash2, X, Zap } from '@lucide/svelte';
+  import { Check, Circle, Download, Eye, FileText, MessageCircle, Plus, Trash2, X, Zap } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
   import IconButton from './IconButton.svelte';
   import ToolToggleRow from './ToolToggleRow.svelte';
@@ -108,6 +108,14 @@
   // base URL and an API key. Both fields are preloaded from the stored
   // config, so their (possibly unsaved) form values are the whole picture.
   let providerReady = $derived(baseUrl.trim() !== '' && apiKey.trim() !== '');
+  // What config.Complete() requires, read live from the form so the
+  // forced-setup notice ticks off as the user fills it in.
+  const setupSteps = $derived([
+    { label: 'Provider base URL', done: baseUrl.trim() !== '' },
+    { label: 'API key', done: apiKey.trim() !== '' },
+    { label: 'Chat model', done: roleModelOk('chat') },
+    { label: 'Task model', done: roleModelOk('task') },
+  ]);
   // Unsaved provider form values forwarded to the fetch endpoint; the server
   // falls back to the stored config for any field left empty.
   function providerOverrides() {
@@ -121,11 +129,13 @@
   // The role flags on every model card. `key` doubles as the config field
   // name: the server stores each one as `default_<key>_model`. All of them are
   // chat roles — the audio models are designated in the Audio section instead.
+  // `needs` is the input the role requires; the server drops a flag whose
+  // model lacks it.
   const ROLES = [
-    { key: 'chat', label: 'Chat model', icon: MessageCircle },
-    { key: 'task', label: 'Task model (background jobs like chat titles)', icon: Zap },
-    { key: 'vision', label: 'Vision model (describes images for a chat model that can’t see them)', icon: Eye },
-    { key: 'document', label: 'Document model (reads PDFs for a chat model that can’t)', icon: FileText },
+    { key: 'chat', label: 'Chat model', icon: MessageCircle, needs: 'text' },
+    { key: 'task', label: 'Task model', icon: Zap, needs: 'text' },
+    { key: 'vision', label: 'Vision model', icon: Eye, needs: 'image' },
+    { key: 'document', label: 'Document model', icon: FileText, needs: 'file' },
   ];
   const DEFAULT_EFFORTS = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
   const DEFAULT_EFFORT = 'medium';
@@ -273,7 +283,34 @@
     for (const r of ROLES) if (roleModels[r.key] === id) roleModels[r.key] = '';
   }
   function toggleRole(key, id) {
-    roleModels[key] = roleModels[key] === id ? '' : id;
+    if (roleModels[key] === id) {
+      roleModels[key] = '';
+      return;
+    }
+    const gap = roleGap(modelCards.find((c) => c.id === id), key);
+    // The server accepts the save and silently drops the flag, leaving setup
+    // incomplete with nothing to explain it — refuse up front instead.
+    if (gap) return app.toast('error', `${id} can’t be the ${key} model: it takes no ${gap} input`);
+    roleModels[key] = id;
+  }
+  function setModalities(card, mods) {
+    // At least one modality must stay selected: an empty change is rejected by
+    // re-pushing the current value (new reference) into the group.
+    card.inputModality = mods.length ? mods : [...card.inputModality];
+    const dropped = ROLES.filter((r) => roleModels[r.key] === card.id && roleGap(card, r.key));
+    for (const r of dropped) roleModels[r.key] = '';
+    if (dropped.length)
+      app.toast('error', `${card.id} no longer takes the input its ${dropped.map((r) => r.key).join('/')} role needs — flag cleared`);
+  }
+  // The input a card is missing to hold a role, or '' when it can.
+  function roleGap(card, key) {
+    const { needs } = ROLES.find((r) => r.key === key);
+    return card?.inputModality.includes(needs) ? '' : needs;
+  }
+  // A designation whose card is gone or lost its modality counts as unset:
+  // that is what the save would store.
+  function roleModelOk(key) {
+    return !!modelCards.find((c) => c.id === roleModels[key] && !roleGap(c, key));
   }
   function setEfforts(card, efforts) {
     // At least one level must stay selected — an empty change is rejected by
@@ -497,7 +534,10 @@
       applyConfig(data?.config ?? {}); // re-sync baseline; Save disables again
       await app.refreshAfterSetup();
       if (app.setupComplete === false) {
-        app.toast('success', 'Saved — set the provider and default models to finish setup');
+        // applyConfig already re-read the stored config, so this names what the
+        // save really left unset rather than repeating a generic nag.
+        const left = setupSteps.filter((s) => !s.done).map((s) => s.label);
+        app.toast('error', left.length ? `Still needed: ${left.join(', ')}` : 'Setup still incomplete');
       } else {
         app.toast('success', 'Settings saved');
       }
@@ -533,10 +573,7 @@
     <div class="relative z-10 flex h-app w-full max-w-2xl flex-col bg-card text-card-foreground p-safe sm:h-auto sm:max-h-[92dvh] sm:rounded-xl sm:border sm:shadow-xl ss-panel">
       <!-- Header -->
       <div class="flex items-start justify-between gap-4 border-b px-4 py-4 sm:px-6">
-        <div class="min-w-0">
-          <h2 class="text-lg font-semibold">Settings</h2>
-          <p class="truncate text-sm text-muted-foreground">Configure the provider, models, and server behavior</p>
-        </div>
+        <h2 class="text-lg font-semibold">Settings</h2>
         {#if canClose}
           <button
             type="button"
@@ -549,13 +586,22 @@
         {/if}
       </div>
 
-      <!-- Forced-setup notice -->
+      <!-- Forced-setup notice: what config.Complete() still needs, live -->
       {#if app.setupComplete === false}
-        <div class="mx-4 mt-4 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm text-foreground sm:mx-6">
-          This server isn’t ready yet. Set the <strong>provider</strong> (base URL + API key) and flag a model as
-          <strong>Chat</strong> and <strong>Task</strong> below, then save. You can’t close this screen until setup is
-          complete. A flag is dropped on save when the model can’t take the input its role needs — text for Chat and
-          Task, image for Vision, document for Document.
+        <div class="mx-4 mt-4 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm sm:mx-6">
+          <p class="font-medium text-foreground">Finish setup to start chatting:</p>
+          <ul class="mt-2 space-y-1.5">
+            {#each setupSteps as step (step.label)}
+              <li class="flex items-center gap-2 {step.done ? 'text-muted-foreground' : 'font-medium text-foreground'}">
+                {#if step.done}
+                  <Check class="size-3.5 shrink-0 text-success" strokeWidth={2.25} aria-hidden="true" />
+                {:else}
+                  <Circle class="size-3.5 shrink-0 text-primary" strokeWidth={2.25} aria-hidden="true" />
+                {/if}
+                {step.label}
+              </li>
+            {/each}
+          </ul>
         </div>
       {/if}
 
@@ -603,9 +649,6 @@
                   {#if adding}<Spinner class="size-3.5" />{:else}Add{/if}
                 </Button>
               </div>
-              {#if !providerReady}
-                <p class={hint}>Enter the provider base URL and API key above to add models.</p>
-              {/if}
             </div>
             {#if modelCards.length === 0}
               <p class={hint}>No models configured.</p>
@@ -686,12 +729,7 @@
                         size="sm"
                         variant="outline"
                         value={card.inputModality}
-                        onValueChange={(v) => {
-                          // At least one modality must stay selected: an
-                          // empty change is rejected by re-pushing the
-                          // current value (new reference) into the group.
-                          card.inputModality = (v ?? []).length ? v : [...card.inputModality];
-                        }}
+                        onValueChange={(v) => setModalities(card, v ?? [])}
                         class="w-full flex-wrap justify-start"
                       >
                         {#each INPUT_MODALITIES as mod (mod)}
@@ -861,7 +899,7 @@
                     </div>
                   </div>
                 {:else if s.url.trim()}
-                  <p class={hint}>No tools listed — press Fetch to dial this server.</p>
+                  <p class={hint}>No tools listed.</p>
                 {/if}
               </div>
             {:else}
@@ -872,7 +910,6 @@
           <!-- Integrated tool defaults (MCP tools live in their server cards) -->
           <section class="space-y-3">
             <h3 class="text-base font-semibold">Tool defaults</h3>
-            <p class={hint}>What each new chat starts with. The per-chat Tools menu overrides these for that chat only. MCP tools are toggled in their own server card above.</p>
             <div class="flex flex-col gap-0.5">
               {#each integratedTools as tool (tool.name)}
                 <ToolToggleRow {tool} checked={toolDefaultOn(tool)} onToggle={(checked) => setToolDefault(tool.name, checked)} />

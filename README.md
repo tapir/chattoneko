@@ -6,14 +6,14 @@ Your own cute cat AI assistant, self-hosted.
 
 *Chatto* is the Japanese pronunciation of the English word "chat"; *neko* is Japanese for "cat." ChattoNeko is a chat client for OpenAI-compatible APIs — it plays best with OpenRouter, which exposes extra model metadata, but it works fully with any other OpenAI-compatible provider. You run it on your own server or machine. It is made for personal, self-hosted use, not as a SaaS product: no accounts, no multi-tenancy, no billing.
 
-It is extremely small. Everything is one static Go binary with the web UI embedded, about 8 MB after UPX packing. The Docker image is roughly 16 MB and the Android APK about 10 MB. Small as it is, it has what you expect from a chat app — streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login — plus a few unique features.
+It is extremely small. Everything is one static Go binary with the web UI embedded, about 8 MB after UPX packing. The Docker image is roughly 12 MB — busybox, the two static binaries and a CA bundle — and the Android APK about 10 MB. Small as it is, it has what you expect from a chat app — streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login — plus a few unique features.
 
 ## What it does
 
 - Chat with any model through an OpenAI-compatible API (chat completions, transcriptions, speech). Keep a list of favorite models and switch per chat.
 - Replies stream in as they are written and can be stopped at any time.
 - Models that reason out loud show their thinking in collapsible blocks — one per step of a tool-using reply, each next to the tool calls it produced.
-- Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted in your browser as you attach them (images to PNGs at most 1280px on the long side, never shrunk by more than half, optionally quantized to 256 colours; audio to 16 kHz mono MP3), and a picture the model hands back goes through that same image conversion on the server, so both land in the chat in the same shape. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcription` tools), once you flag one in settings.
+- Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted on the server as they are uploaded (images to PNGs at most 1920px on the long side, optionally quantized to 256 colours; audio to 22050 Hz mono MP3), so what lands in the chat is always the same shape whatever you picked. Accepted: `png bmp tga jpg jpeg gif webp` images, `wav mp3 ogg oga opus webm mkv mov flac alac m4a m4b mp4 aac` audio (a video keeps its soundtrack), `pdf`, and any text file. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcription` tools), once you flag one in settings.
 - The model can call tools, plus any MCP server (HTTP-only) you add.
 - The model can hand files back to you as download links, or show images, PDFs, and audio inline.
 - Chats are saved and titled automatically; search, rename, and delete.
@@ -33,7 +33,7 @@ One program plays three parts:
 Everything the server keeps — configuration, chats, messages, attachments, model metadata — lives in a single SQLite database file. Backing up means copying that one file; moving servers means moving that one file.
 
 > **IMPORTANT:**
-> Because file conversion happens client-side in the browser, HTTPS is required for certain browser APIs. Put the app behind a reverse proxy (nginx or HAProxy) with your own certificate, or behind Cloudflare's proxy with its SSL certs.
+> A few browser APIs need a secure context: sharing an attachment from the web UI is one (the Android app has its own share sheet). Put the app behind a reverse proxy (nginx or HAProxy) with your own certificate, or behind Cloudflare's proxy with its SSL certs, or use `http://localhost`.
 
 ## Run it
 
@@ -49,7 +49,9 @@ docker run -d --name chattoneko \
 
 Then open http://localhost:8080.
 
-From source. You need [Go](https://go.dev), [Node.js](https://nodejs.org), [sqlc](https://sqlc.dev), and optionally [UPX](https://upx.github.io):
+The image carries its own ffmpeg: `ffmpeg/build.sh` compiles a ~2.8 MB fully static one with exactly the image and audio support the conversions need, in the same Arch build stage as the Go binary, and only the two binaries land in the final image.
+
+From source. You need [Go](https://go.dev), [Node.js](https://nodejs.org), [sqlc](https://sqlc.dev), an `ffmpeg` on your PATH, and optionally [UPX](https://upx.github.io):
 
 ```bash
 git clone https://github.com/tapir/chattoneko && cd chattoneko
@@ -57,6 +59,8 @@ make run          # builds the web UI, generates queries, packs the binary, star
 ```
 
 `make build` alone leaves you with `./chattoneko`, which you can run from anywhere.
+
+Any recent ffmpeg converts the uploads; `make ffmpeg` builds the slim static one the Docker image ships instead (needs `musl` and `nasm`, ~2 minutes, output in `ffmpeg/out/bin`). Point the server at it — or at any other build — with `CHATTO_FFMPEG`.
 
 The Android APK is built with `make mobile-apk`.
 
@@ -94,6 +98,7 @@ All optional. `CHATTO_USERNAME` and `CHATTO_PASSWORD` are read once at startup; 
 | `CHATTO_USERNAME` | Login name. Set both this and the password to require a sign-in; if either is missing there is no auth at all. |
 | `CHATTO_PASSWORD` | Login password, used as-is. Nothing about the login is written to the database; changing it means restarting. |
 | `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time` tool's result so agents know where you are. |
+| `CHATTO_FFMPEG` | The ffmpeg that converts uploaded pictures and recordings. Defaults to `ffmpeg` on your PATH; the Docker image ships its own at `/usr/local/bin/ffmpeg`. Read once at startup. |
 
 ### Command-line flags
 
@@ -103,7 +108,9 @@ All optional. `CHATTO_USERNAME` and `CHATTO_PASSWORD` are read once at startup; 
 | `-listen` | `:8080` | HTTP listen address, fixed for the lifetime of the process. |
 | `-debug` | off | Debug logging. |
 
-The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `/var/lib/chattoneko` covers all state. A bind mount works too: the entrypoint fixes directory ownership at start, then drops to uid/gid 1000.
+The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `/var/lib/chattoneko` covers all state. A bind mount works too and needs no host-side `chown`: the container starts as root, makes that directory writable by uid/gid 1000, and drops to it before opening anything — no shell entrypoint, the app does it itself. Conversions stage their temp files in `/tmp` (add `--tmpfs /tmp:size=256m` to keep them off disk); the directory is emptied at startup, so a killed conversion cannot accumulate.
+
+A conversion stages two temp files under `/tmp/chattoneko-media` and deletes both when it finishes, including on failure; the directory is emptied at startup, so a killed conversion cannot accumulate. Add `--tmpfs /tmp:size=256m` if you would rather those bytes never touched the container's disk layer.
 
 ## Tools
 
@@ -126,7 +133,7 @@ It is small and meant for self-hosted personal use. Accounts, permissions, quota
 
 **What if I want my family to use it?**
 
-Run one instance per person. The image is 16 MB and idles at almost nothing, so ten of them on a single commodity server is not a thought you need to have twice. Everybody gets a private instance with their own database, their own models, and their own API key.
+Run one instance per person. The image is 12 MB and idles at almost nothing, so ten of them on a single commodity server is not a thought you need to have twice. Everybody gets a private instance with their own database, their own models, and their own API key.
 
 **What about transcription and speech?**
 
@@ -136,9 +143,9 @@ Both are in, because speech-to-text and text-to-speech have de-facto-standard sh
 
 No. Providers share no shape for either. OpenAI's `/images/generations` is text-to-image only, with img2img on a separate `/images/edits` route; OpenRouter serves neither and uses `POST /api/v1/images` with its own parameter names. ChattoNeko sticks to routes every OpenAI-compatible provider implements the same way, and video has no standard route at all.
 
-**Why does attaching a recording fail in my browser?**
+**Why is an attachment rejected?**
 
-Audio is transcoded in the browser to MP3, and that encoder is WASM (a LAME build), so it is there in every browser. What can still be missing is the *decoder* for a compressed source: mediabunny reads one through the WebCodecs `AudioDecoder` — Chrome and Edge 94+, Firefox 130+, Safari 16.4+ — and WebCodecs requires a secure context, so opening the app over plain HTTP at a LAN address (`http://192.168.1.20:8080`) converts a WAV and refuses an m4a, in any browser. Use `http://localhost:8080`, put the server behind HTTPS, or use the Android app. Images are unaffected.
+Two reasons, both reported in the toast. The extension is not on the accepted list (and the file is not text), or it is on the list but the server's ffmpeg could not make sense of the bytes — a corrupt file, or a codec inside an accepted container that the slim build does not carry (HEVC video, for instance). The list is in the attachments bullet above; the conversion always produces a PNG or a mono MP3, so a file too exotic to convert is never stored half-read.
 
 **iOS?**
 

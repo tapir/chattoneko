@@ -10,6 +10,11 @@
 // is used as plaintext, and neither value reaches the database. An empty
 // config table is seeded with defaults, and the server reports setup mode
 // until the provider and model fields are set through the API.
+//
+// In a container the process starts as root, makes the data directory writable
+// by uid 1000 and drops to it before opening anything (droproot_linux.go), so
+// a bind mount needs no host-side chown and nothing untrusted — ffmpeg parses
+// uploaded media in-process — ever runs as root.
 package main
 
 import (
@@ -33,6 +38,7 @@ import (
 	"chattoneko/internal/db"
 	"chattoneko/internal/engine"
 	"chattoneko/internal/mcphub"
+	"chattoneko/internal/media"
 	"chattoneko/internal/provider"
 	"chattoneko/internal/store"
 	"chattoneko/internal/titlegen"
@@ -75,6 +81,13 @@ func run() error {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
+	// Before anything is opened: the container starts as root only so a
+	// bind-mounted data directory can be made writable, then the process drops
+	// to 1000:1000 for the rest of its life (see droproot_linux.go).
+	if err := dropRoot(filepath.Dir(dbFile)); err != nil {
+		return fmt.Errorf("drop privileges: %w", err)
+	}
+
 	// 0o600: the config table holds the provider API key.
 	if _, err := os.Stat(dbFile); os.IsNotExist(err) {
 		f, err := os.OpenFile(dbFile, os.O_CREATE, 0o600)
@@ -103,6 +116,9 @@ func run() error {
 	warnIfExposed(cfgStore.Get(), *listen)
 
 	now := time.Now()
+	if err := media.Sweep(); err != nil {
+		slog.Warn("sweep conversion temp files", "error", err)
+	}
 	if err := st.DeleteOrphanAttachments(ctx, now.Add(-24*time.Hour).UnixMilli()); err != nil {
 		slog.Warn("sweep orphan attachments", "error", err)
 	}

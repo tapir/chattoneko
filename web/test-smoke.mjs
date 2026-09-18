@@ -293,57 +293,6 @@ console.log('OK streaming parity');
   console.log('OK attachment text sniff');
 }
 
-// --- image scaling policy ---
-{
-  const { scaleToFit } = await import('./src/lib/media.js');
-  // The LONGEST side is capped at 1280, whichever way the image is oriented —
-  // but never by more than 2x, so a huge shot keeps half its size instead.
-  const land = scaleToFit(5000, 3000, 1280);
-  assert(land.width === 2500 && land.height === 1500, '5000x3000 stops at 2x (2500), not at 1280');
-  const port = scaleToFit(3000, 5000, 1280);
-  assert(port.height === 2500 && port.width === 1500, 'portrait capped by height, same 2x floor');
-  const mid = scaleToFit(2000, 1000, 1280);
-  assert(mid.width === 1280 && mid.height === 640, '2000x1000 is inside the 2x floor, so 1280 wins');
-  const exact = scaleToFit(2560, 1440, 1280);
-  assert(exact.width === 1280 && exact.height === 720, 'exactly 2x lands on the cap');
-  const same = scaleToFit(800, 600, 1280);
-  assert(same.width === 800 && same.height === 600, 'smaller images are never upscaled');
-  console.log('OK image scaling');
-}
-
-// --- the image encoder: an indexed PNG, not the truecolor one toBlob writes ---
-{
-  const { encodePNG } = await import('./src/lib/png-enc.js');
-  const w = 8, h = 4;
-  const data = new Uint8ClampedArray(w * h * 4);
-  for (let i = 0; i < w * h; i++) {
-    data[i * 4] = (i * 31) % 256;
-    data[i * 4 + 1] = 200 - i * 4;
-    data[i * 4 + 2] = (i * 7) % 256;
-    data[i * 4 + 3] = 255;
-  }
-  data[3] = 0; // one fully transparent pixel, which the palette has to carry
-
-  const out = new Uint8Array(encodePNG({ data, width: w, height: h }));
-  const dv = new DataView(out.buffer, out.byteOffset, out.byteLength);
-  assert(out[0] === 0x89 && out[1] === 0x50 && out[2] === 0x4e, 'output opens with the PNG signature');
-  assert(dv.getUint32(16) === w && dv.getUint32(20) === h, 'IHDR keeps the canvas dimensions');
-  assert(out[25] === 3, `IHDR colour type is ${out[25]}, want 3 (indexed)`);
-
-  const len = {};
-  for (let o = 8; o + 8 < out.length; o += 12 + dv.getUint32(o)) {
-    len[String.fromCharCode(out[o + 4], out[o + 5], out[o + 6], out[o + 7])] = dv.getUint32(o);
-  }
-  assert(len.PLTE > 0 && len.PLTE / 3 <= 256, `palette holds ${len.PLTE / 3} colours, want 1-256`);
-  assert(len.tRNS > 0, 'a transparent pixel is carried by a tRNS chunk');
-
-  const UPNG = (await import('@upng/upng-js/dist/UPNG.esm.js')).default;
-  const back = new Uint8Array(UPNG.toRGBA8(UPNG.decode(out.buffer))[0]);
-  assert(back[3] === 0, 'the transparent pixel decodes transparent');
-  assert(back[(w * h - 1) * 4 + 3] === 255, 'an opaque pixel decodes opaque');
-  console.log('OK image encode');
-}
-
 // --- long press (the attachment action sheet's trigger) ---
 // The whole point is what it does NOT do: message text keeps the browser's
 // long press, and a desktop right-click keeps the native menu.
@@ -443,38 +392,29 @@ console.log('OK streaming parity');
   console.log('OK media clock');
 }
 
-// --- media sniffing: magic bytes, never the filename ---
+// --- attachment kinds: the extension decides, the server converts ---
 {
-  const { sniffKind } = await import('./src/lib/media.js');
-  const cases = [
-    [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'image'], // PNG
-    [[0xff, 0xd8, 0xff, 0xe0], 'image'], // JPEG
-    [[0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50], 'image'], // RIFF/WEBP
-    [[0x47, 0x49, 0x46, 0x38, 0x39, 0x61], 'image'], // GIF89a
-    [[0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0], 'image'], // BMP + its four reserved zeroes
-    [[0, 0, 1, 0, 1, 0], ''], // ICO: not a supported image, so it is not media
-    [[0x25, 0x50, 0x44, 0x46], 'pdf'], // %PDF
-    [[0x49, 0x44, 0x33, 4], 'audio'], // ID3
-    [[0x4f, 0x67, 0x67, 0x53], 'audio'], // OggS
-    [[0x66, 0x4c, 0x61, 0x43], 'audio'], // fLaC
-    [[0x1a, 0x45, 0xdf, 0xa3], 'audio'], // EBML (WebM)
-    [[0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45], 'audio'], // RIFF/WAVE
-    [[0xff, 0xfb, 0x90, 0x44], 'audio'], // bare MP3 frame
-    // Not media. A video container and a zip fall through to the caller's
-    // content sniff, which refuses them; text is what that sniff accepts.
-    [[0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d], ''], // ISO-BMFF
-    [[0x50, 0x4b, 3, 4], ''], // zip
-    [[0x68, 0x65, 0x6c, 0x6c, 0x6f], ''], // "hello"
-    [[0x42, 0x4d, 0x61, 0x70, 0x6c, 0x65], ''], // "BMapple": text, not a BMP
-  ];
-  for (const [bytes, want] of cases) {
-    // A name that lies must not change the answer.
-    for (const name of ['x.bin', 'x.png', 'x']) {
-      const got = await sniffKind(new File([new Uint8Array(bytes)], name));
-      assert(got === want, `sniffKind(${name}, [${bytes.slice(0, 4)}…]) = ${got || '""'}, want ${want || '""'}`);
-    }
+  const { kindOfExt, previewsLocally } = await import('./src/lib/media.js');
+  for (const [name, want] of [
+    ['photo.PNG', 'image'], ['shot.jpeg', 'image'], ['sprite.tga', 'image'],
+    ['  photo.png  ', 'image'], // trimmed like the server's CleanFilename does
+    ['anim.webp', 'image'], ['scan.bmp', 'image'], ['pic.gif', 'image'],
+    ['memo.wav', 'audio'], ['track.flac', 'audio'], ['voice.opus', 'audio'],
+    ['clip.mp4', 'audio'], ['movie.mkv', 'audio'], ['rec.webm', 'audio'],
+    ['book.m4b', 'audio'], ['raw.aac', 'audio'], ['song.oga', 'audio'],
+    ['paper.pdf', 'pdf'],
+    // Not media: the caller goes on to judge these by content.
+    ['notes.md', ''], ['main.go', ''], ['log', ''], ['archive.zip', ''],
+    ['scan.tiff', ''], ['sticker.ico', ''], ['photo.avif', ''], ['x.png.exe', ''],
+  ]) {
+    assert(kindOfExt(name) === want, `kindOfExt(${name}) = ${kindOfExt(name) || '""'}, want ${want || '""'}`);
   }
-  console.log('OK media sniffing');
+  // A lying name is the server's problem: the bytes are never read here.
+  assert(kindOfExt('liar.png') === 'image', 'the name decides, not the bytes');
+  // TGA is the one accepted picture no browser can paint from the local file.
+  assert(!previewsLocally('sprite.tga') && previewsLocally('photo.jpg'),
+    'only TGA has no local preview');
+  console.log('OK attachment kinds');
 }
 
 // --- the suffix a converted blob's own type gives its file ---

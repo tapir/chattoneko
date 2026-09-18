@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -22,6 +28,7 @@ import (
 	"chattoneko/internal/db"
 	"chattoneko/internal/engine"
 	"chattoneko/internal/mcphub"
+	"chattoneko/internal/media"
 	"chattoneko/internal/provider"
 	"chattoneko/internal/store"
 )
@@ -840,102 +847,150 @@ func TestMergedStreamCarriesGeneration(t *testing.T) {
 	}
 }
 
+// postFiles uploads files to a chat's attachment route: the status, the raw
+// body (a rejection's message) and the stored metas on success.
+func (ts *testServer) postFiles(chatID string, files map[string][]byte) (int, []byte, []*store.AttachmentMeta) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for name, data := range files {
+		fw, err := mw.CreateFormFile("files", name)
+		if err != nil {
+			panic(err)
+		}
+		if _, err := fw.Write(data); err != nil {
+			panic(err)
+		}
+	}
+	mw.Close()
+	req, _ := http.NewRequest("POST", ts.server.URL+"/api/chats/"+chatID+"/attachments", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := ts.server.Client().Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var out struct {
+		Attachments []*store.AttachmentMeta `json:"attachments"`
+	}
+	_ = json.Unmarshal(body, &out)
+	return resp.StatusCode, body, out.Attachments
+}
+
 func TestUploadValidation(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 	chatID := ts.createChat(t)
 
-	upload := func(files map[string][]byte) *httptest.ResponseRecorder {
-		var buf bytes.Buffer
-		mw := multipart.NewWriter(&buf)
-		for name, data := range files {
-			fw, err := mw.CreateFormFile("files", name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := fw.Write(data); err != nil {
-				t.Fatal(err)
-			}
-		}
-		mw.Close()
-		req, _ := http.NewRequest("POST", ts.server.URL+"/api/chats/"+chatID+"/attachments", &buf)
-		req.Header.Set("Content-Type", mw.FormDataContentType())
-		resp, err := ts.server.Client().Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		rec := httptest.NewRecorder()
-		rec.Code = resp.StatusCode
-		body := new(bytes.Buffer)
-		_, _ = body.ReadFrom(resp.Body)
-		rec.Body = body
-		return rec
-	}
-
 	// Text file → 200.
-	rec := upload(map[string][]byte{"notes.md": []byte("# hi\n")})
-	if rec.Code != 200 {
-		t.Fatalf("text upload: %d %s", rec.Code, rec.Body)
+	if code, body, _ := ts.postFiles(chatID, map[string][]byte{"notes.md": []byte("# hi\n")}); code != 200 {
+		t.Fatalf("text upload: %d %s", code, body)
 	}
 	// Binary junk → 415.
-	rec = upload(map[string][]byte{"x.bin": {0x00, 0x01, 0x02}})
-	if rec.Code != 415 {
-		t.Fatalf("binary upload: %d", rec.Code)
+	if code, _, _ := ts.postFiles(chatID, map[string][]byte{"x.bin": {0x00, 0x01, 0x02}}); code != 415 {
+		t.Fatalf("binary upload: %d", code)
 	}
-	// Supported audio (a bare MP3 frame, which is what the browser's LAME
-	// emits) → 200, stored verbatim as kind=file under its own mime, which the
-	// inline player needs.
-	rec = upload(map[string][]byte{"song.mp3": {
-		0xff, 0xf2, 0x58, 0xc4, 0x00, 0x00, 0x00, 0x00, 'X', 'i', 'n', 'g',
-	}})
-	if rec.Code != 200 {
-		t.Fatalf("mp3 upload: %d %s", rec.Code, rec.Body)
-	}
-	var kind, mime string
-	if err := ts.db.QueryRow(
-		"SELECT kind, mime FROM attachments WHERE chat_id = ? AND filename = 'song.mp3'", chatID,
-	).Scan(&kind, &mime); err != nil {
-		t.Fatal(err)
-	}
-	if kind != "file" || mime != "audio/mpeg" {
-		t.Fatalf("mp3 stored as kind=%q mime=%q, want file/audio/mpeg", kind, mime)
-	}
-	// An unsupported format (a WebM the client did not convert) → 415, decided
-	// by content: the extension says nothing.
-	rec = upload(map[string][]byte{"song.webm": {
-		0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x84, 'w', 'e', 'b', 'm',
-	}})
-	if rec.Code != 415 {
-		t.Fatalf("webm upload: %d %s", rec.Code, rec.Body)
+	// An extension nothing converts → 415, decided by the name alone: no byte
+	// of it is sniffed.
+	if code, _, _ := ts.postFiles(chatID, map[string][]byte{"scan.tiff": {0x49, 0x49, 0x2a, 0x00}}); code != 415 {
+		t.Fatalf("tiff upload: %d", code)
 	}
 	// Too many files → 400.
 	files := map[string][]byte{}
 	for i := 0; i < maxUploadFiles+1; i++ {
 		files[fmt.Sprintf("f%d.txt", i)] = []byte("x")
 	}
-	rec = upload(files)
-	if rec.Code != 400 {
-		t.Fatalf("too many files: %d", rec.Code)
+	if code, _, _ := ts.postFiles(chatID, files); code != 400 {
+		t.Fatalf("too many files: %d", code)
 	}
 	// Oversize text file → 413 (config cap is 1 MiB in this harness).
-	rec = upload(map[string][]byte{"big.txt": bytes.Repeat([]byte("x"), (1<<20)+1)})
-	if rec.Code != 413 {
-		t.Fatalf("oversize upload: %d", rec.Code)
+	if code, _, _ := ts.postFiles(chatID, map[string][]byte{"big.txt": bytes.Repeat([]byte("x"), (1<<20)+1)}); code != 413 {
+		t.Fatalf("oversize upload: %d", code)
 	}
 	// Mixed batch: a valid file plus binary junk. Map iteration order is
 	// unspecified, but either way no attachment may survive: when the valid
 	// file is processed first the rollback must delete it, when the junk is
 	// processed first nothing was stored yet.
-	rec = upload(map[string][]byte{"ok.txt": []byte("keep me"), "junk.bin": {0x00, 0x01, 0x02}})
-	if rec.Code != 415 {
-		t.Fatalf("mixed batch: %d", rec.Code)
+	if code, _, _ := ts.postFiles(chatID, map[string][]byte{"ok.txt": []byte("keep me"), "junk.bin": {0x00, 0x01, 0x02}}); code != 415 {
+		t.Fatalf("mixed batch: %d", code)
 	}
 	var n int
 	if err := ts.db.QueryRow("SELECT COUNT(*) FROM attachments WHERE chat_id = ?", chatID).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 { // only the two valid single-file uploads may remain
-		t.Fatalf("attachments left behind = %d, want 2 (failed batch must roll back)", n)
+	if n != 1 { // only the text upload may remain
+		t.Fatalf("attachments left behind = %d, want 1 (failed batch must roll back)", n)
+	}
+}
+
+// silenceWAV is a quarter second of 8 kHz mono silence: the smallest real
+// audio an upload can carry, and enough for the conversion this path runs.
+func silenceWAV() []byte {
+	const samples = 2000
+	b := make([]byte, 44+2*samples)
+	copy(b, "RIFF\x00\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"+
+		"\x40\x1f\x00\x00\x80\x3e\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
+	binary.LittleEndian.PutUint32(b[4:], uint32(len(b)-8))
+	binary.LittleEndian.PutUint32(b[40:], 2*samples)
+	return b
+}
+
+func testJPEG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h)), nil); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// An upload is stored as its conversion, never as it arrived: every picture
+// lands as a PNG under a .png name and every recording as a mono MP3 under
+// .mp3. Both need the ffmpeg the image ships.
+func TestUploadConversion(t *testing.T) {
+	if _, err := exec.LookPath(media.Binary()); err != nil {
+		t.Skipf("no %s on PATH", media.Binary())
+	}
+	ts := newTestServer(t, quickProvider{}, false)
+	chatID := ts.createChat(t)
+	stored := func(t *testing.T, name string, data []byte) *store.AttachmentMeta {
+		t.Helper()
+		code, body, metas := ts.postFiles(chatID, map[string][]byte{name: data})
+		if code != 200 {
+			t.Fatalf("upload %s: %d %s", name, code, body)
+		}
+		return metas[0]
+	}
+
+	jpg := stored(t, "photo.jpeg", testJPEG(t, 40, 30))
+	if jpg.Kind != "image" || jpg.Mime != "image/png" || jpg.Filename != "photo.png" {
+		t.Fatalf("jpeg stored as %q %s/%s, want photo.png image/image/png",
+			jpg.Filename, jpg.Kind, jpg.Mime)
+	}
+	if got, err := ts.store.GetAttachment(context.Background(), jpg.ID); err != nil {
+		t.Fatal(err)
+	} else if !bytes.HasPrefix(got.Data, []byte("\x89PNG")) {
+		t.Fatalf("stored bytes are %x, want a PNG", got.Data[:4])
+	}
+
+	wav := stored(t, "memo.wav", silenceWAV())
+	if wav.Kind != "file" || wav.Mime != "audio/mpeg" || wav.Filename != "memo.mp3" {
+		t.Fatalf("wav stored as %q %s/%s, want memo.mp3 file/audio/mpeg",
+			wav.Filename, wav.Kind, wav.Mime)
+	}
+	if got, err := ts.store.GetAttachment(context.Background(), wav.ID); err != nil {
+		t.Fatal(err)
+	} else if !(bytes.HasPrefix(got.Data, []byte("ID3")) ||
+		got.Data[0] == 0xff && got.Data[1]&0xe0 == 0xe0) {
+		t.Fatalf("stored bytes are %x, want an MP3", got.Data[:2])
+	}
+
+	// A name that lies is the conversion's to reject, not the classifier's.
+	if code, _, _ := ts.postFiles(chatID, map[string][]byte{"liar.png": {0x50, 0x4b, 0x03, 0x04}}); code != 415 {
+		t.Fatalf("a zip named .png: %d, want 415", code)
+	}
+	// The work directory is empty again: nothing the app touched survives.
+	if entries, err := os.ReadDir(filepath.Join(os.TempDir(), "chattoneko-media")); err == nil && len(entries) > 0 {
+		t.Fatalf("%d temp files left behind", len(entries))
 	}
 }
 

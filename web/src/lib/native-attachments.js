@@ -11,8 +11,8 @@ import { extFromMime } from "./media.js";
 // MIME filter for the Files picker: none. Android reports application/
 // octet-stream for every extension it can't map (.go, .rs, .sh, .toml…), so
 // any allow-list either hides those files or includes the catch-all and
-// filters nothing. addAttachments() classifies by content, so the picker stays
-// out of it.
+// filters nothing. addAttachments() classifies by extension and content, so
+// the picker stays out of it.
 
 // Plugin rejections for a dismissed picker: the camera plugin tags them
 // with OS-PLUG-CAMR-* codes (CameraErrorCode), the file picker (and the
@@ -59,10 +59,11 @@ function mediaUrl(media) {
 // JPEG. The drawer is already closed by the caller before this runs.
 //
 // CAPTURE_SIDE caps the long side: the stock camera app returns a full-sensor
-// photo (several MB), and the browser conversion caps it at 1280px anyway. Both
-// target options are required — the plugin ignores a lone value; aspect is
-// preserved. Gallery picks skip this: they come through the photo picker as the
-// original bytes, never re-encoded.
+// photo (several MB) and this is what it is downscaled to before the upload.
+// The server's own cap is 1920 and it never upscales, so this stays the
+// bandwidth/quality knob for mobile. Both target options are required — the
+// plugin ignores a lone value; aspect is preserved. Gallery picks skip this:
+// they come through the photo picker as the original bytes, never re-encoded.
 const CAPTURE_SIDE = 1280;
 
 export async function capturePhoto() {
@@ -105,9 +106,10 @@ async function pickVia(pick, what) {
   }
 }
 
-// The picker's display name when it carries an extension. The plugin falls back
-// to the URI's last path segment ("12") when a provider has no DISPLAY_NAME —
-// synthesize a suffixed name in that case. Classification never reads it.
+// The picker's display name when it carries an extension — which is what
+// classification reads now, so a name without one has to be given the suffix
+// the blob's own mime implies. The plugin falls back to the URI's last path
+// segment ("12") when a provider has no DISPLAY_NAME.
 function pickedName(f, blob) {
   const name = f.name ?? "";
   if (/\.[A-Za-z0-9]{2,5}$/.test(name)) return name;

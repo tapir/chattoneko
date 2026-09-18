@@ -38,14 +38,6 @@ export default defineConfig({
     // vaul-svelte and the app's own components. It is a single-view chat app,
     // so there is no route to split it along and lazy-loading the sheets would
     // just delay the first interaction. Default 500 kB warning is noise here.
-    //
-    // 700 covers the one chunk above 600: mediabunny (~677 kB / ~170 kB
-    // gzipped), the audio converter. It is already the split the warning asks
-    // for — lib/media.js reaches it through a dynamic import(), so it is fetched
-    // only when somebody attaches a recording and never touches the critical
-    // path. Naming fewer input formats does not shrink it (Conversion pulls the
-    // full demuxer set either way), and going around Conversion to the raw
-    // read/write primitives would cost far more code than it saves bytes.
     chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {

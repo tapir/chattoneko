@@ -19,28 +19,29 @@ import {
 } from "./server.js";
 import { Typewriter } from "./typewriter.js";
 import { looksText } from "./text-sniff.js";
-import { sniffKind, convertImage, convertAudio } from "./media.js";
+import { kindOfExt, previewsLocally } from "./media.js";
 import { toast as sonnerToast } from "svelte-sonner";
 
 const CHAT_PAGE = 30;
 
 // Client-side staging rules mirror the server's (internal/attach +
 // internal/api limits, exposed via /api/config). Media is recognized by
-// extension and converted before upload (lib/media.js); the server stores what
-// it receives verbatim, so the bytes staged here are what lands in the
-// database. Everything else is judged by content in lib/text-sniff.js, so
-// there is no text-extension list to keep in sync.
+// EXTENSION here and converted on the server, so the bytes staged are the bytes
+// uploaded and what lands in the database is the conversion — which is also why
+// the stored-size cap only applies to a file that is stored verbatim. Everything
+// else is judged by content in lib/text-sniff.js, so there is no text-extension
+// list to keep in sync.
 // These two need a fallback because staging cannot work without the
 // /api/config limits; the stored-size cap does not — it falls back to 0, which
 // skips the client check and leaves the server authoritative.
 const FALLBACK_MAX_FILES = 8; // internal/api maxUploadFiles
 const FALLBACK_MAX_RAW_UPLOAD_BYTES = 64 * 1024 * 1024; // attach.MaxRawUploadBytes
 
-// classifyFile is one file's whole client-side verdict: a media kind by magic
-// bytes, "text" by content, "empty", or "" for anything the server would refuse.
+// classifyFile is one file's whole client-side verdict: a media kind by
+// extension, "text" by content, "empty", or "" for anything the server refuses.
 async function classifyFile(file) {
   if (file.size === 0) return "empty";
-  const kind = await sniffKind(file).catch(() => "");
+  const kind = kindOfExt(file.name);
   if (kind) return kind;
   return (await looksText(file).catch(() => false)) ? "text" : "";
 }
@@ -967,10 +968,8 @@ class AppState {
   }
 
   // Stage files for the next send entirely client-side: no chat is created
-  // and nothing is uploaded until send(). Media is converted first, so a
-  // staged entry's `file` is always the bytes that will actually be stored —
-  // and `converting` is true until they exist, which is what the composer's
-  // send button waits on.
+  // and nothing is uploaded until send(). A staged entry's `file` is exactly
+  // what gets sent — the server does the converting.
   async addAttachments(files) {
     // Classified up front so the staging loop below stays synchronous: reading
     // and writing pendingAttachments in the same tick is what keeps two
@@ -1001,11 +1000,11 @@ class AppState {
         this.toast("error", `${name}: unsupported file type`);
         continue;
       }
-      // Only images and recordings are converted; a PDF is stored as picked.
-      const converts = kind === "image" || kind === "audio";
       // The raw cap is the server's read limit and applies to everything. The
-      // stored cap applies to what ends up in the database: directly for text
-      // and PDF, and for media once the conversion lands (see convertPending).
+      // stored cap only applies to what is stored verbatim: media is converted
+      // server-side, so its stored size is the server's to judge (and its
+      // refusal arrives as a toast from send()).
+      const converts = kind === "image" || kind === "audio";
       if (
         file.size > maxRawBytes ||
         (!converts && maxBytes > 0 && file.size > maxBytes)
@@ -1019,8 +1018,8 @@ class AppState {
         filename: name,
         size: file.size,
         kind: kind === "image" ? "image" : kind === "text" ? "text" : "file",
-        converting: converts,
-        previewUrl: kind === "image" ? URL.createObjectURL(file) : "",
+        previewUrl:
+          kind === "image" && previewsLocally(name) ? URL.createObjectURL(file) : "",
       });
     }
     if (staged.length) {
@@ -1029,59 +1028,7 @@ class AppState {
         [key]: [...list, ...staged],
       };
     }
-    // Conversions start only once the entries are visible, so their chips can
-    // spin. Fire and forget: each one patches or drops its own entry by id.
-    for (const entry of staged) {
-      if (entry.converting) this.convertPending(key, entry);
-    }
     return staged;
-  }
-
-  // One staged media file's conversion: swap in the converted bytes (with the
-  // name and size the browser actually produced), or drop the entry and say
-  // why. Keyed by the chat it was staged in, which is not necessarily the
-  // active one by the time this lands.
-  async convertPending(key, entry) {
-    let file;
-    try {
-      file =
-        entry.kind === "image"
-          ? await convertImage(entry.file, this.config?.image_quantization === true)
-          : await convertAudio(entry.file);
-    } catch (err) {
-      this.dropPending(key, entry.id);
-      this.toast("error", `${entry.filename}: ${err?.message ?? "conversion failed"}`);
-      return;
-    }
-    const maxBytes = this.config?.limits?.upload_max_file_bytes ?? 0;
-    if (maxBytes > 0 && file.size > maxBytes) {
-      this.dropPending(key, entry.id);
-      this.toast("error", `${file.name}: still too large after conversion`);
-      return;
-    }
-    const previewUrl = entry.kind === "image" ? URL.createObjectURL(file) : "";
-    if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
-    const landed = this.patchPending(key, entry.id, {
-      file,
-      filename: file.name,
-      size: file.size,
-      previewUrl,
-      converting: false,
-    });
-    if (!landed && previewUrl) URL.revokeObjectURL(previewUrl); // removed meanwhile
-  }
-
-  // Patch one staged entry by id and report whether it was still there.
-  // Always against the LIVE list: conversions land in any order, and other
-  // calls (or the chip's ✕) may have changed it in between.
-  patchPending(key, id, patch) {
-    const all = this.pendingAttachments[key] ?? [];
-    if (!all.some((a) => a.id === id)) return false;
-    this.pendingAttachments = {
-      ...this.pendingAttachments,
-      [key]: all.map((a) => (a.id === id ? { ...a, ...patch } : a)),
-    };
-    return true;
   }
 
   dropPending(key, id) {

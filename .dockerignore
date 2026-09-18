@@ -26,3 +26,8 @@ docs
 mobile
 README.md
 docker-compose.yml
+
+# ffmpeg/build.sh regenerates all three (190 MB of tarballs and trees)
+ffmpeg/src
+ffmpeg/deps
+ffmpeg/out

@@ -1,0 +1,4 @@
+# build.sh regenerates all three: downloads + extracted trees, the static deps, the binary
+src/
+deps/
+out/

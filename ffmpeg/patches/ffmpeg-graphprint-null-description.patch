@@ -1,0 +1,17 @@
+fftools/graph: -print_graphs aborts in --enable-small builds
+
+NULL_IF_CONFIG_SMALL() makes every AVFilter.description NULL and
+avtext_print_string() asserts on a NULL value. Not fixed upstream as of 9.0.2 / master.
+
+--- a/fftools/graph/graphprint.c
++++ b/fftools/graph/graphprint.c
+@@ -392,7 +392,8 @@
+ 
+     if (filter->filter) {
+         print_str("filter_name", filter->filter->name);
+-        print_str_opt("description", filter->filter->description);
++        if (filter->filter->description)
++            print_str_opt("description", filter->filter->description);
+         print_int_opt("nb_inputs", filter->nb_inputs);
+         print_int_opt("nb_outputs", filter->nb_outputs);
+     }

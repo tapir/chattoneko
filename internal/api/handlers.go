@@ -20,6 +20,7 @@ import (
 	"chattoneko/internal/config"
 	"chattoneko/internal/engine"
 	"chattoneko/internal/mcphub"
+	"chattoneko/internal/media"
 	"chattoneko/internal/provider"
 	"chattoneko/internal/store"
 )
@@ -1015,10 +1016,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.chatExists(w, r.Context(), id) {
 		return
 	}
-	// Nothing is re-encoded, so the per-file stored cap
-	// (upload_max_file_bytes, enforced inside attach.Process) is also the real
-	// per-file body cost. This ceiling only guards the whole multipart read
-	// against pathological sizes (per-file raw cap + overhead).
+	// Every file is read whole before it is converted, so the raw per-file
+	// ceiling is what bounds the body (the stored cap is measured against the
+	// conversion's output, which nobody has seen yet). This only guards the
+	// whole multipart read against pathological sizes.
 	maxTotal := int64(attach.MaxRawUploadBytes)*maxUploadFiles + 64*1024
 	r.Body = http.MaxBytesReader(w, r.Body, maxTotal)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -1034,7 +1035,9 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("too many files (max %d)", maxUploadFiles))
 		return
 	}
-	maxFileBytes := s.cfg.Get().Limits.UploadMaxFileBytes
+	cfg := s.cfg.Get()
+	maxFileBytes := cfg.Limits.UploadMaxFileBytes
+	quantize := cfg.ImageQuantization
 	out := make([]*store.AttachmentMeta, 0, len(files))
 	// rollback deletes the attachments stored so far when a later file
 	// fails: orphans are only swept at startup, so a rejected file must not
@@ -1047,6 +1050,20 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// reject rolls back and answers with the status the failure's sentinel
+	// implies: a file that is not what its name claimed, or that could not be
+	// converted to what the database stores, is a 415.
+	reject := func(name string, err error) {
+		rollback()
+		switch {
+		case errors.Is(err, attach.ErrUnsupported):
+			writeError(w, http.StatusUnsupportedMediaType, name+": "+err.Error())
+		case errors.Is(err, attach.ErrTooLarge):
+			writeError(w, http.StatusRequestEntityTooLarge, name+": "+err.Error())
+		default:
+			writeError(w, http.StatusBadRequest, name+": "+err.Error())
+		}
+	}
 	for _, fh := range files {
 		name, err := attach.CleanFilename(fh.Filename)
 		if err != nil {
@@ -1054,12 +1071,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		// The multipart header already carries the size, so an oversized file is
-		// refused before its bytes are read into memory.
-		if maxFileBytes > 0 && fh.Size > maxFileBytes {
-			rollback()
-			writeError(w, http.StatusRequestEntityTooLarge,
-				name+": "+attach.ErrTooLarge.Error())
+		// The multipart header already carries the size, so a file over the raw
+		// ceiling is refused before its bytes are read into memory.
+		if fh.Size > attach.MaxRawUploadBytes {
+			reject(name, attach.ErrTooLarge)
 			return
 		}
 		f, err := fh.Open()
@@ -1069,8 +1084,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Per-file read cap (MaxBytesReader above only bounds the whole body):
-		// keep one pathological file from filling RAM before Process's own
-		// size check can reject it.
+		// keep one pathological file from filling RAM before the size check can
+		// reject it.
+		// ponytail: the whole file is held in RAM (64 MiB worst case, one file at
+		// a time) because Classify needs bytes for the text check; hand media
+		// straight to media.Image/Audio as an io.Reader if a big upload ever hurts.
 		data, err := io.ReadAll(io.LimitReader(f, attach.MaxRawUploadBytes+1))
 		_ = f.Close()
 		if err != nil {
@@ -1078,21 +1096,29 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "read upload: "+err.Error())
 			return
 		}
-		res, err := attach.Process(name, data, maxFileBytes)
+		res, err := attach.Classify(name, data, maxFileBytes)
 		if err != nil {
-			rollback()
-			if errors.Is(err, attach.ErrUnsupported) {
-				writeError(w, http.StatusUnsupportedMediaType, name+": "+err.Error())
-				return
-			}
-			if errors.Is(err, attach.ErrTooLarge) {
-				writeError(w, http.StatusRequestEntityTooLarge, name+": "+err.Error())
-				return
-			}
-			writeError(w, http.StatusBadRequest, name+": "+err.Error())
+			reject(name, err)
 			return
 		}
-		meta, err := s.store.CreateAttachment(r.Context(), id, res.Name, res.Kind, res.Mime, res.Size, res.Data)
+		// Media is stored as its conversion, never as it arrived: the temp files
+		// media runs ffmpeg over are gone by the time this returns, whatever it
+		// returned.
+		switch res.Convert {
+		case attach.ConvertImage:
+			data, err = media.Image(r.Context(), res.Ext, data, quantize)
+		case attach.ConvertAudio:
+			data, err = media.Audio(r.Context(), res.Ext, data)
+		}
+		if err != nil {
+			reject(name, err)
+			return
+		}
+		if maxFileBytes > 0 && int64(len(data)) > maxFileBytes {
+			reject(name, fmt.Errorf("%w: still too large after conversion", attach.ErrTooLarge))
+			return
+		}
+		meta, err := s.store.CreateAttachment(r.Context(), id, res.Name, res.Kind, res.Mime, int64(len(data)), data)
 		if err != nil {
 			rollback()
 			internalError(w, "store attachment", err)

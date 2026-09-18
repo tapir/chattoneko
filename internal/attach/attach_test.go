@@ -59,9 +59,9 @@ var (
 	tiffHeader = []byte{0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00}
 )
 
-// mp3Frame16k is the shape every upload carries: what the browser's LAME emits
-// at 16 kHz — a bare Xing frame, MPEG2 layer III, no ID3 tag.
-var mp3Frame16k = append([]byte{0xff, 0xf2, 0x58, 0xc4}, make([]byte, 60)...)
+// bareMP3Frame is an MP3 with no ID3 tag: a bare Xing frame, MPEG2 layer III.
+// Go's sniffer misses it, which is why the tool path matches it by hand.
+var bareMP3Frame = append([]byte{0xff, 0xf2, 0x58, 0xc4}, make([]byte, 60)...)
 
 func sampleWebP(t *testing.T) []byte {
 	t.Helper()
@@ -72,61 +72,63 @@ func sampleWebP(t *testing.T) []byte {
 	return payload
 }
 
-// ---- classification: magic bytes only, nothing decoded, nothing converted ----
+// ---- upload classification: the extension decides, the bytes are converted ----
 
-func TestProcessMediaStoredVerbatim(t *testing.T) {
+func TestClassifyMediaConverts(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		filename string
-		data     []byte
-		wantKind string
-		wantMime string
-		wantName string
+		name        string
+		filename    string
+		data        []byte
+		wantKind    string
+		wantMime    string
+		wantName    string
+		wantExt     string
+		wantConvert string
 	}{
-		{"png", "diagram.png", makePNG(t, 8, 6), KindImage, MimePNG, "diagram.png"},
-		{"audio mp3", "memo.mp3", mp3Frame16k, KindFile, MimeMP3, "memo.mp3"},
-		{"pdf", "invoice.pdf", []byte("%PDF-1.7 fake"), KindFile, MimePDF, "invoice.pdf"},
+		{"png", "diagram.png", makePNG(t, 8, 6), KindImage, MimePNG, "diagram.png", ".png", ConvertImage},
+		{"tga", "sprite.tga", []byte("not really a tga"), KindImage, MimePNG, "sprite.png", ".tga", ConvertImage},
+		{"mp3", "memo.mp3", bareMP3Frame, KindFile, MimeMP3, "memo.mp3", ".mp3", ConvertAudio},
+		{"video", "clip.mp4", mp4Header, KindFile, MimeMP3, "clip.mp3", ".mp4", ConvertAudio},
+		{"pdf", "invoice.pdf", pdfHeader, KindFile, MimePDF, "invoice.pdf", "", ConvertNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := Process(tc.filename, tc.data, 1<<20)
+			res, err := Classify(tc.filename, tc.data, 1<<20)
 			if err != nil {
-				t.Fatalf("process: %v", err)
+				t.Fatalf("classify: %v", err)
 			}
 			if res.Kind != tc.wantKind || res.Mime != tc.wantMime || res.Name != tc.wantName {
 				t.Fatalf("got kind=%q mime=%q name=%q, want %q/%q/%q",
 					res.Kind, res.Mime, res.Name, tc.wantKind, tc.wantMime, tc.wantName)
 			}
-			// Verbatim: the bytes come back untouched and the size agrees.
-			if !bytes.Equal(res.Data, tc.data) || res.Size != int64(len(tc.data)) {
-				t.Fatalf("data changed (%d -> %d bytes)", len(tc.data), res.Size)
+			if res.Ext != tc.wantExt || res.Convert != tc.wantConvert {
+				t.Fatalf("got ext=%q convert=%q, want %q/%q",
+					res.Ext, res.Convert, tc.wantExt, tc.wantConvert)
 			}
 		})
 	}
 }
 
-// The stored name follows the bytes, not the upload: a lying client cannot keep
-// PNG bytes stored under a .jpg name. Text is the exception — its mime comes
-// FROM the extension.
-func TestProcessNameFollowsMime(t *testing.T) {
-	png := makePNG(t, 8, 6)
+// The stored name is the conversion's, not the upload's: whatever a picture or a
+// recording arrived as, it lands as a .png or an .mp3. Text and PDF keep theirs.
+func TestClassifyNameFollowsConversion(t *testing.T) {
 	for _, tc := range []struct {
 		filename string
 		data     []byte
 		want     string
 	}{
-		{"photo.jpg", png, "photo.png"},
-		{"photo", png, "photo.png"},
-		{"a.b.c.JPEG", png, "a.b.c.png"}, // the bytes win over the name
-		{"memo.webm", mp3Frame16k, "memo.mp3"},
-		{"invoice.txt", []byte("%PDF-1.7 fake"), "invoice.pdf"},
+		{"photo.jpeg", makeJPEG(t, 8, 6), "photo.png"},
+		{"a.b.c.WEBP", sampleWebP(t), "a.b.c.png"},
+		{"memo.webm", webmHeader, "memo.mp3"},
+		{"invoice.txt", pdfHeader, "invoice.txt"}, // text wins: the CONTENT decides
 		{"notes.md", []byte("# hi\n"), "notes.md"},
+		{"paper.pdf", pdfHeader, "paper.pdf"},
 	} {
-		res, err := Process(tc.filename, tc.data, 1<<20)
+		res, err := Classify(tc.filename, tc.data, 1<<20)
 		if err != nil {
-			t.Fatalf("Process(%q): %v", tc.filename, err)
+			t.Fatalf("Classify(%q): %v", tc.filename, err)
 		}
 		if res.Name != tc.want {
-			t.Errorf("Process(%q) name = %q, want %q", tc.filename, res.Name, tc.want)
+			t.Errorf("Classify(%q) name = %q, want %q", tc.filename, res.Name, tc.want)
 		}
 	}
 }
@@ -221,35 +223,39 @@ func TestProcessAnyKeepsUnsupportedAsDownload(t *testing.T) {
 	}
 }
 
-// An upload only carries what the browser's conversion step produces, so
-// anything else is refused even when a tool may attach it — WebP and JPEG
-// included, because convertImage re-encodes both to PNG, and WebM, Ogg and FLAC
-// because convertAudio re-encodes every recording to MP3.
-func TestProcessUploadStaysStrict(t *testing.T) {
-	if _, err := Process("sticker.webp", sampleWebP(t), 1<<20); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("webp upload accepted: %v", err)
-	}
-	_, err := Process("photo.jpg", makeJPEG(t, 8, 6), 1<<20)
-	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("jpeg upload accepted: %v", err)
-	}
-	if !strings.Contains(err.Error(), Accepted) || strings.Contains(err.Error(), ToolAccepted) {
-		t.Fatalf("error %q should name the upload list", err)
-	}
+// An upload is either on the extension list or text — nothing else is stored,
+// whatever its bytes are. Formats no build of ffmpeg here decodes (tiff, ico,
+// avif) are refused by the name rather than by a failed conversion.
+func TestClassifyRejectsUnknown(t *testing.T) {
 	for _, tc := range []struct {
 		filename string
 		data     []byte
 	}{
-		{"track.flac", flacHeader},
-		{"memo.webm", webmHeader},
-		{"anim.gif", gifHeader},
-		{"clip.mp4", mp4Header},
-		{"movie.mkv", mkvHeader},
+		{"scan.tiff", tiffHeader},
+		{"sticker.ico", icoHeader},
+		{"photo.avif", avifHeader},
 		{"archive.zip", zipHeader},
+		{"notes", []byte{0x00, 0x01, 0xff}}, // extension-less and not text
+		{"liar.png", zipHeader},             // accepted here; the conversion rejects it
 	} {
-		if _, err := Process(tc.filename, tc.data, 1<<20); !errors.Is(err, ErrUnsupported) {
-			t.Errorf("Process(%q) = %v, want ErrUnsupported", tc.filename, err)
+		_, err := Classify(tc.filename, tc.data, 1<<20)
+		want := ErrUnsupported
+		if tc.filename == "liar.png" {
+			want = nil
 		}
+		if want == nil {
+			if err != nil {
+				t.Errorf("Classify(%q) = %v, want the conversion to be the judge", tc.filename, err)
+			}
+			continue
+		}
+		if !errors.Is(err, want) {
+			t.Errorf("Classify(%q) = %v, want ErrUnsupported", tc.filename, err)
+		}
+	}
+	_, err := Classify("archive.zip", zipHeader, 1<<20)
+	if !strings.Contains(err.Error(), Accepted) || strings.Contains(err.Error(), ToolAccepted) {
+		t.Fatalf("error %q should name the upload list", err)
 	}
 }
 
@@ -293,9 +299,11 @@ func TestSendsAsImage(t *testing.T) {
 	}
 }
 
-func TestProcessBinaryNeedsAllowList(t *testing.T) {
+// A binary an upload refuses is still a download on the tool path: a file the
+// model fetched reaches the user whatever it is.
+func TestToolBinaryKeptAsDownload(t *testing.T) {
 	junk := []byte{0x00, 0x01, 0x02, 0xff, 0xfe}
-	if _, err := Process("x.bin", junk, 1<<20); !errors.Is(err, ErrUnsupported) {
+	if _, err := Classify("x.bin", junk, 1<<20); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("upload: want ErrUnsupported, got %v", err)
 	}
 	res, err := ProcessAny("x.bin", junk, 1<<20)
@@ -307,7 +315,7 @@ func TestProcessBinaryNeedsAllowList(t *testing.T) {
 	}
 }
 
-func TestProcessText(t *testing.T) {
+func TestClassifyText(t *testing.T) {
 	for _, tc := range []struct {
 		filename, mime string
 	}{
@@ -318,61 +326,44 @@ func TestProcessText(t *testing.T) {
 		{"main.go", "text/plain"},   // an extension the table doesn't know
 		{"weird.bin", "text/plain"}, // the CONTENT decides, not the name
 	} {
-		res, err := Process(tc.filename, []byte("hello\n"), 1<<20)
+		res, err := Classify(tc.filename, []byte("hello\n"), 1<<20)
 		if err != nil {
-			t.Fatalf("Process(%q): %v", tc.filename, err)
+			t.Fatalf("Classify(%q): %v", tc.filename, err)
 		}
-		if res.Kind != KindText || res.Mime != tc.mime || res.Name != tc.filename {
-			t.Fatalf("Process(%q) = kind=%q mime=%q name=%q, want text/%s",
-				tc.filename, res.Kind, res.Mime, res.Name, tc.mime)
+		if res.Kind != KindText || res.Mime != tc.mime || res.Name != tc.filename || res.Convert != ConvertNone {
+			t.Fatalf("Classify(%q) = kind=%q mime=%q name=%q convert=%q, want text/%s",
+				tc.filename, res.Kind, res.Mime, res.Name, res.Convert, tc.mime)
 		}
 	}
 	// Binary-looking text (a NUL byte) is not text.
-	if _, err := Process("x.txt", []byte("a\x00b"), 1<<20); !errors.Is(err, ErrUnsupported) {
+	if _, err := Classify("x.txt", []byte("a\x00b"), 1<<20); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("NUL byte accepted: %v", err)
 	}
 }
 
-func TestProcessTooLarge(t *testing.T) {
+func TestClassifyTooLarge(t *testing.T) {
 	payload := []byte("hello world")
-	if _, err := Process("x.txt", payload, 4); !errors.Is(err, ErrTooLarge) {
+	if _, err := Classify("x.txt", payload, 4); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("want ErrTooLarge, got %v", err)
 	}
-	// The cap applies to media too — nothing is downscaled to fit.
-	if _, err := Process("pic.png", makePNG(t, 8, 6), 64); !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("image over the cap accepted: %v", err)
+	// Media is measured after its conversion, so the stored cap does not apply
+	// to the bytes that arrive: a 40 MB shot that converts to a 2 MB PNG is the
+	// handler's to accept, and the raw ceiling is what bounds the upload.
+	if _, err := Classify("pic.png", makePNG(t, 8, 6), 64); err != nil {
+		t.Fatalf("image rejected before its conversion: %v", err)
 	}
-	if _, err := Process("x.txt", payload, 1024); err != nil {
+	if _, err := Classify("x.txt", payload, 1024); err != nil {
 		t.Fatalf("rejected within limit: %v", err)
 	}
 	// maxBytes <= 0 means "only the raw ceiling".
-	if _, err := Process("x.txt", payload, 0); err != nil {
+	if _, err := Classify("x.txt", payload, 0); err != nil {
 		t.Fatalf("no cap: %v", err)
 	}
 }
 
-func TestProcessRejectsEmpty(t *testing.T) {
-	if _, err := Process("empty.txt", nil, 1<<20); !errors.Is(err, ErrUnsupported) {
+func TestClassifyRejectsEmpty(t *testing.T) {
+	if _, err := Classify("empty.txt", nil, 1<<20); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("want ErrUnsupported for empty file, got %v", err)
-	}
-}
-
-func TestProcessSizeMatchesData(t *testing.T) {
-	for _, tc := range []struct {
-		filename string
-		data     []byte
-	}{
-		{"pic.png", makePNG(t, 8, 6)},
-		{"notes.md", []byte("# hi\n")},
-		{"memo.mp3", mp3Frame16k},
-	} {
-		res, err := Process(tc.filename, tc.data, 1<<20)
-		if err != nil {
-			t.Fatalf("process %q: %v", tc.filename, err)
-		}
-		if res.Size != int64(len(res.Data)) {
-			t.Fatalf("%s: size %d != len(data) %d", tc.filename, res.Size, len(res.Data))
-		}
 	}
 }
 

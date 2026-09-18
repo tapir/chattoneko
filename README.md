@@ -4,16 +4,16 @@
 
 Your own cute cat AI assistant, self-hosted.
 
-*Chatto* is the Japanese pronunciation of the English word "chat"; *neko* is Japanese for "cat." ChattoNeko is a chat client for OpenAI-compatible APIs — it plays best with OpenRouter, which exposes extra model metadata, but it works fully with any other OpenAI-compatible provider. You run it on your own server or machine. It is made for personal, self-hosted use, not as a SaaS product: no accounts, no multi-tenancy, no billing.
+*Chatto* is the Japanese pronunciation of the English word "chat"; *neko* is Japanese for "cat." ChattoNeko is a chat client for OpenAI-compatible APIs (it plays best with OpenRouter), which exposes extra model metadata, but it works fully with any other OpenAI-compatible provider. You run it on your own server or machine. It is made for personal, self-hosted use, not as a SaaS product: no accounts, no multi-tenancy, no billing.
 
-It is extremely small. Everything is one static Go binary with the web UI embedded, about 8 MB after UPX packing. The Docker image is roughly 12 MB — busybox, the two static binaries and a CA bundle — and the Android APK about 10 MB. Small as it is, it has what you expect from a chat app — streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login — plus a few unique features.
+It is extremely small. Everything is one static Go binary with the web UI embedded, about 8 MB after UPX packing. The Docker image is roughly 12 MB and the Android APK about 10 MB. Small as it is, it has what you expect from a chat app: streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login, plus a few unique features.
 
 ## What it does
 
 - Chat with any model through an OpenAI-compatible API (chat completions, transcriptions, speech). Keep a list of favorite models and switch per chat.
 - Replies stream in as they are written and can be stopped at any time.
-- Models that reason out loud show their thinking in collapsible blocks — one per step of a tool-using reply, each next to the tool calls it produced.
-- Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted on the server as they are uploaded (images to PNGs at most 1920px on the long side, optionally quantized to 256 colours; audio to 22050 Hz mono MP3), so what lands in the chat is always the same shape whatever you picked. Accepted: `png bmp tga jpg jpeg gif webp` images, `wav mp3 ogg oga opus webm mkv mov flac alac m4a m4b mp4 aac` audio (a video keeps its soundtrack), `pdf`, and any text file. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcription` tools), once you flag one in settings.
+- Models that reason out loud show their thinking in collapsible blocks, one per step of a tool-using reply, each next to the tool calls it produced.
+- Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted on the server as they are uploaded (images to PNGs at most 1920px on the long side, optionally quantized to 256 colours; audio to 22050 Hz mono MP3), so what lands in the chat is always the same shape whatever you picked. Accepted: `png bmp tga jpg gif webp` images, `wav mp3 ogg opus flac alac aac` audio (a video keeps its soundtrack), `pdf`, and any text file. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcription` tools), once you flag one in settings.
 - The model can call tools, plus any MCP server (HTTP-only) you add.
 - The model can hand files back to you as download links, or show images, PDFs, and audio inline.
 - Chats are saved and titled automatically; search, rename, and delete.
@@ -30,10 +30,7 @@ One program plays three parts:
 - the embedded SPA web client served at `/`,
 - and the same web client wrapped with Capacitor into an Android app that talks to any ChattoNeko server over the network. Point it at your server's address and you have a mobile client for the same instance and the same history.
 
-Everything the server keeps — configuration, chats, messages, attachments, model metadata — lives in a single SQLite database file. Backing up means copying that one file; moving servers means moving that one file.
-
-> **IMPORTANT:**
-> A few browser APIs need a secure context: sharing an attachment from the web UI is one (the Android app has its own share sheet). Put the app behind a reverse proxy (nginx or HAProxy) with your own certificate, or behind Cloudflare's proxy with its SSL certs, or use `http://localhost`.
+Everything the server keeps lives in a single SQLite database file. Backing up means copying that one file; moving servers means moving that one file.
 
 ## Run it
 
@@ -47,30 +44,15 @@ docker run -d --name chattoneko \
   ghcr.io/tapir/chattoneko
 ```
 
-Then open http://localhost:8080.
-
-The image carries its own ffmpeg: `ffmpeg/build.sh` compiles a ~2.8 MB fully static one with exactly the image and audio support the conversions need, in the same Arch build stage as the Go binary, and only the two binaries land in the final image.
-
-From source. You need [Go](https://go.dev), [Node.js](https://nodejs.org), [sqlc](https://sqlc.dev), an `ffmpeg` on your PATH, and optionally [UPX](https://upx.github.io):
-
-```bash
-git clone https://github.com/tapir/chattoneko && cd chattoneko
-make run          # builds the web UI, generates queries, packs the binary, starts it
-```
-
-`make build` alone leaves you with `./chattoneko`, which you can run from anywhere.
-
-Any recent ffmpeg converts the uploads; `make ffmpeg` builds the slim static one the Docker image ships instead (needs `musl` and `nasm`, ~2 minutes, output in `ffmpeg/out/bin`). Point the server at it — or at any other build — with `CHATTO_FFMPEG`.
+If you don't prefer the docker images, fully static server and web client binary can be built with `make build`. But you need `ffmpeg` command line tool in `$PATH`. Docker image takes care of that for you with an incredibly slim `ffmpeg` build that is only 2.8 MB.
 
 The Android APK is built with `make mobile-apk`.
-
-Both artifacts carry a version, shown in the sidebar's footer. `VERSION` (default `1.0.0-local`) is stamped into the binary as `main.version` — served on `/api/meta` — and into the APK as its `versionName`. The release workflow passes the git tag, so `make build VERSION=1.2.3` reproduces exactly what a release ships.
 
 ## Configuration
 
 There is no config file. On first start the database is seeded with defaults and the server comes up. All configuration happens after your first visit to the page: enter your provider's base URL and API key, pick your models, done. Settings are stored in the database and apply live, no restart needed.
 
-If your provider is OpenRouter, much of this is automated. ChattoNeko reads the provider's `/models` endpoint, and OpenRouter reports everything it uses: context length, input modalities, supported reasoning efforts, and the default effort. Pick a model and its capabilities are filled in for you — which is also how the app knows whether a model can see images or read PDFs. Other OpenAI-compatible providers report less; missing values fall back to sensible defaults and can be edited by hand.
+If your provider is OpenRouter, much of this is automated. ChattoNeko reads the provider's `/models` endpoint, and OpenRouter reports everything it uses: context length, input modalities, supported reasoning efforts, and the default effort. Pick a model and its capabilities are filled in for you which is also how the app knows whether a model can see images or read PDFs. Other OpenAI-compatible providers report less; missing values fall back to sensible defaults and can be edited by hand.
 
 ### Recommended Configuration
 
@@ -84,14 +66,11 @@ This is my personal config trying to achieve cost-efficiency with good performan
 | Vision | Gemma 4 31B | low | Very good vision capability, cheap |
 | File (Document) | Mistral Large 2512 | low | OKish price, top-notch PDF performance |
 | Transcription | Whisper Large 3 | --- | Industry standard |
-| Speech | --- | --- | Optional; any `/audio/speech` model works |
-| Image Gen | --- | --- | Not implemented (no standard route exists) |
+| Speech | Kokoro 82M | --- | Any `/audio/speech` model works |
 
 I also use Exa.ai's web search tool. I usually disable its fetch tool since we have an integrated fetcher that is quite capable.
 
 ### Environment variables
-
-All optional. `CHATTO_USERNAME` and `CHATTO_PASSWORD` are read once at startup; `CHATTO_LOCATION_STRING` is read each time the `time` tool runs.
 
 | Variable | Meaning |
 | --- | --- |
@@ -108,7 +87,7 @@ All optional. `CHATTO_USERNAME` and `CHATTO_PASSWORD` are read once at startup; 
 | `-listen` | `:8080` | HTTP listen address, fixed for the lifetime of the process. |
 | `-debug` | off | Debug logging. |
 
-The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `/var/lib/chattoneko` covers all state. A bind mount works too and needs no host-side `chown`: the container starts as root, makes that directory writable by uid/gid 1000, and drops to it before opening anything — no shell entrypoint, the app does it itself. Conversions stage their temp files in `/tmp` (add `--tmpfs /tmp:size=256m` to keep them off disk); the directory is emptied at startup, so a killed conversion cannot accumulate.
+The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `/var/lib/chattoneko` covers all state. A bind mount works too and needs no host-side `chown`: the container starts as root, makes that directory writable by uid/gid 1000, and drops to it before opening anything.
 
 A conversion stages two temp files under `/tmp/chattoneko-media` and deletes both when it finishes, including on failure; the directory is emptied at startup, so a killed conversion cannot accumulate. Add `--tmpfs /tmp:size=256m` if you would rather those bytes never touched the container's disk layer.
 

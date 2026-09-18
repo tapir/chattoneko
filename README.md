@@ -13,7 +13,7 @@ It is extremely small. Everything is one static Go binary with the web UI embedd
 - Chat with any model through an OpenAI-compatible API (chat completions, transcriptions, speech). Keep a list of favorite models and switch per chat.
 - Replies stream in as they are written and can be stopped at any time.
 - Models that reason out loud show their thinking in collapsible blocks — one per step of a tool-using reply, each next to the tool calls it produced.
-- Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted in your browser as you attach them (images to PNGs at most 1280px wide, never shrunk by more than half, optionally quantized to 256 colours; audio to 16 kHz mono MP3), and a picture the model hands back goes through that same image conversion on the server, so both land in the chat in the same shape. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcription` tools), once you flag one in settings.
+- Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted in your browser as you attach them (images to PNGs at most 1280px on the long side, never shrunk by more than half, optionally quantized to 256 colours; audio to 16 kHz mono MP3), and a picture the model hands back goes through that same image conversion on the server, so both land in the chat in the same shape. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it — and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcription` tools), once you flag one in settings.
 - The model can call tools, plus any MCP server (HTTP-only) you add.
 - The model can hand files back to you as download links, or show images, PDFs, and audio inline.
 - Chats are saved and titled automatically; search, rename, and delete.
@@ -80,14 +80,14 @@ This is my personal config trying to achieve cost-efficiency with good performan
 | Vision | Gemma 4 31B | low | Very good vision capability, cheap |
 | File (Document) | Mistral Large 2512 | low | OKish price, top-notch PDF performance |
 | Transcription | Whisper Large 3 | --- | Industry standard |
-| Speech | --- | --- | Not yet implemented |
-| Image Gen | --- | --- | Not yet implemented |
+| Speech | --- | --- | Optional; any `/audio/speech` model works |
+| Image Gen | --- | --- | Not implemented (no standard route exists) |
 
 I also use Exa.ai's web search tool. I usually disable its fetch tool since we have an integrated fetcher that is quite capable.
 
 ### Environment variables
 
-All optional, read once at startup.
+All optional. `CHATTO_USERNAME` and `CHATTO_PASSWORD` are read once at startup; `CHATTO_LOCATION_STRING` is read each time the `time` tool runs.
 
 | Variable | Meaning |
 | --- | --- |
@@ -107,7 +107,7 @@ The Docker image runs `-db /var/lib/chattoneko/neko.db`, so a single volume at `
 
 ## Tools
 
-Seven integrated tools, each toggleable per chat and globally in settings:
+Eight integrated tools, each toggleable per chat and globally in settings:
 
 - `time` — the server's current date, time, and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow," "next Friday," or "near me."
 - `code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8, and JSON encode/decode. No file, network, environment, or debug access; capped by time, by work, and by output size.
@@ -126,7 +126,7 @@ It is small and meant for self-hosted personal use. Accounts, permissions, quota
 
 **What if I want my family to use it?**
 
-Run one instance per person. The image is 15 MB and idles at almost nothing, so ten of them on a single commodity server is not a thought you need to have twice. Everybody gets a private instance with their own database, their own models, and their own API key.
+Run one instance per person. The image is 16 MB and idles at almost nothing, so ten of them on a single commodity server is not a thought you need to have twice. Everybody gets a private instance with their own database, their own models, and their own API key.
 
 **What about transcription and speech?**
 

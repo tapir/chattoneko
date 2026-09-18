@@ -158,8 +158,8 @@ func (e *Engine) runGeneration(ag *activeGen) {
 		// the top-bar totals without a refetch. done is replayed, so it can't be
 		// lost.
 		h.mu.Lock()
-		h.publishGen(WireEvent{Type: "status", Status: status, Error: errText})
-		h.publishGen(WireEvent{
+		h.publishGen(ag, WireEvent{Type: "status", Status: status, Error: errText})
+		h.publishGen(ag, WireEvent{
 			Type:             "done",
 			PromptTokens:     totalPrompt,
 			CompletionTokens: totalCompletion,
@@ -275,7 +275,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 				ag.dirty = true
 				ag.mu.Unlock()
 				h.mu.Lock()
-				h.publishGen(WireEvent{Type: "delta", Content: ev.Text})
+				h.publishGen(ag, WireEvent{Type: "delta", Content: ev.Text})
 				h.mu.Unlock()
 			case provider.EventReasoningDelta:
 				ag.mu.Lock()
@@ -286,23 +286,23 @@ func (e *Engine) runGeneration(ag *activeGen) {
 				ag.dirty = true
 				ag.mu.Unlock()
 				h.mu.Lock()
-				h.publishGen(WireEvent{Type: "reasoning_delta", Turn: turn, Content: ev.Text})
+				h.publishGen(ag, WireEvent{Type: "reasoning_delta", Turn: turn, Content: ev.Text})
 				h.mu.Unlock()
 			case provider.EventToolCallStart:
 				h.mu.Lock()
-				h.publishGen(WireEvent{Type: "tool_call_started", Turn: turn, CallID: ev.CallID, Name: ev.Name})
+				h.publishGen(ag, WireEvent{Type: "tool_call_started", Turn: turn, CallID: ev.CallID, Name: ev.Name})
 				h.mu.Unlock()
 			case provider.EventToolCallDelta:
 				// Incremental arguments fragment; the client appends it to the
 				// call's args. tool_call_done re-delivers the full arguments,
 				// so a reconnect mid-stream self-heals.
 				h.mu.Lock()
-				h.publishGen(WireEvent{Type: "tool_call_delta", Turn: turn, CallID: ev.CallID, Arguments: ev.Args})
+				h.publishGen(ag, WireEvent{Type: "tool_call_delta", Turn: turn, CallID: ev.CallID, Arguments: ev.Args})
 				h.mu.Unlock()
 			case provider.EventToolCallDone:
 				calls = append(calls, provider.ToolCall{ID: ev.CallID, Name: ev.Name, Arguments: ev.Args})
 				h.mu.Lock()
-				h.publishGen(WireEvent{Type: "tool_call_done", Turn: turn, CallID: ev.CallID, Name: ev.Name, Arguments: ev.Args})
+				h.publishGen(ag, WireEvent{Type: "tool_call_done", Turn: turn, CallID: ev.CallID, Name: ev.Name, Arguments: ev.Args})
 				h.mu.Unlock()
 			case provider.EventError:
 				streamErr = ev.Err
@@ -347,7 +347,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 		// client stops that block's spinner. Published only on the clean path —
 		// a canceled or failed stream left the turn unfinished.
 		h.mu.Lock()
-		h.publishGen(WireEvent{Type: "turn_complete", Turn: turn})
+		h.publishGen(ag, WireEvent{Type: "turn_complete", Turn: turn})
 		h.mu.Unlock()
 
 		// Tool loop gate: the presence of collected calls drives the next
@@ -490,7 +490,7 @@ func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat,
 			continue
 		}
 		h.mu.Lock()
-		h.publishGen(WireEvent{Type: "tool_result", CallID: c.ID, Name: c.Name, Result: result, IsError: isError})
+		h.publishGen(ag, WireEvent{Type: "tool_result", CallID: c.ID, Name: c.Name, Result: result, IsError: isError})
 		h.mu.Unlock()
 		e.publishNewAttachments(persistCtx, h, ag)
 	}
@@ -514,7 +514,7 @@ func (e *Engine) publishNewAttachments(ctx context.Context, h *chatHub, ag *acti
 		ag.attSent[metas[i].ID] = true
 		m := metas[i]
 		h.mu.Lock()
-		h.publishGen(WireEvent{Type: "attachment_created", Attachment: &m})
+		h.publishGen(ag, WireEvent{Type: "attachment_created", Attachment: &m})
 		h.mu.Unlock()
 	}
 }

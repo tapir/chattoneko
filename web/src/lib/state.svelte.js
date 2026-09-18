@@ -179,6 +179,10 @@ class AppState {
   // The one SSE connection: all-chats lifecycle + titles, plus the open
   // chat's deltas (see lib/stream.svelte.js for why it is a single socket).
   stream = null;
+  // Bumped on every LOCAL mutation of `messages` (send, SSE events, chat
+  // open) — refreshChat discards a fetch that raced one, because applying a
+  // snapshot older than the mutation would wipe the rows it pushed.
+  msgsVersion = 0;
   tw = null; // content typewriter
   twr = null; // reasoning typewriter (one per turn, see reasoning_delta)
   twrTurn = -1; // which turn `twr` is animating
@@ -636,6 +640,7 @@ class AppState {
       if (this.activeChatId !== id) return; // navigated away meanwhile
       this.chat = chat;
       this.messages = messages;
+      this.msgsVersion++;
       this.chatUsage = usage ?? null; // per-chat token totals for the top bar
       this.chatToolOverrides = { ...(chat.tools ?? {}) };
       const gen = messages.find(
@@ -658,7 +663,6 @@ class AppState {
   }
 
   closeChat() {
-    const attached = !!this.stream;
     this.detachStream();
     this.destroyLive();
     if (this.generating && this.activeChatId) {
@@ -671,15 +675,33 @@ class AppState {
     this.chatUsage = null;
     this.chatToolOverrides = {};
     // Drop the closed chat's delta half but stay connected for the sidebar.
-    if (attached && this.authed) this.attachStream();
+    // Not conditional on a stream being attached: a chat whose load failed
+    // (openChat's error path) detaches without attaching again, and this
+    // closeChat is the only thing that can restore the connection.
+    if (this.authed) this.attachStream();
   }
 
   async refreshChat() {
     const id = this.activeChatId;
     if (!id) return;
-    try {
-      const { chat, messages, usage } = await api.getChat(id);
-      if (this.activeChatId !== id) return;
+    // Retry rather than apply a response that raced a local mutation (a
+    // send, an SSE user_message / generation_started / done): its snapshot
+    // predates those rows and would wipe them — including the live
+    // assistant placeholder, whose disappearance hides the whole streaming
+    // reply until the next refresh. Deltas never mutate `messages`, so a
+    // running stream does not loop this.
+    for (;;) {
+      const version = this.msgsVersion;
+      let data;
+      try {
+        data = await api.getChat(id);
+      } catch (e) {
+        this.toast("error", `Failed to refresh chat: ${e.message}`);
+        return;
+      }
+      if (this.activeChatId !== id) return; // navigated away meanwhile
+      if (version !== this.msgsVersion) continue;
+      const { chat, messages, usage } = data;
       this.chat = chat;
       // Assign only on a real change. A focus refresh (the WebView fires
       // `focus` when a native picker/camera closes, and on every alt-tab)
@@ -698,8 +720,7 @@ class AppState {
         (m) => m.role === "assistant" && m.status === "generating",
       );
       if (!still) this.generating = false;
-    } catch (e) {
-      this.toast("error", `Failed to refresh chat: ${e.message}`);
+      return;
     }
   }
 
@@ -831,6 +852,7 @@ class AppState {
         } else {
           this.generating = true;
         }
+        this.msgsVersion++;
         this.stream?.kick();
         this.bumpChatInList(chatId);
         // Preview object URLs are NOT revoked here: the real row's <img> is
@@ -1179,6 +1201,7 @@ class AppState {
           this.messages.push(
             placeholderAssistant(this.activeChatId, ev.message_id),
           );
+          this.msgsVersion++;
         }
         break;
       }
@@ -1333,6 +1356,7 @@ class AppState {
                   }
                 : {}),
             };
+            this.msgsVersion++;
           }
         }
         this.destroyLive();
@@ -1357,6 +1381,7 @@ class AppState {
         const m = ev.message;
         if (m && !this.messages.some((x) => x.id === m.id)) {
           this.messages.push(normalizeMessage(m));
+          this.msgsVersion++;
         }
         break;
       }

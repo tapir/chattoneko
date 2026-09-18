@@ -5,6 +5,8 @@ package llm
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 
+	"chattoneko/internal/attach"
 	"chattoneko/internal/config"
 )
 
@@ -72,7 +75,17 @@ func (c *Client) Speak(ctx context.Context, text, voice string) ([]byte, error) 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	// The same raw ceiling every other downloaded body is held to, so a
+	// runaway provider response cannot fill RAM before the callers' own
+	// per-file limit gets a chance to reject it.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, attach.MaxRawUploadBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading the speech response failed: %w", err)
+	}
+	if int64(len(data)) > attach.MaxRawUploadBytes {
+		return nil, errors.New("the speech response exceeds the raw size limit")
+	}
+	return data, nil
 }
 
 // Cache holds one client built from a config.Store's provider settings and

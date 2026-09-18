@@ -175,9 +175,14 @@ func run() error {
 	defer cancelShutdown()
 	_ = httpSrv.Shutdown(shutdownCtx)
 	eng.Shutdown() // waits for in-flight generations to persist before the DB closes
+	// Cancel the server context BEFORE hub.Close: a config save can have an
+	// async hub.Reload still dialing (the HTTP shutdown above doesn't stop
+	// it), and an alive context keeps those dials running up to their 30s
+	// timeout — Close would block on them via reloadMu. Canceled first, the
+	// dials abort at once and Close reaps everything they managed to open.
+	serverCancel()
 	hub.Close()
 	_ = sqlDB.Close()
-	serverCancel()
 	return nil
 }
 

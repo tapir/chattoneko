@@ -125,9 +125,14 @@ type activeGen struct {
 }
 
 // publishGen appends a generation event to the replay buffer with the next
-// chat-scoped seq and delivers it. Caller holds chatHub.mu.
-func (h *chatHub) publishGen(ev WireEvent) {
-	if h.gen == nil {
+// chat-scoped seq and delivers it. Events are bound to the generation that
+// produces them: once ag is done, another request may claim the slot and
+// install a new generation while ag is still finalizing, and publishing ag's
+// terminal events then would stamp them with the NEW generation's message id
+// (and pollute its replay buffer) — so a superseded generation's events are
+// suppressed entirely, exactly like CancelAndClaim's. Caller holds chatHub.mu.
+func (h *chatHub) publishGen(ag *activeGen, ev WireEvent) {
+	if h.gen != ag {
 		return
 	}
 	// Stamped BEFORE buffering so replayed events carry it too — the merged
@@ -136,10 +141,10 @@ func (h *chatHub) publishGen(ev WireEvent) {
 	h.seq++
 	ev.Seq = h.seq
 	ev.Epoch = h.epoch
-	ev.MessageID = h.gen.messageID
-	h.gen.mu.Lock()
-	h.gen.buffer = append(h.gen.buffer, ev)
-	h.gen.mu.Unlock()
+	ev.MessageID = ag.messageID
+	ag.mu.Lock()
+	ag.buffer = append(ag.buffer, ev)
+	ag.mu.Unlock()
 	h.deliver(ev)
 }
 

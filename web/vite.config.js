@@ -34,7 +34,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
-    // The entry chunk is ~525 kB / ~149 kB gzipped: Svelte runtime, bits-ui,
+    // The entry chunk is ~550 kB / ~158 kB gzipped: Svelte runtime, bits-ui,
     // vaul-svelte and the app's own components. It is a single-view chat app,
     // so there is no route to split it along and lazy-loading the sheets would
     // just delay the first interaction. Default 500 kB warning is noise here.

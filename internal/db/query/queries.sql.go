@@ -858,41 +858,6 @@ func (q *Queries) ListPinnedChats(ctx context.Context) ([]Chat, error) {
 	return items, nil
 }
 
-const listToolCallsByMessage = `-- name: ListToolCallsByMessage :many
-SELECT id, message_id, provider_call_id, name, arguments, position, turn FROM tool_calls WHERE message_id = ? ORDER BY position ASC
-`
-
-func (q *Queries) ListToolCallsByMessage(ctx context.Context, messageID string) ([]ToolCall, error) {
-	rows, err := q.db.QueryContext(ctx, listToolCallsByMessage, messageID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ToolCall
-	for rows.Next() {
-		var i ToolCall
-		if err := rows.Scan(
-			&i.ID,
-			&i.MessageID,
-			&i.ProviderCallID,
-			&i.Name,
-			&i.Arguments,
-			&i.Position,
-			&i.Turn,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listToolCallsForChat = `-- name: ListToolCallsForChat :many
 SELECT tc.id, tc.message_id, tc.provider_call_id, tc.name, tc.arguments, tc.position, tc.turn FROM tool_calls tc
 JOIN messages m ON m.id = tc.message_id

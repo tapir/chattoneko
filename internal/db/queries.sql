@@ -155,9 +155,6 @@ SELECT * FROM messages WHERE status = 'generating';
 INSERT INTO tool_calls (id, message_id, provider_call_id, name, arguments, position, turn)
 VALUES (?, ?, ?, ?, ?, ?, ?);
 
--- name: ListToolCallsByMessage :many
-SELECT * FROM tool_calls WHERE message_id = ? ORDER BY position ASC;
-
 -- name: ListToolCallsForChat :many
 SELECT tc.* FROM tool_calls tc
 JOIN messages m ON m.id = tc.message_id

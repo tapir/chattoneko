@@ -254,8 +254,9 @@ func (s *Server) handleGetSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePutSetup applies a partial config update. Only the fields present in
-// the body change; absent fields keep their current value. auth.password is
-// plaintext here and hashed server-side before anything is stored. On
+// the body change; absent fields keep their current value. Auth has no
+// representation here: it is env-var driven and the patch carries no auth
+// fields, so any auth keys in the body are dropped by the decode. On
 // success the new (full) config is returned.
 func (s *Server) handlePutSetup(w http.ResponseWriter, r *http.Request) {
 	var patch config.Patch

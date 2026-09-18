@@ -89,10 +89,14 @@
   // Send waits on any media still converting: the staged file is replaced by
   // the converted one, so sending early would upload bytes the server rejects.
   let converting = $derived(pending.some((a) => a.converting));
+  // Sending also waits on the chat still loading: ensureChat() would see no
+  // chat object and create a NEW chat, delivering the message to the wrong
+  // conversation and abandoning the one being opened.
   let canSend = $derived(
     (app.draftFor().trim().length > 0 || pending.length > 0) &&
       !sending &&
-      !converting,
+      !converting &&
+      !app.chatLoading,
   );
 
   function autoGrow() {

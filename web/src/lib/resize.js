@@ -23,11 +23,16 @@ export function startPanelResize(e, { start, min, max, invert = false, onChange,
     const dx = ev.clientX - startX;
     onChange(clamp(start + (invert ? -dx : dx)));
   }
+  // A touch drag the browser reclaims for scrolling ends in pointercancel,
+  // never pointerup — without it the listeners would outlive the gesture and
+  // the panel would keep tracking every later pointermove.
   function onUp() {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", onUp);
     onEnd?.();
   }
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointercancel", onUp);
 }

@@ -407,8 +407,12 @@ func (t headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // Close closes all sessions OUTSIDE the lock: teardown I/O must not block
-// catalog readers.
+// catalog readers. reloadMu serializes with Reload, so a reconcile in flight
+// (a config save spawns one) cannot insert freshly dialed sessions into the
+// cleared map — Close would never see them and they would leak past shutdown.
 func (h *hub) Close() {
+	h.reloadMu.Lock()
+	defer h.reloadMu.Unlock()
 	h.mu.Lock()
 	closing := h.servers
 	h.servers = map[string]*serverState{}

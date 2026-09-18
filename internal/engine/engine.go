@@ -390,7 +390,7 @@ func (e *Engine) StartClaimedGeneration(ctx context.Context, chatID string) (*st
 	h.mu.Lock()
 	h.gen = ag
 	h.claimed = false
-	h.publishGen(WireEvent{Type: "generation_started"})
+	h.publishGen(ag, WireEvent{Type: "generation_started"})
 	h.mu.Unlock()
 
 	e.wg.Add(1)

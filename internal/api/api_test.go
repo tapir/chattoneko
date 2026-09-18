@@ -950,6 +950,9 @@ func TestUploadConversion(t *testing.T) {
 	if _, err := exec.LookPath(media.Binary()); err != nil {
 		t.Skipf("no %s on PATH", media.Binary())
 	}
+	// A private work directory: `go test ./...` runs packages in parallel and
+	// every one that converts writes into the same TMPDIR.
+	t.Setenv("TMPDIR", t.TempDir())
 	ts := newTestServer(t, quickProvider{}, false)
 	chatID := ts.createChat(t)
 	stored := func(t *testing.T, name string, data []byte) *store.AttachmentMeta {
@@ -989,7 +992,7 @@ func TestUploadConversion(t *testing.T) {
 		t.Fatalf("a zip named .png: %d, want 415", code)
 	}
 	// The work directory is empty again: nothing the app touched survives.
-	if entries, err := os.ReadDir(filepath.Join(os.TempDir(), "chattoneko-media")); err == nil && len(entries) > 0 {
+	if entries, err := os.ReadDir(filepath.Join(os.TempDir(), "chattoneko-media")); err != nil || len(entries) > 0 {
 		t.Fatalf("%d temp files left behind", len(entries))
 	}
 }

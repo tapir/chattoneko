@@ -11,6 +11,7 @@ import (
 	"chattoneko/internal/config"
 	"chattoneko/internal/llm"
 	"chattoneko/internal/mcphub"
+	"chattoneko/internal/media"
 )
 
 // Speak returns the "speak" tool: the model hands the user a recording of text
@@ -85,18 +86,23 @@ func (s *speakTool) call(ctx context.Context, argsJSON string, meta mcphub.CallM
 		return "", fmt.Errorf("speech model: %v", err)
 	}
 
-	// The same classification and size cap as create_file, so the recording is
-	// stored exactly the way an uploaded one is and the player, the mime and
-	// the download all behave alike.
+	// The same classification, conversion and size cap as create_file and an
+	// upload, so the recording lands in the one shape every other one is stored
+	// in: a mono MP3. mp3 is what we ask the provider for, but ffmpeg probes
+	// audio by content rather than by the name, so whatever container it
+	// actually sent is normalized the same.
 	limit := cfg.Limits.UploadMaxFileBytes
-	res, err := attach.ProcessAny("speech.mp3", data, limit)
-	if errors.Is(err, attach.ErrTooLarge) {
-		return "", fmt.Errorf("the recording exceeds the %s file size limit", humanSize(limit))
+	res, err := attach.ClassifyAny("speech.mp3", data, limit)
+	if err == nil {
+		data, err = media.Prepare(ctx, res, data, false, limit)
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, attach.ErrTooLarge):
+		return "", fmt.Errorf("the recording exceeds the %s file size limit", humanSize(limit))
+	case err != nil:
 		return "", fmt.Errorf("the speech model returned audio that could not be stored: %v", err)
 	}
-	m, err := s.files.CreateAttachment(ctx, meta.ChatID, res.Name, res.Kind, res.Mime, res.Size, res.Data)
+	m, err := s.files.CreateAttachment(ctx, meta.ChatID, res.Name, res.Kind, res.Mime, int64(len(data)), data)
 	if err != nil {
 		return "", fmt.Errorf("store audio: %v", err)
 	}

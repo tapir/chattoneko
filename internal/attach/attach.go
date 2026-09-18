@@ -1,14 +1,13 @@
 // Package attach decides what a file is and sanitizes filenames. Nothing here
-// decodes pixels or audio samples.
+// decodes pixels, parses a container or reads a magic byte: media is recognised
+// by its EXTENSION alone, the name is trusted, and whatever it claims is
+// converted to the one shape the database stores (internal/media), so a file
+// that lies about its suffix is rejected by the conversion instead. Anything
+// without a media or PDF suffix has to pass the text heuristic.
 //
-// Two paths, two rules. An UPLOAD is judged by its extension alone — the name is
-// trusted and whatever it claims is converted to the one shape the database
-// stores (internal/media), so a file that lies about its suffix is rejected by
-// the conversion, not by a byte check. Anything without a media or PDF suffix
-// has to pass the text heuristic. A TOOL's file (ProcessAny) is still judged by
-// its content, because a file a model fetched has no name to trust.
-// ponytail: sniffMime and its magic-byte table serve ProcessAny only; they go
-// when create_file and speak are converted through internal/media too.
+// Classify is the upload path and refuses what it cannot place; ClassifyAny is
+// the tool path and keeps such a file as a download, so whatever a model found
+// on the web still reaches the user.
 package attach
 
 import (
@@ -16,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -32,25 +30,17 @@ const (
 	KindFile = "file"
 )
 
-// The mimes a file can be stored under. PNG and MP3 are what an upload becomes:
-// internal/media converts every picture to the one and every recording to the
-// other. The rest are decided by magic bytes on the tool path — WebP, JPEG, GIF
-// and BMP are in its table so a picture that skips conversion still previews
-// instead of downloading. ICO is supported nowhere: an .ico is a download.
+// The mimes a file can be stored under. Every picture becomes a PNG and every
+// recording a mono MP3 (internal/media), so those two plus PDF are the whole set
+// of recognized content; anything else a tool hands over is a download.
 const (
-	MimePNG  = "image/png"
-	MimeJPEG = "image/jpeg"
-	MimeWebP = "image/webp"
-	MimeGIF  = "image/gif"
-	MimeBMP  = "image/bmp"
-
-	MimeMP3   = "audio/mpeg" // the only audio an upload can carry
-	MimeAudio = "audio/webm"
-	MimeWAV   = "audio/wav"
-	MimeOGG   = "audio/ogg"
-	MimeFLAC  = "audio/flac"
-
+	MimePNG = "image/png"
+	MimeMP3 = "audio/mpeg"
 	MimePDF = "application/pdf"
+	// MimeBinary is what an unrecognized download is stored as. The attachment
+	// handler serves every non-audio binary as this anyway, so naming a format
+	// nothing sniffs any more would only decorate the <file> block.
+	MimeBinary = "application/octet-stream"
 )
 
 // ErrUnsupported is returned when the content cannot be accepted (HTTP 415).
@@ -59,19 +49,10 @@ var ErrUnsupported = errors.New("unsupported file type")
 // ErrTooLarge is returned when the file exceeds the configured limit (HTTP 413).
 var ErrTooLarge = errors.New("file too large")
 
-// uploadMedia and toolMedia are the two classification policies: accepted mime
-// → the kind it is stored under. WebM and Ogg count as audio whatever codec
-// they carry, because an audio player is the only one the app has.
-var toolMedia = map[string]string{
-	MimePNG: KindImage, MimeJPEG: KindImage, MimeWebP: KindImage,
-	MimeGIF: KindImage, MimeBMP: KindImage,
-	MimeAudio: KindFile, MimeMP3: KindFile, MimeWAV: KindFile,
-	MimeOGG: KindFile, MimeFLAC: KindFile, MimePDF: KindFile,
-}
-
-// The extensions an upload may carry. tiff is absent because the ffmpeg build
-// has no TIFF decoder, ico because nothing decodes it at all: both are refused
-// here and rejected by ffmpeg there, and one rule is enough.
+// The extensions a file may carry to be recognised as media. tiff is absent
+// because the ffmpeg build has no TIFF decoder, ico because nothing decodes it
+// at all: both are refused here and rejected by ffmpeg there, and one rule is
+// enough.
 var (
 	imageExts = extSet("png", "bmp", "tga", "jpg", "jpeg", "gif", "webp")
 	// A video container counts as audio: ffmpeg decodes no picture, so what
@@ -95,14 +76,11 @@ const (
 	ConvertAudio = "audio"
 )
 
-var (
-	// Accepted and ToolAccepted name what each path stores, for refusals.
-	Accepted     = acceptedExts()
-	ToolAccepted = acceptedList(toolMedia)
-)
+// Accepted names what the extension list holds, for a refusal. Rendered from the
+// sets themselves, so the prose cannot drift from them; text is taken too, named
+// last.
+var Accepted = acceptedExts()
 
-// acceptedExts renders the upload refusal's format list from the extension sets
-// themselves, so the prose cannot drift from them. Text is taken too, named last.
 func acceptedExts() string {
 	names := make([]string, 0, len(imageExts)+len(audioExts)+1)
 	for ext := range imageExts {
@@ -116,30 +94,6 @@ func acceptedExts() string {
 	return strings.Join(names, ", ") + " and text"
 }
 
-// acceptedList is acceptedExts for the tool path, from its own mime map.
-func acceptedList(media map[string]string) string {
-	names := make([]string, 0, len(media))
-	for mime := range media {
-		names = append(names, strings.TrimPrefix(ExtForMime(mime), "."))
-	}
-	sort.Strings(names)
-	return strings.Join(names, ", ") + " and text"
-}
-
-// mediaExts maps a supported media or document extension to the mime it claims.
-// The tool path's acceptance never reads it — the bytes decide that. It exists
-// so a
-// correctly named file is left alone when its stored name is reconciled with
-// its content: "photo.jpeg" and "photo.jpg" both claim image/jpeg and both keep
-// their spelling.
-var mediaExts = map[string]string{
-	"png": MimePNG, "jpg": MimeJPEG, "jpeg": MimeJPEG, "webp": MimeWebP,
-	"gif": MimeGIF, "bmp": MimeBMP,
-	"mp3": MimeMP3, "wav": MimeWAV, "flac": MimeFLAC,
-	"ogg": MimeOGG, "opus": MimeOGG, "webm": MimeAudio,
-	"pdf": MimePDF,
-}
-
 // textExts hints the mime for text; anything missing is text/plain. Acceptance
 // is content-based (IsText), not extension-based.
 var textExts = map[string]string{
@@ -150,37 +104,30 @@ var textExts = map[string]string{
 	"html": "text/html", "css": "text/css",
 }
 
-// mimeExts inverts both tables, so a Content-Type can be turned back into a
-// display extension. Where a mime has several spellings the shortest wins,
-// which keeps the pick stable across runs.
-var mimeExts = func() map[string]string {
-	claims := make(map[string]string, len(mediaExts)+len(textExts))
-	exts := make([]string, 0, len(claims))
-	for _, table := range []map[string]string{mediaExts, textExts} {
-		for ext, mime := range table {
-			claims[ext] = mime
-			exts = append(exts, ext)
-		}
-	}
-	sort.Slice(exts, func(i, j int) bool {
-		if len(exts[i]) != len(exts[j]) {
-			return len(exts[i]) < len(exts[j])
-		}
-		return exts[i] < exts[j]
-	})
-	m := make(map[string]string, len(claims))
-	for _, ext := range exts {
-		if _, ok := m[claims[ext]]; !ok {
-			m[claims[ext]] = ext
-		}
-	}
-	return m
-}()
+// mimeExts names the extension a Content-Type implies, for a download whose URL
+// carries no suffix. The media half is the one that matters: the suffix is what
+// Classify reads, so an extension-less "image/jpeg" body only becomes a picture
+// because this hands it a ".jpg". Servers spell formats differently from
+// filenames (audio/mpeg, audio/x-wav, video/x-matroska), so the mapping is
+// written out rather than derived from the extension sets.
+var mimeExts = map[string]string{
+	"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+	"image/gif": "gif", "image/bmp": "bmp", "image/x-tga": "tga",
+	"audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav",
+	"audio/ogg": "ogg", "audio/opus": "opus", "audio/flac": "flac", "audio/aac": "aac",
+	"audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/webm": "webm",
+	"video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov",
+	"video/x-matroska": "mkv",
+	"application/pdf":  "pdf",
+	"text/markdown":    "md", "text/yaml": "yaml", "application/json": "json",
+	"application/jsonl": "jsonl", "application/xml": "xml", "text/csv": "csv",
+	"text/tab-separated-values": "tsv", "text/html": "html", "text/css": "css",
+}
 
 // ExtForMime returns the display extension (".json", dot included) for a
-// Content-Type, parameters ignored, or "" when the type is not one process
-// knows. Callers use it to give an extension-less download a name whose suffix
-// matches the mime process will derive from its bytes.
+// Content-Type, parameters ignored, or "" when the type is not one this knows.
+// create_file uses it to give an extension-less download a name whose suffix
+// says what the server served.
 func ExtForMime(ctype string) string {
 	if i := strings.IndexByte(ctype, ';'); i >= 0 {
 		ctype = ctype[:i]
@@ -191,18 +138,6 @@ func ExtForMime(ctype string) string {
 	return ""
 }
 
-// Result of processing one file on the tool path. Data is always the bytes
-// verbatim — nothing is re-encoded — so Size == len(Data). Name is the filename
-// to store: the caller's, with the extension reconciled against the sniffed mime
-// for media.
-type Result struct {
-	Kind string
-	Mime string // sniffed from the content
-	Name string // filename to store (CleanFilename'd by the caller first)
-	Data []byte
-	Size int64
-}
-
 // MaxRawUploadBytes caps the bytes read for a single file, and the HTTP layer
 // sizes its multipart ceiling from the same constant instead of duplicating it.
 const MaxRawUploadBytes = 64 * 1024 * 1024 // 64 MiB
@@ -211,11 +146,11 @@ const MaxRawUploadBytes = 64 * 1024 * 1024 // 64 MiB
 // the callers that have to trim a name before it reaches that check.
 const MaxFilenameBytes = 200
 
-// Upload is Classify's verdict on one uploaded file: the kind, mime and name it
-// is STORED under — already the converted ones — and the conversion the caller
-// runs on the bytes first. It carries no bytes: what is stored is what comes out
-// of internal/media, or the caller's own data when Convert is ConvertNone.
-type Upload struct {
+// File is Classify's verdict on one file: the kind, mime and name it is STORED
+// under — already the converted ones — and the conversion the caller runs on its
+// bytes first. It carries no bytes: what is stored is what comes out of
+// internal/media, or the caller's own data when Convert is ConvertNone.
+type File struct {
 	Kind    string
 	Mime    string
 	Name    string
@@ -223,13 +158,12 @@ type Upload struct {
 	Convert string // ConvertNone, ConvertImage or ConvertAudio
 }
 
-// Classify decides what one UPLOADED file is and what has to happen to its bytes
-// before they may be stored. Media is recognised by EXTENSION alone, and the
-// mime and name it returns are the ones the conversion produces, so an image is
-// always stored as a PNG under a .png name and a recording as an MP3 under
-// .mp3. Everything else has to be text; anything left is refused with
-// ErrUnsupported.
-func Classify(filename string, data []byte, maxBytes int64) (*Upload, error) {
+// Classify decides what one file is and what has to happen to its bytes before
+// they may be stored. Media is recognised by EXTENSION alone, and the mime and
+// name it returns are the ones the conversion produces, so an image is always
+// stored as a PNG under a .png name and a recording as an MP3 under .mp3.
+// Everything else has to be text; anything left is refused with ErrUnsupported.
+func Classify(filename string, data []byte, maxBytes int64) (*File, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("%w: empty file", ErrUnsupported)
 	}
@@ -237,7 +171,7 @@ func Classify(filename string, data []byte, maxBytes int64) (*Upload, error) {
 		return nil, ErrTooLarge
 	}
 	ext := extOf(filename)
-	u := &Upload{Name: filename}
+	u := &File{Name: filename}
 	switch {
 	case imageExts[ext]:
 		u.Kind, u.Mime, u.Convert = KindImage, MimePNG, ConvertImage
@@ -271,69 +205,24 @@ func Classify(filename string, data []byte, maxBytes int64) (*Upload, error) {
 	return u, nil
 }
 
-// ProcessAny is the TOOL path: media recognised by magic bytes (`toolMedia`),
-// text validated, and any other binary kept as a download rather than refused,
-// so a file the model found on the web reaches the user whatever it is.
-// create_file has already re-encoded a picture to PNG by the time its bytes
-// arrive here.
-func ProcessAny(filename string, data []byte, maxBytes int64) (*Result, error) {
-	return process(filename, data, maxBytes)
-}
-
-// IsRasterImage reports whether data is one of the still-image formats a tool
-// re-encodes to PNG before storing: JPEG, PNG, WebP, GIF (first frame) and
-// BMP. The answer comes from the magic bytes, never from the extension, so a
-// misnamed or extension-less download is caught too.
-// ICO is deliberately absent — see the mime table.
-func IsRasterImage(data []byte) bool {
-	switch sniffMime(data) {
-	case MimeJPEG, MimePNG, MimeWebP, MimeGIF, MimeBMP:
-		return true
+// ClassifyAny is Classify for a TOOL's file: the same extension rules and the
+// same conversions, except that a file which is neither on the list nor text is
+// kept as a download instead of refused, so whatever the model found on the web
+// reaches the user — an unrecognized one simply has no preview.
+func ClassifyAny(filename string, data []byte, maxBytes int64) (*File, error) {
+	f, err := Classify(filename, data, maxBytes)
+	if err == nil || !errors.Is(err, ErrUnsupported) {
+		return f, err
 	}
-	return false
-}
-
-func process(filename string, data []byte, maxBytes int64) (*Result, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("%w: empty file", ErrUnsupported)
-	}
-	// One cap for everything: nothing is re-encoded, so the stored size IS the
-	// upload size.
-	if int64(len(data)) > MaxRawUploadBytes || (maxBytes > 0 && int64(len(data)) > maxBytes) {
+	// An empty file is nobody's to keep, and a download is stored verbatim, so
+	// it carries the stored cap Classify skipped on its way to the refusal.
+	switch {
+	case len(data) == 0:
+		return nil, err
+	case maxBytes > 0 && int64(len(data)) > maxBytes:
 		return nil, ErrTooLarge
 	}
-
-	mime := sniffMime(data)
-	if kind, ok := toolMedia[mime]; ok {
-		return media(kind, mime, filename, data), nil
-	}
-	if IsText(data) {
-		textMime := "text/plain"
-		if m, ok := textExts[extOf(filename)]; ok {
-			textMime = m
-		}
-		return &Result{Kind: KindText, Mime: textMime, Name: filename, Data: data, Size: int64(len(data))}, nil
-	}
-	return &Result{Kind: KindFile, Mime: mime, Name: filename, Data: data, Size: int64(len(data))}, nil
-}
-
-// media builds the Result for one recognized media file. The suffix is only
-// touched when it disagrees with the bytes — "photo.jpeg" and "photo.jpg" both
-// claim image/jpeg and both stay, while PNG bytes in a "photo.jpg" become
-// "photo.png" and an extension-less download gains the suffix its content
-// implies. Text never comes through here: its mime comes FROM the extension,
-// so rewriting the name would be circular.
-func media(kind, mime, name string, data []byte) *Result {
-	if ext := extOf(name); ext == "" || mediaExts[ext] != mime {
-		name = ensureExt(name, ExtForMime(mime))
-	}
-	return &Result{
-		Kind: kind,
-		Mime: mime,
-		Name: name,
-		Data: data,
-		Size: int64(len(data)),
-	}
+	return &File{Kind: KindFile, Mime: MimeBinary, Name: filename}, nil
 }
 
 // ensureExt rewrites name's extension to ext (appended when missing).
@@ -384,65 +273,6 @@ func CleanFilename(name string) (string, error) {
 	return name, nil
 }
 
-// sniffMime labels bytes by magic — never by name — and normalizes what it
-// finds to the mime the app stores. http.DetectContentType covers the images,
-// WAV, ID3-tagged MP3, Ogg and EBML; FLAC and a bare-frame MP3 report
-// octet-stream there, so their own magic is checked by hand.
-//
-// Video is not supported. An EBML file is WebM only when its DocType says so —
-// Matroska shares the magic and is labelled as itself — and ISO-BMFF (MP4, M4A,
-// MOV) keeps the sniffer's video/mp4, which no policy accepts: a tool's file
-// becomes a download, an upload is refused.
-//
-// A label here is served as a Content-Type only for audio and images, which
-// cannot execute; every other binary is forced to octet-stream by the
-// attachment handler, so a wrong guess costs a label, not a hole.
-func sniffMime(data []byte) string {
-	ct := http.DetectContentType(data)
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = strings.TrimSpace(ct[:i])
-	}
-	switch ct {
-	case "video/webm":
-		// The DocType element is within the first few dozen bytes of the EBML
-		// header, so a substring check is enough to tell the containers apart.
-		if bytes.Contains(data[:min(len(data), 64)], []byte("matroska")) {
-			return "video/x-matroska"
-		}
-		return MimeAudio
-	case "audio/wave":
-		return MimeWAV
-	case "application/ogg":
-		return MimeOGG
-	case "application/octet-stream":
-		switch {
-		case bytes.HasPrefix(data, []byte("fLaC")):
-			return MimeFLAC
-		case isMP3Frame(data):
-			return MimeMP3
-		}
-	}
-	return ct
-}
-
-// isMP3Frame reports whether data opens with a plausible MP3 frame header: the
-// 11-bit sync, a non-reserved MPEG version and layer, a non-reserved sample
-// rate and a bitrate index that is not the invalid one. Bare-frame MP3s (no
-// ID3 tag) are the one accepted audio format whose magic Go's sniffer misses.
-// ponytail: a header is 4 bytes of weak signature — an unrelated binary that
-// happens to match is labelled audio/mpeg and fails to play. Scan for a second
-// frame at the offset the first one implies if that ever bites.
-func isMP3Frame(data []byte) bool {
-	if len(data) < 4 || data[0] != 0xff || data[1]&0xe0 != 0xe0 {
-		return false
-	}
-	version := (data[1] >> 3) & 3 // 01 = reserved
-	layer := (data[1] >> 1) & 3   // 00 = reserved
-	bitrate := (data[2] >> 4) & 0xf
-	rate := (data[2] >> 2) & 3 // 11 = reserved
-	return version != 1 && layer != 0 && bitrate != 0xf && rate != 3
-}
-
 // IsText reports whether non-empty data is acceptable as plain text:
 // valid UTF-8, no NUL bytes, >=95% printable/whitespace runes.
 func IsText(data []byte) bool {
@@ -466,11 +296,11 @@ func IsText(data []byte) bool {
 }
 
 // SendsAsImage reports whether a stored image mime may go to a model as an
-// image part: PNG only, the one image mime both conversion paths produce — the
-// browser's for an upload, toPNG's for a picture create_file is handed. Any
-// other image previews in the browser but goes out through the <file> reference
-// path, and the vision tool refuses it in-band. History is rebuilt every turn,
-// so a mime the provider rejects would break that chat permanently.
+// image part: PNG only, the one image mime the conversion every picture goes
+// through produces (internal/media). A row stored before that was true previews
+// in the browser but goes out through the <file> reference path, and the vision
+// tool refuses it in-band. History is rebuilt every turn, so a mime the provider
+// rejects would break that chat permanently.
 func SendsAsImage(mime string) bool {
 	return mime == MimePNG
 }

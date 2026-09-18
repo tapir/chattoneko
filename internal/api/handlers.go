@@ -1088,7 +1088,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		// reject it.
 		// ponytail: the whole file is held in RAM (64 MiB worst case, one file at
 		// a time) because Classify needs bytes for the text check; hand media
-		// straight to media.Image/Audio as an io.Reader if a big upload ever hurts.
+		// straight to media as an io.Reader if a big upload ever hurts.
 		data, err := io.ReadAll(io.LimitReader(f, attach.MaxRawUploadBytes+1))
 		_ = f.Close()
 		if err != nil {
@@ -1097,25 +1097,14 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res, err := attach.Classify(name, data, maxFileBytes)
-		if err != nil {
-			reject(name, err)
-			return
-		}
-		// Media is stored as its conversion, never as it arrived: the temp files
-		// media runs ffmpeg over are gone by the time this returns, whatever it
-		// returned.
-		switch res.Convert {
-		case attach.ConvertImage:
-			data, err = media.Image(r.Context(), res.Ext, data, quantize)
-		case attach.ConvertAudio:
-			data, err = media.Audio(r.Context(), res.Ext, data)
+		if err == nil {
+			// Media is stored as its conversion, never as it arrived: the temp
+			// files media runs ffmpeg over are gone by the time this returns,
+			// whatever it returned.
+			data, err = media.Prepare(r.Context(), res, data, quantize, maxFileBytes)
 		}
 		if err != nil {
 			reject(name, err)
-			return
-		}
-		if maxFileBytes > 0 && int64(len(data)) > maxFileBytes {
-			reject(name, fmt.Errorf("%w: still too large after conversion", attach.ErrTooLarge))
 			return
 		}
 		meta, err := s.store.CreateAttachment(r.Context(), id, res.Name, res.Kind, res.Mime, int64(len(data)), data)

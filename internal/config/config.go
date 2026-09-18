@@ -164,10 +164,10 @@ type Config struct {
 	MCPServers   []MCPServerConfig `json:"mcp_servers"`
 	Limits       LimitsConfig      `json:"limits"`
 	Auth         AuthConfig        `json:"auth"`
-	// ImageQuantization is the 256-colour palette both image conversions can
-	// end in: the browser's pre-upload one (web/src/lib/png-enc.js) and
-	// create_file's (internal/tools/image.go). Off — the default — stores
-	// lossless PNGs, several times the bytes for a photograph.
+	// ImageQuantization is the 256-colour palette every stored picture can end
+	// in: the conversion in internal/media, which an upload, a file create_file
+	// is handed and a recording's soundtrack all pass through. Off — the
+	// default — stores lossless PNGs, several times the bytes for a photograph.
 	ImageQuantization bool `json:"image_quantization"`
 	// ToolDefaults is the global per-tool default toggle (settings UI): tool
 	// display name → enabled. It overrides the catalog default (integrated

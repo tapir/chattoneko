@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,9 +15,28 @@ import (
 	"chattoneko/internal/mcphub"
 )
 
-// mp3Bytes opens with an ID3 tag, which is what Go's content sniffer needs to
-// label the payload audio/mpeg (a bare frame header would do as well).
-var mp3Bytes = []byte("ID3\x04\x00\x00\x00\x00\x00\x00\x00\x00")
+// providerAudio is a quarter second of 8 kHz mono silence: a real, decodable
+// recording. mp3 is what the provider is ASKED for, but whatever container it
+// sends is normalized the same, because ffmpeg probes an audio file's content
+// rather than its name — so a WAV body stored under "speech.mp3" still comes out
+// as the mono MP3 every other recording is. Deliberately not an mp3: the fixture
+// is what proves that.
+func providerAudio() []byte {
+	const samples = 2000
+	b := make([]byte, 44+2*samples)
+	copy(b, "RIFF\x00\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"+
+		"\x40\x1f\x00\x00\x80\x3e\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
+	binary.LittleEndian.PutUint32(b[4:], uint32(len(b)-8))
+	binary.LittleEndian.PutUint32(b[40:], 2*samples)
+	return b
+}
+
+// isMP3 accepts either of the two shapes an MP3 opens with: an ID3 tag or a
+// bare frame sync, which is what lame writes.
+func isMP3(b []byte) bool {
+	return bytes.HasPrefix(b, []byte("ID3")) ||
+		(len(b) > 1 && b[0] == 0xff && b[1]&0xe0 == 0xe0)
+}
 
 // speechReq is what one /audio/speech call carried.
 type speechReq struct{ path, model, input, voice, format string }
@@ -56,7 +77,7 @@ func speechServer(t *testing.T, audio []byte) (*httptest.Server, func() speechRe
 // uploaded recording has, so the chat's player handles it unchanged. The model
 // needs no whitelist entry: a speech designation is a free-standing id.
 func TestSpeakStoresRecording(t *testing.T) {
-	srv, recorded := speechServer(t, mp3Bytes)
+	srv, recorded := speechServer(t, providerAudio())
 	fs := &fakeFileStore{}
 	cfgs := agentConfig(t, srv.URL, config.ModelsConfig{DefaultSpeechModel: "tts", SpeechVoice: "alloy"})
 
@@ -82,8 +103,11 @@ func TestSpeakStoresRecording(t *testing.T) {
 	if f.kind != "file" || f.mime != "audio/mpeg" {
 		t.Errorf("stored as %s/%s, want file/audio-mpeg", f.kind, f.mime)
 	}
-	if string(f.data) != string(mp3Bytes) {
-		t.Errorf("stored bytes = %q, want the provider's audio", f.data)
+	// Not the provider's bytes: they went through the same conversion an
+	// uploaded recording does, so a container the app cannot play still lands
+	// as one it can.
+	if !isMP3(f.data) {
+		t.Errorf("stored bytes are %x…, want an MP3", f.data[:min(4, len(f.data))])
 	}
 	if len(fs.links) != 1 || fs.links[0] != [2]string{f.id, agentMsg} {
 		t.Errorf("links = %v, want the recording shown on %s", fs.links, agentMsg)
@@ -101,7 +125,7 @@ func TestSpeakStoresRecording(t *testing.T) {
 // An unconfigured speech model is an in-band refusal, so the chat model can
 // relay it and finish in text rather than the generation failing.
 func TestSpeakWithoutModel(t *testing.T) {
-	srv, _ := speechServer(t, mp3Bytes)
+	srv, _ := speechServer(t, providerAudio())
 	out, isErr := callSpecialist(t, &fakeFileStore{}, agentConfig(t, srv.URL, config.ModelsConfig{}),
 		"speak", `{"text":"hi"}`, mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg})
 	if !isErr {

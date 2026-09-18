@@ -305,12 +305,12 @@ func specialistFor(kind string) *specialist {
 }
 
 // wireSupported refuses, in-band, a file whose stored mime cannot go to its
-// specialist: an image that is not PNG, a recording that is not MP3. The stored
-// mime is the sniffed one and nothing re-encodes a file on its way out, so what
-// is stored is what would be sent. Both are the mimes the app's own conversion
-// paths produce; a picture or recording a tool fetched in some other format
-// previews for the user and is refused here, since history is rebuilt every turn
-// and a provider rejection would break that chat for good.
+// specialist: an image that is not PNG, a recording that is not MP3. Nothing
+// re-encodes a file on its way out, so what is stored is what would be sent.
+// Both are the mimes the conversion every file goes through produces
+// (internal/media); a row stored before that was true previews for the user and
+// is refused here, since history is rebuilt every turn and a provider rejection
+// would break that chat for good.
 func wireSupported(kind string, att *store.Attachment) error {
 	switch {
 	case kind == "image" && !attach.SendsAsImage(att.Mime):

@@ -14,6 +14,7 @@ import (
 	"chattoneko/internal/attach"
 	"chattoneko/internal/config"
 	"chattoneko/internal/mcphub"
+	"chattoneko/internal/media"
 )
 
 // CreateFile returns the "create_file" tool: the model hands the user a file,
@@ -39,7 +40,7 @@ func CreateFile(files fileStore, limits *config.Store) tool {
 		"properties": {
 			"filename": {
 				"type": "string",
-				"description": "File name including extension, e.g. notes.md or chart.png. Plain name only, no directories. Required when writing the file yourself; optional with ` + "`url`" + `, which derives it from the address."
+				"description": "File name including extension, e.g. notes.md or chart.png — the extension is what decides how the file is treated, so binary content needs its real suffix. Plain name only, no directories. Required when writing the file yourself; optional with ` + "`url`" + `, which derives it from the address."
 			},
 			"content": {
 				"type": "string",
@@ -112,10 +113,10 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 		if filepath.Ext(name) == "" {
 			// Content from an extension-less URL (an API path, a bare page) still
 			// wants a suffix in the UI: take the one the served Content-Type
-			// implies, from the same table attach derives the stored mime from, so
-			// the two always agree. Types that table doesn't know leave the name
-			// bare; media get their real suffix forced on below, once ProcessAny
-			// has sniffed the bytes.
+			// implies, from the same table attach names extensions by. That suffix
+			// is now what DECIDES the file — a body served as image/jpeg becomes a
+			// picture because it is named ".jpg" — and a type the table does not
+			// know leaves the name bare, which makes the file a download.
 			name += attach.ExtForMime(contentType)
 		}
 		from = " from " + finalURL.String()
@@ -129,33 +130,24 @@ func createFile(ctx context.Context, argsJSON string, meta mcphub.CallMeta, file
 		}
 	}
 
-	// Images are normalized to PNG here, the same three steps the browser runs
-	// on an upload before sending it (see image.go), so a file the model drew or
-	// fetched lands in the chat in the shape a user's file does. Only inside the
-	// size limit: an oversized file is ProcessAny's ErrTooLarge to report, not
-	// ours to decode first.
-	if int64(len(data)) <= limit && attach.IsRasterImage(data) {
-		converted, err := toPNG(data, quantize)
-		if err != nil {
-			return "", fmt.Errorf("content rejected: the image could not be converted to PNG: %v", err)
-		}
-		data = converted
+	// The same rules as an upload — the extension decides, ffmpeg produces the
+	// stored bytes, so a picture the model drew or fetched lands in the chat in
+	// the shape a user's file does — plus the download kind an upload refuses,
+	// which is what keeps a fetched archive reachable.
+	res, err := attach.ClassifyAny(name, data, limit)
+	if err == nil {
+		data, err = media.Prepare(ctx, res, data, quantize, limit)
 	}
-
-	// Same content rules as user uploads, plus the binary kind they refuse:
-	// supported media is recognised by magic bytes, text is validated, anything
-	// else is kept as a download-only file.
-	res, err := attach.ProcessAny(name, data, limit)
-	if errors.Is(err, attach.ErrTooLarge) {
+	switch {
+	case errors.Is(err, attach.ErrTooLarge):
 		return "", fmt.Errorf("content exceeds the %s file size limit", humanSize(limit))
-	}
-	if err != nil {
+	case err != nil:
 		return "", fmt.Errorf("content rejected: %v", err)
 	}
-	// The stored name comes from ProcessAny (media get the extension their
-	// sniffed mime implies), never from a second sniff here.
+	// The stored name is ClassifyAny's: media carry the suffix of what the
+	// conversion produced, never the one they arrived under.
 	name = capName(res.Name)
-	m, err := files.CreateAttachment(ctx, meta.ChatID, name, res.Kind, res.Mime, res.Size, res.Data)
+	m, err := files.CreateAttachment(ctx, meta.ChatID, name, res.Kind, res.Mime, int64(len(data)), data)
 	if err != nil {
 		return "", fmt.Errorf("store file: %v", err)
 	}

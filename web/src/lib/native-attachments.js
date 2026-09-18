@@ -58,13 +58,18 @@ function mediaUrl(media) {
 // Camera: launches the device camera app; the shot comes back as a single
 // JPEG. The drawer is already closed by the caller before this runs.
 //
-// CAPTURE_SIDE caps the long side: the stock camera app returns a full-sensor
-// photo (several MB) and this is what it is downscaled to before the upload.
-// The server's own cap is 1920 and it never upscales, so this stays the
-// bandwidth/quality knob for mobile. Both target options are required — the
-// plugin ignores a lone value; aspect is preserved. Gallery picks skip this:
-// they come through the photo picker as the original bytes, never re-encoded.
-const CAPTURE_SIDE = 1280;
+// CAPTURE_SIDE is the box the plugin fits the shot into, so it caps the LONG
+// side at 1920 in either orientation — which is what the server's conversion
+// keeps for a landscape picture, and more than it keeps for a portrait one
+// (ffmpeg caps that at 1080 wide and trims the rest). One box cannot match both:
+// the plugin needs its two sizes up front, while the stock camera app picks the
+// shutter orientation after ours has run, so a landscape box would come back
+// smaller than the server keeps whenever the phone gets turned. Over-delivering
+// costs a few hundred KB of upload; under-delivering loses detail for good.
+// Both target options are required — the plugin ignores a lone value; aspect is
+// preserved. Gallery picks skip this: they come through the photo picker as the
+// original bytes, never re-encoded.
+const CAPTURE_SIDE = 1920;
 
 export async function capturePhoto() {
   const { Camera } = await import("@capacitor/camera");

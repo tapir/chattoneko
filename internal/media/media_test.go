@@ -85,7 +85,7 @@ func makeWAV(t *testing.T) []byte {
 
 func TestImageToPNG(t *testing.T) {
 	requireFFmpeg(t)
-	out, err := Image(context.Background(), ".png", makePNG(t, 60, 40), false)
+	out, err := toPNG(context.Background(), ".png", makePNG(t, 60, 40), false)
 	if err != nil {
 		t.Fatalf("Image: %v", err)
 	}
@@ -102,9 +102,9 @@ func TestImageToPNG(t *testing.T) {
 // it at all.
 func TestTGAByExtension(t *testing.T) {
 	requireFFmpeg(t)
-	out, err := Image(context.Background(), ".tga", makeTGA(t, 12, 9), false)
+	out, err := toPNG(context.Background(), ".tga", makeTGA(t, 12, 9), false)
 	if err != nil {
-		t.Fatalf("Image(.tga): %v", err)
+		t.Fatalf("toPNG(.tga): %v", err)
 	}
 	cfg, err := png.DecodeConfig(bytes.NewReader(out))
 	if err != nil {
@@ -120,13 +120,13 @@ func TestTGAByExtension(t *testing.T) {
 func TestImageQuantized(t *testing.T) {
 	requireFFmpeg(t)
 	ctx := context.Background()
-	lossless, err := Image(ctx, ".png", makePNG(t, 60, 40), false)
+	lossless, err := toPNG(ctx, ".png", makePNG(t, 60, 40), false)
 	if err != nil {
 		t.Fatalf("Image: %v", err)
 	}
-	quantized, err := Image(ctx, ".png", makePNG(t, 60, 40), true)
+	quantized, err := toPNG(ctx, ".png", makePNG(t, 60, 40), true)
 	if err != nil {
-		t.Fatalf("Image(quantize): %v", err)
+		t.Fatalf("toPNG(quantize): %v", err)
 	}
 	if lossless[25] == 3 {
 		t.Error("the lossless path wrote an indexed PNG")
@@ -138,7 +138,7 @@ func TestImageQuantized(t *testing.T) {
 
 func TestAudioToMP3(t *testing.T) {
 	requireFFmpeg(t)
-	out, err := Audio(context.Background(), ".wav", makeWAV(t))
+	out, err := toMP3(context.Background(), ".wav", makeWAV(t))
 	if err != nil {
 		t.Fatalf("Audio: %v", err)
 	}
@@ -153,25 +153,28 @@ func TestAudioToMP3(t *testing.T) {
 func TestRejectsUndecodable(t *testing.T) {
 	requireFFmpeg(t)
 	zip := []byte("PK\x03\x04 not a picture at all")
-	if _, err := Image(context.Background(), ".png", zip, false); err == nil {
+	if _, err := toPNG(context.Background(), ".png", zip, false); err == nil {
 		t.Fatal("a zip named .png converted")
 	}
-	if _, err := Audio(context.Background(), ".mp3", zip); err == nil {
+	if _, err := toMP3(context.Background(), ".mp3", zip); err == nil {
 		t.Fatal("a zip named .mp3 converted")
 	}
 }
 
-// The point of the package: nothing it touches survives the call.
+// The point of the package: nothing it touches survives the call. The work
+// directory is a private one, because `go test ./...` runs packages in parallel
+// and every package that converts writes into the same TMPDIR.
 func TestTempFilesAreGone(t *testing.T) {
 	requireFFmpeg(t)
+	t.Setenv("TMPDIR", t.TempDir())
 	ctx := context.Background()
-	if _, err := Image(ctx, ".png", makePNG(t, 8, 8), false); err != nil {
+	if _, err := toPNG(ctx, ".png", makePNG(t, 8, 8), false); err != nil {
 		t.Fatalf("Image: %v", err)
 	}
-	if _, err := Image(ctx, ".png", []byte("PK\x03\x04 junk"), false); err == nil {
+	if _, err := toPNG(ctx, ".png", []byte("PK\x03\x04 junk"), false); err == nil {
 		t.Fatal("junk converted")
 	}
-	entries, err := os.ReadDir(workDir)
+	entries, err := os.ReadDir(workDir())
 	if err != nil {
 		t.Fatalf("read work dir: %v", err)
 	}

@@ -1,98 +1,36 @@
 package attach
 
 import (
-	"bytes"
 	"errors"
-	"image"
-	"image/jpeg"
-	"image/png"
-	"os"
 	"strings"
 	"testing"
 )
 
-// ---- payloads ----
+// junk is a payload no text heuristic accepts, which is all a binary needs to
+// be here: classification reads the extension, and the only bytes it looks at
+// are IsText's.
+var junk = []byte{0x00, 0x01, 0x02, 0xff, 0xfe}
 
-func makePNG(t *testing.T, w, h int) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h))); err != nil {
-		t.Fatalf("encode png: %v", err)
-	}
-	return buf.Bytes()
-}
-
-func makeJPEG(t *testing.T, w, h int) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h)), nil); err != nil {
-		t.Fatalf("encode jpeg: %v", err)
-	}
-	return buf.Bytes()
-}
-
-// webmHeader is the EBML magic plus a "webm" DocType — enough for the sniffer,
-// which never parses the container. mkvHeader is the same magic with the
-// Matroska DocType, which the sniffer has to tell apart.
-var (
-	webmHeader = []byte{0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x84, 'w', 'e', 'b', 'm'}
-	mkvHeader  = []byte{0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x82, 0x88, 'm', 'a', 't', 'r', 'o', 's', 'k', 'a'}
-)
-
-// Headers for the formats the sniffer has to recognize. Each is only as long as
-// classification needs — nothing here is decoded, so a payload never is.
-var (
-	gifHeader  = []byte("GIF89a\x01\x00\x01\x00\x00\x00\x00")
-	bmpHeader  = append([]byte("BM"), make([]byte, 60)...)
-	icoHeader  = []byte{0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10, 0x00, 0x00, 0x01, 0x00, 0x20, 0x00, 0x68, 0x04}
-	wavHeader  = append([]byte("RIFF\x00\x00\x00\x00WAVEfmt "), make([]byte, 20)...)
-	id3Header  = append([]byte("ID3\x04\x00\x00\x00\x00\x00\x00"), make([]byte, 20)...)
-	mp3Frame   = append([]byte{0xff, 0xfb, 0x90, 0x00}, make([]byte, 60)...) // sync, MPEG1 layer III, 128k/44.1k
-	flacHeader = append([]byte("fLaC\x00\x00\x00\x22"), make([]byte, 40)...)
-	oggHeader  = append([]byte("OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00"), make([]byte, 30)...)
-	pdfHeader  = []byte("%PDF-1.7 fake")
-	zipHeader  = []byte{0x50, 0x4b, 0x03, 0x04, 0x00, 0x01}
-	// Video and image formats the app does not support: an ISO-BMFF file and an
-	// ISOBMFF photo brand, both of which a tool may still hand over.
-	mp4Header  = append([]byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"), make([]byte, 20)...)
-	avifHeader = append([]byte("\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1"), make([]byte, 20)...)
-	tiffHeader = []byte{0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00}
-)
-
-// bareMP3Frame is an MP3 with no ID3 tag: a bare Xing frame, MPEG2 layer III.
-// Go's sniffer misses it, which is why the tool path matches it by hand.
-var bareMP3Frame = append([]byte{0xff, 0xf2, 0x58, 0xc4}, make([]byte, 60)...)
-
-func sampleWebP(t *testing.T) []byte {
-	t.Helper()
-	payload, err := os.ReadFile("testdata/sample.webp")
-	if err != nil {
-		t.Fatalf("read sample: %v", err)
-	}
-	return payload
-}
-
-// ---- upload classification: the extension decides, the bytes are converted ----
+// ---- classification: the extension decides, the bytes are converted ----
 
 func TestClassifyMediaConverts(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		filename    string
-		data        []byte
 		wantKind    string
 		wantMime    string
 		wantName    string
 		wantExt     string
 		wantConvert string
 	}{
-		{"png", "diagram.png", makePNG(t, 8, 6), KindImage, MimePNG, "diagram.png", ".png", ConvertImage},
-		{"tga", "sprite.tga", []byte("not really a tga"), KindImage, MimePNG, "sprite.png", ".tga", ConvertImage},
-		{"mp3", "memo.mp3", bareMP3Frame, KindFile, MimeMP3, "memo.mp3", ".mp3", ConvertAudio},
-		{"video", "clip.mp4", mp4Header, KindFile, MimeMP3, "clip.mp3", ".mp4", ConvertAudio},
-		{"pdf", "invoice.pdf", pdfHeader, KindFile, MimePDF, "invoice.pdf", "", ConvertNone},
+		{"png", "diagram.png", KindImage, MimePNG, "diagram.png", ".png", ConvertImage},
+		{"tga", "sprite.tga", KindImage, MimePNG, "sprite.png", ".tga", ConvertImage},
+		{"mp3", "memo.mp3", KindFile, MimeMP3, "memo.mp3", ".mp3", ConvertAudio},
+		{"video", "clip.mp4", KindFile, MimeMP3, "clip.mp3", ".mp4", ConvertAudio},
+		{"pdf", "invoice.pdf", KindFile, MimePDF, "invoice.pdf", "", ConvertNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := Classify(tc.filename, tc.data, 1<<20)
+			res, err := Classify(tc.filename, junk, 1<<20)
 			if err != nil {
 				t.Fatalf("classify: %v", err)
 			}
@@ -110,20 +48,20 @@ func TestClassifyMediaConverts(t *testing.T) {
 
 // The stored name is the conversion's, not the upload's: whatever a picture or a
 // recording arrived as, it lands as a .png or an .mp3. Text and PDF keep theirs.
+// The payload is irrelevant — that is the whole point of classifying by name —
+// so every case uses text bytes.
 func TestClassifyNameFollowsConversion(t *testing.T) {
 	for _, tc := range []struct {
 		filename string
-		data     []byte
 		want     string
 	}{
-		{"photo.jpeg", makeJPEG(t, 8, 6), "photo.png"},
-		{"a.b.c.WEBP", sampleWebP(t), "a.b.c.png"},
-		{"memo.webm", webmHeader, "memo.mp3"},
-		{"invoice.txt", pdfHeader, "invoice.txt"}, // text wins: the CONTENT decides
-		{"notes.md", []byte("# hi\n"), "notes.md"},
-		{"paper.pdf", pdfHeader, "paper.pdf"},
+		{"photo.jpeg", "photo.png"},
+		{"a.b.c.WEBP", "a.b.c.png"},
+		{"memo.webm", "memo.mp3"},
+		{"invoice.pdf", "invoice.pdf"},
+		{"notes.md", "notes.md"},
 	} {
-		res, err := Classify(tc.filename, tc.data, 1<<20)
+		res, err := Classify(tc.filename, []byte("# hi\n"), 1<<20)
 		if err != nil {
 			t.Fatalf("Classify(%q): %v", tc.filename, err)
 		}
@@ -133,185 +71,53 @@ func TestClassifyNameFollowsConversion(t *testing.T) {
 	}
 }
 
-// A tool's file is stored exactly as fetched: every supported media format
-// becomes a preview under its own mime, and nothing is converted.
-func TestProcessAnyToolMedia(t *testing.T) {
-	jpg := makeJPEG(t, 8, 6)
-	for _, tc := range []struct {
-		name               string
-		filename           string
-		data               []byte
-		wantKind, wantMime string
-	}{
-		{"jpeg", "photo.jpg", jpg, KindImage, MimeJPEG},
-		{"jpeg keeps its spelling", "photo.jpeg", jpg, KindImage, MimeJPEG},
-		{"misnamed jpeg", "photo", jpg, KindImage, MimeJPEG}, // gains .jpg
-		{"gif", "anim.gif", gifHeader, KindImage, MimeGIF},
-		{"bmp", "bitmap.bmp", bmpHeader, KindImage, MimeBMP},
-		// ICO is not a supported image: no conversion path handles it, so it is
-		// kept as the download the tool policy keeps any unknown binary as.
-		{"ico is not an image", "favicon.ico", icoHeader, KindFile, "image/x-icon"},
-		{"wav", "rec.wav", wavHeader, KindFile, MimeWAV},
-		{"tagged mp3", "song.mp3", id3Header, KindFile, MimeMP3},
-		{"bare-frame mp3", "song.mp3", mp3Frame, KindFile, MimeMP3},
-		{"flac", "track.flac", flacHeader, KindFile, MimeFLAC},
-		{"ogg", "track.ogg", oggHeader, KindFile, MimeOGG},
-		{"opus", "voice.opus", oggHeader, KindFile, MimeOGG},
-		{"webm", "rec.webm", webmHeader, KindFile, MimeAudio},
-		{"pdf", "doc.pdf", pdfHeader, KindFile, MimePDF},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			res, err := ProcessAny(tc.filename, tc.data, 1<<20)
-			if err != nil {
-				t.Fatalf("ProcessAny: %v", err)
-			}
-			if res.Kind != tc.wantKind || res.Mime != tc.wantMime {
-				t.Fatalf("got kind=%q mime=%q, want %q/%q", res.Kind, res.Mime, tc.wantKind, tc.wantMime)
-			}
-			if !bytes.Equal(res.Data, tc.data) || res.Size != int64(len(tc.data)) {
-				t.Fatal("bytes must be stored verbatim")
-			}
-			// The name keeps whatever suffix already agrees with the bytes; only an
-			// extension-less one gains a suffix.
-			wantName := tc.filename
-			if !strings.Contains(tc.filename, ".") {
-				wantName = tc.filename + ExtForMime(tc.wantMime)
-			}
-			if res.Name != wantName {
-				t.Fatalf("name = %q, want %q", res.Name, wantName)
-			}
-		})
-	}
-}
-
-// A format no policy supports is still stored for a tool, as a download: the
-// model found a file on the web and the user can have it whatever it is. Video
-// containers are labelled as themselves, so the client shows a chip and not a
-// player that cannot play them.
-func TestProcessAnyKeepsUnsupportedAsDownload(t *testing.T) {
-	for _, tc := range []struct {
-		filename string
-		data     []byte
-		wantMime string
-	}{
-		{"clip.mp4", mp4Header, "video/mp4"},
-		{"movie.mkv", mkvHeader, "video/x-matroska"},
-		{"photo.avif", avifHeader, "application/octet-stream"},
-		{"scan.tiff", tiffHeader, "application/octet-stream"},
-		{"archive.zip", zipHeader, "application/zip"},
-		{"photo.jpg", zipHeader, "application/zip"}, // a name that lies: the bytes win
-	} {
-		res, err := ProcessAny(tc.filename, tc.data, 1<<20)
-		if err != nil {
-			t.Fatalf("ProcessAny(%q): %v", tc.filename, err)
-		}
-		if res.Kind != KindFile || res.Mime != tc.wantMime {
-			t.Errorf("ProcessAny(%q) = %s/%s, want file/%s", tc.filename, res.Kind, res.Mime, tc.wantMime)
-		}
-		if !bytes.Equal(res.Data, tc.data) {
-			t.Errorf("ProcessAny(%q) changed the bytes", tc.filename)
-		}
-		// No preview: none of these is audio, so the client shows a download.
-		if got := Type(res.Kind, res.Mime); got != KindFile {
-			t.Errorf("Type(%q) = %q, want file", res.Mime, got)
-		}
-	}
-	// Matroska shares the EBML magic with WebM: only the DocType tells them
-	// apart, and getting it wrong would hand the client an unplayable player.
-	if res, err := ProcessAny("rec.webm", webmHeader, 1<<20); err != nil || res.Mime != MimeAudio {
-		t.Fatalf("webm = %+v, %v", res, err)
-	}
-}
-
 // An upload is either on the extension list or text — nothing else is stored,
 // whatever its bytes are. Formats no build of ffmpeg here decodes (tiff, ico,
 // avif) are refused by the name rather than by a failed conversion.
 func TestClassifyRejectsUnknown(t *testing.T) {
-	for _, tc := range []struct {
-		filename string
-		data     []byte
-	}{
-		{"scan.tiff", tiffHeader},
-		{"sticker.ico", icoHeader},
-		{"photo.avif", avifHeader},
-		{"archive.zip", zipHeader},
-		{"notes", []byte{0x00, 0x01, 0xff}}, // extension-less and not text
-		{"liar.png", zipHeader},             // accepted here; the conversion rejects it
-	} {
-		_, err := Classify(tc.filename, tc.data, 1<<20)
-		want := ErrUnsupported
-		if tc.filename == "liar.png" {
-			want = nil
-		}
-		if want == nil {
-			if err != nil {
-				t.Errorf("Classify(%q) = %v, want the conversion to be the judge", tc.filename, err)
-			}
-			continue
-		}
-		if !errors.Is(err, want) {
-			t.Errorf("Classify(%q) = %v, want ErrUnsupported", tc.filename, err)
+	for _, filename := range []string{"scan.tiff", "sticker.ico", "photo.avif", "archive.zip", "notes"} {
+		if _, err := Classify(filename, junk, 1<<20); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("Classify(%q) = %v, want ErrUnsupported", filename, err)
 		}
 	}
-	_, err := Classify("archive.zip", zipHeader, 1<<20)
-	if !strings.Contains(err.Error(), Accepted) || strings.Contains(err.Error(), ToolAccepted) {
-		t.Fatalf("error %q should name the upload list", err)
+	_, err := Classify("archive.zip", junk, 1<<20)
+	if !strings.Contains(err.Error(), Accepted) {
+		t.Fatalf("error %q should name the accepted list", err)
+	}
+	// A name that lies is the conversion's to reject, not the classifier's.
+	if _, err := Classify("liar.png", junk, 1<<20); err != nil {
+		t.Errorf("Classify(liar.png) = %v, want the conversion to be the judge", err)
 	}
 }
 
-// IsRasterImage is the gate on create_file's PNG conversion: the five formats
-// it decodes, and nothing else — ICO in particular.
-func TestIsRasterImage(t *testing.T) {
-	jpg := makeJPEG(t, 8, 6)
-	for _, tc := range []struct {
-		name string
-		data []byte
-		want bool
-	}{
-		{"jpeg", jpg, true},
-		{"png", makePNG(t, 8, 6), true},
-		{"webp", sampleWebP(t), true},
-		{"gif", gifHeader, true},
-		{"bmp", bmpHeader, true},
-		{"ico", icoHeader, false},
-		{"wav", wavHeader, false},
-		{"pdf", pdfHeader, false},
-		{"text", []byte("hello"), false},
-	} {
-		if got := IsRasterImage(tc.data); got != tc.want {
-			t.Errorf("IsRasterImage(%s) = %v, want %v", tc.name, got, tc.want)
+// The tool path keeps what an upload refuses: a file the model fetched reaches
+// the user whatever it is, verbatim and under the mime the attachment handler
+// serves every non-audio binary as anyway. Media and text take the same road an
+// upload gives them.
+func TestClassifyAnyKeepsUnknownAsDownload(t *testing.T) {
+	for _, name := range []string{"archive.zip", "app.exe", "data", "scan.tiff"} {
+		res, err := ClassifyAny(name, junk, 1<<20)
+		if err != nil {
+			t.Fatalf("ClassifyAny(%q): %v", name, err)
+		}
+		if res.Kind != KindFile || res.Mime != MimeBinary || res.Name != name || res.Convert != ConvertNone {
+			t.Errorf("ClassifyAny(%q) = %+v", name, res)
 		}
 	}
-}
-
-// Only PNG may go to a model as an image. Everything else previews in the
-// browser but takes the <file> reference path. History is rebuilt every
-// turn, so a mime the provider rejects would break that chat permanently.
-func TestSendsAsImage(t *testing.T) {
-	for mime, want := range map[string]bool{
-		MimePNG:  true,
-		MimeWebP: false, MimeJPEG: false, MimeGIF: false, MimeBMP: false, "image/x-icon": false,
-		MimePDF: false, MimeAudio: false, "": false,
-	} {
-		if got := SendsAsImage(mime); got != want {
-			t.Errorf("SendsAsImage(%q) = %v, want %v", mime, got, want)
-		}
+	if res, err := ClassifyAny("photo.jpg", junk, 1<<20); err != nil ||
+		res.Convert != ConvertImage || res.Mime != MimePNG || res.Name != "photo.png" {
+		t.Errorf("ClassifyAny(photo.jpg) = %+v, %v", res, err)
 	}
-}
-
-// A binary an upload refuses is still a download on the tool path: a file the
-// model fetched reaches the user whatever it is.
-func TestToolBinaryKeptAsDownload(t *testing.T) {
-	junk := []byte{0x00, 0x01, 0x02, 0xff, 0xfe}
-	if _, err := Classify("x.bin", junk, 1<<20); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("upload: want ErrUnsupported, got %v", err)
+	if res, err := ClassifyAny("notes.md", []byte("# hi\n"), 1<<20); err != nil || res.Kind != KindText {
+		t.Errorf("ClassifyAny(notes.md) = %+v, %v", res, err)
 	}
-	res, err := ProcessAny("x.bin", junk, 1<<20)
-	if err != nil {
-		t.Fatalf("ProcessAny: %v", err)
+	// The two refusals that survive: an empty file is nobody's to keep, and the
+	// stored cap still applies to bytes stored verbatim.
+	if _, err := ClassifyAny("empty.zip", nil, 1<<20); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("empty file kept as a download: %v", err)
 	}
-	if res.Kind != KindFile || !bytes.Equal(res.Data, junk) {
-		t.Fatalf("ProcessAny = %+v", res)
+	if _, err := ClassifyAny("big.zip", junk, 2); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("oversize download accepted: %v", err)
 	}
 }
 
@@ -348,8 +154,8 @@ func TestClassifyTooLarge(t *testing.T) {
 	}
 	// Media is measured after its conversion, so the stored cap does not apply
 	// to the bytes that arrive: a 40 MB shot that converts to a 2 MB PNG is the
-	// handler's to accept, and the raw ceiling is what bounds the upload.
-	if _, err := Classify("pic.png", makePNG(t, 8, 6), 64); err != nil {
+	// caller's to accept, and the raw ceiling is what bounds the upload.
+	if _, err := Classify("pic.png", payload, 4); err != nil {
 		t.Fatalf("image rejected before its conversion: %v", err)
 	}
 	if _, err := Classify("x.txt", payload, 1024); err != nil {
@@ -367,18 +173,35 @@ func TestClassifyRejectsEmpty(t *testing.T) {
 	}
 }
 
+// Only PNG may go to a model as an image. Everything else previews in the
+// browser but takes the <file> reference path. History is rebuilt every
+// turn, so a mime the provider rejects would break that chat permanently.
+func TestSendsAsImage(t *testing.T) {
+	for mime, want := range map[string]bool{
+		MimePNG: true,
+		// A row stored before every picture became a PNG, and anything a
+		// browser can render but a provider may not.
+		"image/webp": false, "image/jpeg": false, "image/gif": false,
+		"image/bmp": false, "image/x-icon": false,
+		MimePDF: false, MimeMP3: false, MimeBinary: false, "": false,
+	} {
+		if got := SendsAsImage(mime); got != want {
+			t.Errorf("SendsAsImage(%q) = %v, want %v", mime, got, want)
+		}
+	}
+}
+
 func TestType(t *testing.T) {
 	cases := []struct{ kind, mime, want string }{
 		{KindImage, MimePNG, "image"},
-		{KindImage, MimeWebP, "image"},
+		{KindImage, "image/webp", "image"}, // a row from before every picture was a PNG
 		{KindText, "text/markdown", "text"},
 		{KindText, "application/json", "text"}, // the kind decides, not the mime
-		{KindFile, MimeAudio, "audio"},
-		{KindFile, "audio/mpeg", "audio"}, // a tool's recording: audio, but not one a specialist takes
+		{KindFile, MimeMP3, "audio"},
+		{KindFile, "audio/ogg", "audio"},
 		{KindFile, MimePDF, "document"},
-		{KindFile, "application/zip", "file"},
+		{KindFile, MimeBinary, "file"},
 		{KindFile, "video/mp4", "file"},
-		{KindFile, "application/octet-stream", "file"},
 	}
 	for _, tc := range cases {
 		if got := Type(tc.kind, tc.mime); got != tc.want {
@@ -443,22 +266,29 @@ func TestCleanFilename(t *testing.T) {
 	}
 }
 
-// ExtForMime must agree with the mime Process derives from the extension it
-// hands back, strip parameters, and stay quiet about types it doesn't know.
+// ExtForMime gives an extension-less download the suffix a served Content-Type
+// implies — which is now what decides the file, so a body served as image/jpeg
+// becomes a picture only because this hands it a ".jpg". Parameters are
+// stripped, and a type the table does not know invents nothing.
 func TestExtForMime(t *testing.T) {
 	cases := []struct{ ctype, want string }{
 		{"application/json", ".json"},
 		{"application/json; charset=utf-8", ".json"},
 		{" TEXT/HTML ", ".html"},
-		{"text/markdown", ".md"}, // shortest of md/markdown, stable across runs
-		{"text/yaml", ".yml"},    // shortest of yaml/yml
-		{MimePNG, ".png"},        // media are in the same table
-		{MimeJPEG, ".jpg"},
-		{MimeWebP, ".webp"},
-		{MimeAudio, ".webm"},
-		{MimeOGG, ".ogg"}, // shortest of ogg/opus
+		{"text/markdown", ".md"},
+		{"text/yaml", ".yaml"},
+		{MimePNG, ".png"},
+		{"image/jpeg", ".jpg"},
+		{"image/webp", ".webp"},
+		{"image/x-tga", ".tga"},
+		{"audio/mpeg", ".mp3"},
+		{"audio/x-wav", ".wav"},
+		{"audio/ogg", ".ogg"},
+		{"audio/mp4", ".m4a"},
+		{"video/mp4", ".mp4"}, // a fetched video is on the audio list: its soundtrack survives
+		{"video/x-matroska", ".mkv"},
 		{MimePDF, ".pdf"},
-		{"video/mp4", ""},              // unsupported: no suffix is invented
+		{"image/avif", ""},             // not on the list: no suffix is invented
 		{"application/vnd.custom", ""}, // unknown: no invented suffix
 		{"", ""},
 		{"text/plain", ""},
@@ -468,11 +298,21 @@ func TestExtForMime(t *testing.T) {
 			t.Errorf("ExtForMime(%q) = %q, want %q", tc.ctype, got, tc.want)
 		}
 	}
-	// Round trip: the extension we suggest must map back to the same mime,
-	// otherwise a fetched file would be named for one type and stored as another.
-	for _, mime := range textExts {
-		if got := ExtForMime(mime); got != "" && textExts[strings.TrimPrefix(got, ".")] != mime {
+	// Every text mime textExts knows has a suffix here, and that suffix maps
+	// back to the same mime: a fetched file must not be named for one type and
+	// stored as another.
+	for ext, mime := range textExts {
+		if got := ExtForMime(mime); got == "" {
+			t.Errorf("%q (%s) has no suffix", mime, ext)
+		} else if textExts[strings.TrimPrefix(got, ".")] != mime {
 			t.Errorf("%q -> %q -> a different mime", mime, got)
+		}
+	}
+	// And every media suffix it hands out is one Classify accepts.
+	for _, ctype := range []string{"image/jpeg", "audio/x-wav", "video/mp4", "video/x-matroska"} {
+		ext := strings.TrimPrefix(ExtForMime(ctype), ".")
+		if !imageExts[ext] && !audioExts[ext] && ext != "pdf" {
+			t.Errorf("%q -> .%s, which Classify does not accept", ctype, ext)
 		}
 	}
 }

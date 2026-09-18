@@ -430,8 +430,8 @@ func TestCreateFileFromURLFilename(t *testing.T) {
 	ts := serveTextOrImage(t, testPNG(t, 5, 5))
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 
-	// Media names get the extension their sniffed mime implies — and every
-	// raster format is converted to PNG first, so that suffix is always .png.
+	// Media names carry the suffix of what the conversion produced, so every
+	// picture ends as .png — unless its own suffix already says that.
 	cases := []struct{ name, args, want string }{
 		{"jpg source", `{"url":"` + ts.URL + `/a/photo.jpeg"}`, "photo.png"},
 		{"webp source", `{"url":"` + ts.URL + `/a/sticker.webp"}`, "sticker.png"},
@@ -495,7 +495,8 @@ func TestCreateFileFromURLBinary(t *testing.T) {
 
 // Bytes with a real PNG magic but nonsense after the header are refused: the
 // conversion runs on the server, so a picture that will not decode is an
-// in-band error rather than a broken thumbnail nobody can explain.
+// in-band error rather than a broken thumbnail nobody can explain. ffmpeg's own
+// diagnosis rides along, which is why only the wrapper is asserted here.
 func TestCreateFileFromURLUndecodablePNGIsRefused(t *testing.T) {
 	allowWebFetchLoopback(t)
 	body := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
@@ -504,7 +505,7 @@ func TestCreateFileFromURLUndecodablePNGIsRefused(t *testing.T) {
 	fs := &fakeFileStore{}
 	out, isErr := callTool(t, fs, "create_file", `{"url":"`+ts.URL+`/x.png"}`,
 		mcphub.CallMeta{ChatID: "c1", MessageID: "m1"})
-	if !isErr || !strings.Contains(out, "could not be converted to PNG") {
+	if !isErr || !strings.Contains(out, "content rejected") {
 		t.Fatalf("want a conversion error, got isErr=%v %q", isErr, out)
 	}
 	if len(fs.files) != 0 {

@@ -34,22 +34,24 @@ var ffmpegBin = func() string {
 	return "ffmpeg"
 }()
 
-// Binary is the ffmpeg that Image and Audio run: $CHATTO_FFMPEG when set,
+// Binary is the ffmpeg Prepare runs: $CHATTO_FFMPEG when set,
 // otherwise a plain "ffmpeg" PATH lookup.
 func Binary() string { return ffmpegBin }
 
 // workDir is its own directory under TMPDIR so Sweep can empty it without
-// touching anything else that lives there.
-var workDir = filepath.Join(os.TempDir(), "chattoneko-media")
+// touching anything else that lives there. Read per call rather than cached at
+// init, so a test can point it at a private directory with t.Setenv.
+func workDir() string { return filepath.Join(os.TempDir(), "chattoneko-media") }
 
 // Sweep empties workDir. main calls it at startup, which is the whole janitor:
 // a conversion killed mid-run (OOM, SIGKILL, deploy) never ran its defers, and
 // this directory is ours alone.
 func Sweep() error {
-	if err := os.RemoveAll(workDir); err != nil {
+	dir := workDir()
+	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
-	return os.MkdirAll(workDir, 0o700)
+	return os.MkdirAll(dir, 0o700)
 }
 
 // ffmpeg/cli.md verbatim. One thread and no stdin keep a conversion from
@@ -63,12 +65,36 @@ var (
 	maxPixels = []string{"-max_pixels", "33177600"}
 )
 
-// Image converts one picture to a PNG — a 256-colour indexed one when quantize
+// Prepare returns the bytes to store for one classified file: the conversion its
+// verdict asks for, refused when the result outruns maxBytes. Every path into
+// the database — an upload, create_file, speak — goes through this, so one set of
+// invocations produces every attachment the app holds and a file stored under a
+// media mime is always the shape that mime says.
+func Prepare(ctx context.Context, f *attach.File, data []byte, quantize bool, maxBytes int64) ([]byte, error) {
+	var err error
+	switch f.Convert {
+	case attach.ConvertImage:
+		data, err = toPNG(ctx, f.Ext, data, quantize)
+	case attach.ConvertAudio:
+		data, err = toMP3(ctx, f.Ext, data)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// The stored cap is measured on what lands in the database, which for media
+	// only exists now.
+	if maxBytes > 0 && int64(len(data)) > maxBytes {
+		return nil, attach.ErrTooLarge
+	}
+	return data, nil
+}
+
+// toPNG converts one picture to a PNG — a 256-colour indexed one when quantize
 // is the server's image_quantization setting. inExt is the input's own suffix,
 // dot included, and must survive onto the temp file's name: ffmpeg has no TGA
 // parser at all, so ".tga" is the only thing that reaches that decoder. An
 // animated GIF, WebP or APNG keeps its first frame.
-func Image(ctx context.Context, inExt string, data []byte, quantize bool) ([]byte, error) {
+func toPNG(ctx context.Context, inExt string, data []byte, quantize bool) ([]byte, error) {
 	post := []string{"-map", "0:V:0", "-vf", scale}
 	if quantize {
 		post = []string{"-lavfi", fmt.Sprintf(
@@ -78,10 +104,10 @@ func Image(ctx context.Context, inExt string, data []byte, quantize bool) ([]byt
 		append(post, "-frames:v", "1"))
 }
 
-// Audio converts one recording — or a video container's soundtrack, the picture
+// toMP3 converts one recording — or a video container's soundtrack, the picture
 // is discarded — to a mono 22050 Hz 32 kbps MP3, the shape a transcription
 // model resamples to anyway.
-func Audio(ctx context.Context, inExt string, data []byte) ([]byte, error) {
+func toMP3(ctx context.Context, inExt string, data []byte) ([]byte, error) {
 	return run(ctx, inExt, ".mp3", data, common,
 		[]string{"-map", "0:a:0", "-map_metadata", "-1", "-fflags", "+bitexact",
 			"-ac", "1", "-ar", "22050", "-b:a", "32k"})
@@ -91,17 +117,18 @@ func Audio(ctx context.Context, inExt string, data []byte) ([]byte, error) {
 // under the output's, and hands back that file's bytes. pre goes before "-i",
 // post between the input and the output.
 func run(ctx context.Context, inExt, outExt string, data []byte, pre, post []string) ([]byte, error) {
-	if err := os.MkdirAll(workDir, 0o700); err != nil {
+	dir := workDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	// CreateTemp replaces the "*" and keeps what follows it, so the suffix
 	// lands on the name.
-	in, err := os.CreateTemp(workDir, "conv-*"+inExt)
+	in, err := os.CreateTemp(dir, "conv-*"+inExt)
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(in.Name())
-	out, err := os.CreateTemp(workDir, "conv-*"+outExt)
+	out, err := os.CreateTemp(dir, "conv-*"+outExt)
 	if err != nil {
 		_ = in.Close()
 		return nil, err

@@ -29,3 +29,5 @@ Go changes must be preceded by `make sqlc` when queries change, and the frontend
 ## Rules
 
 - Never add explanatory/description text to the UI (hint lines, help paragraphs, "nothing to configure here" notes, extra sentences in existing notices) without asking first. Labels and placeholders only; copy comes from the user.
+
+- Always use `testing` branch. `main` is protected against direct commits and `dev` is locked.

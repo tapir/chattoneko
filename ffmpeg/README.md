@@ -11,7 +11,7 @@ no video codecs, no network, no devices, no hardware acceleration, no ffprobe.
 | **Image decode** | JPEG, PNG/APNG, WebP, GIF, TGA, BMP |
 | **Audio decode** | WAV/PCM, MP3, Opus, AAC, FLAC, ALAC, Vorbis |
 | **Containers** | wav, mp3, aac, flac, ogg, webm/mkv, mp4/m4a/m4b/mov |
-| **Encode** | PNG (optionally palette-quantized), MP3 |
+| **Encode** | PNG, MP3 |
 
 Anything else exits non-zero with `no decoder found` or `Invalid data found` and writes
 nothing.

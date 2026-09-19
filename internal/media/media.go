@@ -71,11 +71,11 @@ var (
 // the database — an upload, attach, fetch, speak — goes through this, so one
 // set of invocations produces every attachment the app holds and a file stored
 // under a media mime is always the shape that mime says.
-func Prepare(ctx context.Context, f *attach.File, data []byte, quantize bool, maxBytes int64) ([]byte, error) {
+func Prepare(ctx context.Context, f *attach.File, data []byte, maxBytes int64) ([]byte, error) {
 	var err error
 	switch f.Convert {
 	case attach.ConvertImage:
-		data, err = toPNG(ctx, f.Ext, data, quantize)
+		data, err = toPNG(ctx, f.Ext, data)
 	case attach.ConvertAudio:
 		data, err = toMP3(ctx, f.Ext, data)
 	}
@@ -90,19 +90,13 @@ func Prepare(ctx context.Context, f *attach.File, data []byte, quantize bool, ma
 	return data, nil
 }
 
-// toPNG converts one picture to a PNG — a 256-colour indexed one when quantize
-// is the server's image_quantization setting. inExt is the input's own suffix,
-// dot included, and must survive onto the temp file's name: ffmpeg has no TGA
+// toPNG converts one picture to a PNG. inExt is the input's own suffix, dot
+// included, and must survive onto the temp file's name: ffmpeg has no TGA
 // parser at all, so ".tga" is the only thing that reaches that decoder. An
 // animated GIF, WebP or APNG keeps its first frame.
-func toPNG(ctx context.Context, inExt string, data []byte, quantize bool) ([]byte, error) {
-	post := []string{"-map", "0:V:0", "-vf", scale}
-	if quantize {
-		post = []string{"-lavfi", fmt.Sprintf(
-			"[0:V]%s,trim=end_frame=1,palettegen[p];[0:V]%s[t];[t][p]paletteuse", scale, scale)}
-	}
+func toPNG(ctx context.Context, inExt string, data []byte) ([]byte, error) {
 	return run(ctx, inExt, ".png", data, append(common, maxPixels...),
-		append(post, "-frames:v", "1"))
+		[]string{"-map", "0:V:0", "-vf", scale, "-frames:v", "1"})
 }
 
 // toMP3 converts one recording — or a video container's soundtrack, the picture

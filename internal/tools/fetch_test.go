@@ -2,7 +2,6 @@ package tools
 
 import (
 	"bytes"
-	"context"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -13,8 +12,6 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"chattoneko/internal/config"
-	"chattoneko/internal/db"
 	"chattoneko/internal/mcphub"
 	"chattoneko/internal/webfetch"
 )
@@ -306,43 +303,6 @@ func TestFetchUndecodablePNGIsRefused(t *testing.T) {
 	}
 	if len(fs.files) != 0 {
 		t.Fatalf("nothing should have been stored, got %d file(s)", len(fs.files))
-	}
-}
-
-// image_quantization reaches the conversion of a fetched picture: on stores an
-// indexed PNG, off a lossless one.
-func TestFetchHonorsQuantizationSetting(t *testing.T) {
-	allowWebFetchLoopback(t)
-	ts := serve(t, "image/png", testPNG(t, 40, 30))
-	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
-
-	for _, quantize := range []bool{true, false} {
-		sqlDB, err := db.Open(":memory:")
-		if err != nil {
-			t.Fatalf("open db: %v", err)
-		}
-		t.Cleanup(func() { _ = sqlDB.Close() })
-		if err := db.Migrate(sqlDB); err != nil {
-			t.Fatalf("migrate: %v", err)
-		}
-		cfgs, err := config.TestStore(context.Background(), sqlDB,
-			config.Config{ImageQuantization: quantize})
-		if err != nil {
-			t.Fatalf("config store: %v", err)
-		}
-		fs := &fakeFileStore{}
-		out, isErr, err := Builtin(fs, cfgs).Call(context.Background(), "fetch",
-			`{"url":"`+ts.URL+`/a/photo.png"}`, meta)
-		if err != nil || isErr {
-			t.Fatalf("quantize=%v: %v %q", quantize, err, out)
-		}
-		img, err := png.Decode(bytes.NewReader(fs.files[0].data))
-		if err != nil {
-			t.Fatalf("quantize=%v: stored bytes are not a PNG: %v", quantize, err)
-		}
-		if _, paletted := img.(*image.Paletted); paletted != quantize {
-			t.Errorf("quantize=%v: stored an indexed PNG = %v", quantize, paletted)
-		}
 	}
 }
 

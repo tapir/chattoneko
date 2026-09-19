@@ -10,10 +10,8 @@ fail=0
 
 sys() { ffmpeg -hide_banner -v error -y "$@" </dev/null; }
 
-# cli.md's quantized invocation verbatim, so this checks the graph the server
-# runs and not a hand-rolled palette.
+# cli.md's scale graph verbatim, so this checks the graph the server runs.
 SCALE="scale=w='min(iw,if(gte(iw,ih),1920,1080))':h='min(ih,if(gte(iw,ih),1920,1080))':force_original_aspect_ratio=decrease"
-QUANT="[0:V]$SCALE,trim=end_frame=1,palettegen[p];[0:V]$SCALE[t];[t][p]paletteuse"
 
 # ------------------------------------------------- every requested component present
 expect() { # <type> <names...>
@@ -32,7 +30,7 @@ expect encoders png libmp3lame
 expect demuxers wav aac mp3 flac ogg matroska mov image2 \
                 png_pipe jpeg_pipe webp_pipe webp_anim gif_pipe bmp_pipe
 expect muxers image2 mp3
-expect filters palettegen paletteuse scale aresample
+expect filters scale aresample
 
 absent() { # <type> <names...> - guard against components creeping back in
   local type=$1; shift
@@ -46,6 +44,7 @@ echo "== removed (must be absent) =="
 absent decoders qoa qoi av1 libdav1d jpeg2000 tiff
 absent demuxers qoa qoi_pipe tiff_pipe j2k_pipe
 absent encoders libwebp libwebp_anim
+absent filters palettegen paletteuse
 
 # ---------------------------------------------------------------- fixtures
 sys -f lavfi -i testsrc2=s=160x120:d=1 -frames:v 1 "$T/img.png"
@@ -85,15 +84,10 @@ echo "== other paths =="
 enc() { local label=$1; shift
   if "$FF" -nostdin -v error -y "$@" 2>"$T/e"; then printf '  %-16s ok\n' "$label"
   else printf '  %-16s FAIL %s\n' "$label" "$(head -1 "$T/e")"; fail=1; fi; }
-enc "png quantized" -i "$T/img.png" -lavfi "$QUANT" -frames:v 1 "$T/oq.png"
+enc "png scaled"    -i "$T/img.png" -vf "$SCALE" -frames:v 1 "$T/os.png"
 enc print_graphs   -i "$T/img.jpg" -print_graphs_file "$T/g.json" -print_graphs_format json "$T/o3.png"   # aborts in unpatched --enable-small builds
 enc "png from pipe" -i pipe:0 -f image2 -c:v png "$T/o4.png" <"$T/img.jpg"   # needs the image parsers
-sys -i "$T/oq.png" -f null - || { echo "  quantized png unreadable"; fail=1; }
-# IHDR colour type 3 is indexed: a truecolour PNG here means the graph stopped
-# quantizing.
-ct=$(od -An -j25 -N1 -tu1 "$T/oq.png" 2>/dev/null | tr -d ' ')
-[ "$ct" = 3 ] && printf '  %-16s ok\n' "quantized indexed" \
-  || { printf '  %-16s NOT INDEXED (IHDR colour type %s)\n' "quantized indexed" "$ct"; fail=1; }
+sys -i "$T/os.png" -f null - || { echo "  scaled png unreadable"; fail=1; }
 
 echo
 echo "== everything this build has =="

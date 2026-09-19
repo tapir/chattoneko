@@ -38,7 +38,6 @@ const (
 	DefaultUploadMaxFileBytes          = 5 * 1024 * 1024 // 5 MiB
 	DefaultMaxToolIterations           = 10
 	DefaultMCPCallTimeoutSeconds       = 60
-	DefaultImageQuantization           = false
 	DefaultContextLength         int64 = 131072 // 128K tokens
 )
 
@@ -164,11 +163,6 @@ type Config struct {
 	MCPServers   []MCPServerConfig `json:"mcp_servers"`
 	Limits       LimitsConfig      `json:"limits"`
 	Auth         AuthConfig        `json:"auth"`
-	// ImageQuantization is the 256-colour palette every stored picture can end
-	// in: the conversion in internal/media, which an upload, a file the tools
-	// are handed and a recording's soundtrack all pass through. Off — the
-	// default — stores lossless PNGs, several times the bytes for a photograph.
-	ImageQuantization bool `json:"image_quantization"`
 	// ToolDefaults is the global per-tool default toggle (settings UI): tool
 	// display name → enabled. It overrides the catalog default (integrated
 	// tools' hardcoded DefaultEnabled, MCP tools' server default_enabled) for

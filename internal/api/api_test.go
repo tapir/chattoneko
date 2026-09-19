@@ -997,34 +997,6 @@ func TestUploadConversion(t *testing.T) {
 	}
 }
 
-// image_quantization reaches the upload path, live: on stores an indexed PNG,
-// off a truecolour one. IHDR colour type is byte 25, 3 being indexed.
-func TestUploadQuantizationSetting(t *testing.T) {
-	if _, err := exec.LookPath(media.Binary()); err != nil {
-		t.Skipf("no %s on PATH", media.Binary())
-	}
-	t.Setenv("TMPDIR", t.TempDir())
-	ts := newTestServer(t, quickProvider{}, false)
-	chatID := ts.createChat(t)
-	for _, want := range []bool{true, false} {
-		if rec := ts.do(t, "PUT", "/api/setup", map[string]any{"image_quantization": want}, nil); rec.Code != 200 {
-			t.Fatalf("PUT /api/setup: %d %s", rec.Code, rec.Body)
-		}
-		code, body, metas := ts.postFiles(chatID, map[string][]byte{"photo.jpeg": testJPEG(t, 40, 30)})
-		if code != 200 {
-			t.Fatalf("upload with image_quantization=%v: %d %s", want, code, body)
-		}
-		got, err := ts.store.GetAttachment(context.Background(), metas[0].ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if indexed := got.Data[25] == 3; indexed != want {
-			t.Errorf("image_quantization=%v stored IHDR colour type %d, want indexed = %v",
-				want, got.Data[25], indexed)
-		}
-	}
-}
-
 func TestGetAttachmentServing(t *testing.T) {
 	ts := newTestServer(t, quickProvider{}, false)
 	chatID := ts.createChat(t)

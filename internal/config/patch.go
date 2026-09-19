@@ -28,9 +28,6 @@ type Patch struct {
 	// when present (empty map = every tool falls back to its catalog title).
 	// Values are trimmed and blank ones dropped on write.
 	ToolTitles *map[string]string `json:"tool_titles,omitempty"`
-	// ImageQuantization turns the 256-colour palette both image conversions
-	// end in on and off; absent keeps the stored value.
-	ImageQuantization *bool `json:"image_quantization,omitempty"`
 }
 
 // ProviderPatch updates the provider endpoint settings.
@@ -248,8 +245,5 @@ func applyPatch(c *Config, p Patch) {
 		if p.Limits.MCPCallTimeoutSeconds != nil {
 			c.Limits.MCPCallTimeoutSeconds = *p.Limits.MCPCallTimeoutSeconds
 		}
-	}
-	if p.ImageQuantization != nil {
-		c.ImageQuantization = *p.ImageQuantization
 	}
 }

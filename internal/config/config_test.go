@@ -43,9 +43,6 @@ func TestSeedDefaultsOnEmptyTable(t *testing.T) {
 	if c.Limits.MCPCallTimeoutSeconds != DefaultMCPCallTimeoutSeconds {
 		t.Errorf("MCPCallTimeoutSeconds = %d", c.Limits.MCPCallTimeoutSeconds)
 	}
-	if c.ImageQuantization != DefaultImageQuantization {
-		t.Errorf("ImageQuantization = %v", c.ImageQuantization)
-	}
 	// Auth is env-var driven; with no env vars set (as in tests) it is disabled
 	// and carries no username. It is NOT seeded from the database.
 	if c.Auth.Enabled {
@@ -195,40 +192,6 @@ func TestToolDefaultsRoundTrip(t *testing.T) {
 	}
 	if got := s.Get().ToolDefaults; len(got) != 2 || !got["a"] || got["b"] {
 		t.Fatalf("tool_defaults = %v, want map[a:true b:false]", got)
-	}
-}
-
-// An explicit on has to survive a reload, and a database written before the
-// key existed reads as off — the default.
-func TestImageQuantizationRoundTrip(t *testing.T) {
-	h := newDB(t)
-	ctx := context.Background()
-	s, err := NewStore(ctx, h)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	if s.Get().ImageQuantization {
-		t.Fatal("a fresh config must not quantize")
-	}
-
-	if _, err := s.Update(ctx, Patch{ImageQuantization: ptr(true)}); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if err := s.reload(ctx); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	if !s.Get().ImageQuantization {
-		t.Fatal("on did not survive the reload")
-	}
-
-	if _, err := h.ExecContext(ctx, `DELETE FROM config WHERE key = 'image_quantization'`); err != nil {
-		t.Fatalf("delete row: %v", err)
-	}
-	if err := s.reload(ctx); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	if s.Get().ImageQuantization {
-		t.Fatal("an absent row must read as off")
 	}
 }
 

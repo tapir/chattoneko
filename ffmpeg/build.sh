@@ -73,7 +73,7 @@ DEMUXERS='
 
 MUXERS='image2,mp3'
 ENCODERS='png,libmp3lame'
-FILTERS='aresample,scale,palettegen,paletteuse'   # the rest come from ffmpeg_select
+FILTERS='aresample,scale'   # the rest come from ffmpeg_select
 PARSERS='aac,mpegaudio,opus,vorbis,flac,png,mjpeg,webp,gif,bmp'   # image parsers: only needed when the input is a pipe
 PROTOCOLS='file,pipe'
 

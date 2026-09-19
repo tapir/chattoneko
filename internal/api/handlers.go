@@ -231,7 +231,6 @@ func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any 
 			"max_tool_iterations":      c.Limits.MaxToolIterations,
 			"mcp_call_timeout_seconds": c.Limits.MCPCallTimeoutSeconds,
 		},
-		"image_quantization": c.ImageQuantization,
 		// Auth is deliberately omitted: it is env-var driven (CHATTO_USERNAME /
 		// CHATTO_PASSWORD), fixed at startup, and not editable through the API.
 	}
@@ -1033,7 +1032,6 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.cfg.Get()
 	maxFileBytes := cfg.Limits.UploadMaxFileBytes
-	quantize := cfg.ImageQuantization
 	out := make([]*store.AttachmentMeta, 0, len(files))
 	// rollback deletes the attachments stored so far when a later file
 	// fails: orphans are only swept at startup, so a rejected file must not
@@ -1097,7 +1095,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			// Media is stored as its conversion, never as it arrived: the temp
 			// files media runs ffmpeg over are gone by the time this returns,
 			// whatever it returned.
-			data, err = media.Prepare(r.Context(), res, data, quantize, maxFileBytes)
+			data, err = media.Prepare(r.Context(), res, data, maxFileBytes)
 		}
 		if err != nil {
 			reject(name, err)

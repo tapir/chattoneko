@@ -110,7 +110,7 @@ func (s *speakTool) call(ctx context.Context, argsJSON string, meta mcphub.CallM
 	limit := cfg.Limits.UploadMaxFileBytes
 	res, err := attach.ClassifyAny("speech.mp3", data, limit)
 	if err == nil {
-		data, err = media.Prepare(ctx, res, data, false, limit)
+		data, err = media.Prepare(ctx, res, data, limit)
 	}
 	switch {
 	case errors.Is(err, attach.ErrTooLarge):

@@ -85,7 +85,7 @@ func makeWAV(t *testing.T) []byte {
 
 func TestImageToPNG(t *testing.T) {
 	requireFFmpeg(t)
-	out, err := toPNG(context.Background(), ".png", makePNG(t, 60, 40), false)
+	out, err := toPNG(context.Background(), ".png", makePNG(t, 60, 40))
 	if err != nil {
 		t.Fatalf("Image: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestScaleCapsLongSide(t *testing.T) {
 		{40, 2000, 1080, 1080},
 		{20, 30, 20, 30}, // a small portrait is never upscaled
 	} {
-		out, err := toPNG(context.Background(), ".png", makePNG(t, tc.w, tc.h), false)
+		out, err := toPNG(context.Background(), ".png", makePNG(t, tc.w, tc.h))
 		if err != nil {
 			t.Fatalf("toPNG(%dx%d): %v", tc.w, tc.h, err)
 		}
@@ -125,7 +125,7 @@ func TestScaleCapsLongSide(t *testing.T) {
 // it at all.
 func TestTGAByExtension(t *testing.T) {
 	requireFFmpeg(t)
-	out, err := toPNG(context.Background(), ".tga", makeTGA(t, 12, 9), false)
+	out, err := toPNG(context.Background(), ".tga", makeTGA(t, 12, 9))
 	if err != nil {
 		t.Fatalf("toPNG(.tga): %v", err)
 	}
@@ -135,27 +135,6 @@ func TestTGAByExtension(t *testing.T) {
 	}
 	if cfg.Width != 12 || cfg.Height != 9 {
 		t.Errorf("output is %dx%d, want 12x9", cfg.Width, cfg.Height)
-	}
-}
-
-// Quantization is the image_quantization setting: an indexed PNG (IHDR colour
-// type 3), not the truecolour one the lossless path writes.
-func TestImageQuantized(t *testing.T) {
-	requireFFmpeg(t)
-	ctx := context.Background()
-	lossless, err := toPNG(ctx, ".png", makePNG(t, 60, 40), false)
-	if err != nil {
-		t.Fatalf("Image: %v", err)
-	}
-	quantized, err := toPNG(ctx, ".png", makePNG(t, 60, 40), true)
-	if err != nil {
-		t.Fatalf("toPNG(quantize): %v", err)
-	}
-	if lossless[25] == 3 {
-		t.Error("the lossless path wrote an indexed PNG")
-	}
-	if quantized[25] != 3 {
-		t.Errorf("IHDR colour type is %d, want 3 (indexed)", quantized[25])
 	}
 }
 
@@ -176,7 +155,7 @@ func TestAudioToMP3(t *testing.T) {
 func TestRejectsUndecodable(t *testing.T) {
 	requireFFmpeg(t)
 	zip := []byte("PK\x03\x04 not a picture at all")
-	if _, err := toPNG(context.Background(), ".png", zip, false); err == nil {
+	if _, err := toPNG(context.Background(), ".png", zip); err == nil {
 		t.Fatal("a zip named .png converted")
 	}
 	if _, err := toMP3(context.Background(), ".mp3", zip); err == nil {
@@ -191,10 +170,10 @@ func TestTempFilesAreGone(t *testing.T) {
 	requireFFmpeg(t)
 	t.Setenv("TMPDIR", t.TempDir())
 	ctx := context.Background()
-	if _, err := toPNG(ctx, ".png", makePNG(t, 8, 8), false); err != nil {
+	if _, err := toPNG(ctx, ".png", makePNG(t, 8, 8)); err != nil {
 		t.Fatalf("Image: %v", err)
 	}
-	if _, err := toPNG(ctx, ".png", []byte("PK\x03\x04 junk"), false); err == nil {
+	if _, err := toPNG(ctx, ".png", []byte("PK\x03\x04 junk")); err == nil {
 		t.Fatal("junk converted")
 	}
 	entries, err := os.ReadDir(workDir())

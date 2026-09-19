@@ -162,15 +162,12 @@ func attachStored(ctx context.Context, files fileStore, meta mcphub.CallMeta, id
 // fetch (stages).
 func storeFile(ctx context.Context, files fileStore, limits *config.Store, chatID, name string, data []byte) (*store.AttachmentMeta, error) {
 	limit := int64(config.DefaultUploadMaxFileBytes)
-	quantize := config.DefaultImageQuantization
 	if limits != nil {
-		cfg := limits.Get()
-		limit = cfg.Limits.UploadMaxFileBytes
-		quantize = cfg.ImageQuantization
+		limit = limits.Get().Limits.UploadMaxFileBytes
 	}
 	res, err := attach.ClassifyAny(name, data, limit)
 	if err == nil {
-		data, err = media.Prepare(ctx, res, data, quantize, limit)
+		data, err = media.Prepare(ctx, res, data, limit)
 	}
 	switch {
 	case errors.Is(err, attach.ErrTooLarge):

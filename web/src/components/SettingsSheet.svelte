@@ -94,9 +94,8 @@
   // Blank = that feature is off (the tools say so in-band).
   let transcriptionModel = $state('');
   let speechModel = $state('');
-  // Blank omits the voice from the request, so the provider's own default
-  // applies — voice names are provider-specific, so this is free text and not
-  // a picker.
+  // Voice names are provider-specific, so this is free text and not a picker;
+  // required while a speech model is set, which the save rejects otherwise.
   let speechVoice = $state('');
 
   // Dirty tracking: a JSON snapshot of the whole form, compared against the
@@ -767,7 +766,7 @@
           <!-- Audio: exactly one model per role, each called through its own
                provider route, so they are plain ids with no metadata and no
                whitelist entry. Voice names are provider-specific, hence free
-               text; blank leaves the voice out of the request entirely. -->
+               text, and one is required while a speech model is set. -->
           <section class="space-y-3">
             <h3 class="text-base font-semibold">Audio</h3>
             <div class="grid gap-3 sm:grid-cols-2">

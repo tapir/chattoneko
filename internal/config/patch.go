@@ -53,8 +53,8 @@ type ModelsPatch struct {
 	// there is no chat metadata to check and nothing to validate them against.
 	DefaultTranscriptionModel *string `json:"default_transcription_model,omitempty"`
 	DefaultSpeechModel        *string `json:"default_speech_model,omitempty"`
-	// SpeechVoice is the /audio/speech voice; empty omits it and the provider's
-	// own default applies.
+	// SpeechVoice is the /audio/speech voice; required whenever a speech model
+	// is set.
 	SpeechVoice *string `json:"speech_voice,omitempty"`
 	// Metas upserts per-model metadata (context window, modalities,
 	// reasoning efforts) into the models table alongside the whitelist.

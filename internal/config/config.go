@@ -103,9 +103,9 @@ type ModelsConfig struct {
 	// the transcription and speak tools report in-band.
 	DefaultTranscriptionModel string `json:"default_transcription_model"`
 	DefaultSpeechModel        string `json:"default_speech_model"`
-	// SpeechVoice is the voice handed to /audio/speech. Empty omits it, so the
-	// provider's own default applies — and a provider that requires one says so
-	// in its error, in-band.
+	// SpeechVoice is the voice handed to /audio/speech. Required whenever a
+	// speech model is set: the route demands a voice and voice names are
+	// provider-specific, so nothing here can pick a sensible one.
 	SpeechVoice string `json:"speech_voice"`
 }
 
@@ -336,6 +336,9 @@ func (c *Config) validate() error {
 		if strings.TrimSpace(c.Auth.Password) == "" {
 			return fmt.Errorf("a password must be set before auth can be enabled")
 		}
+	}
+	if c.Models.DefaultSpeechModel != "" && strings.TrimSpace(c.Models.SpeechVoice) == "" {
+		return fmt.Errorf("a speech voice is required when a speech model is set")
 	}
 	return nil
 }

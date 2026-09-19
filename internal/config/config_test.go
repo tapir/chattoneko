@@ -584,8 +584,7 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	// The audio models are free-standing ids, not whitelist pointers: they are
 	// called through routes no chat metadata describes, so nothing validates
 	// them and an id outside the whitelist survives (sanitizeWhitelist must not
-	// clear them). The voice is trimmed; blank stays blank and means "the
-	// provider's own default".
+	// clear them). The voice is trimmed.
 	c = update(Patch{Models: &ModelsPatch{
 		DefaultTranscriptionModel: ptr("whisper-large"),
 		DefaultSpeechModel:        ptr("tts-1"),
@@ -597,6 +596,13 @@ func TestUpdateClearsDesignatedModelWithoutModality(t *testing.T) {
 	}
 	if got := strings.Join(c.Models.Whitelist, ","); got != "m,vision,pdf" {
 		t.Errorf("whitelist = %q, want the audio ids kept out of it", got)
+	}
+
+	// The voice is mandatory for as long as a speech model is designated:
+	// /audio/speech requires one and the names are provider-specific, so there
+	// is nothing to default to.
+	if _, err := s.Update(ctx, Patch{Models: &ModelsPatch{SpeechVoice: ptr("")}}); err == nil {
+		t.Error("a speech model with no voice was accepted")
 	}
 
 	// Metas sent in the same patch win over the stored rows: adding text input

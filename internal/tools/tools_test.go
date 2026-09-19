@@ -223,10 +223,11 @@ func TestCatalogHidesToolsWithoutAModel(t *testing.T) {
 
 	// The audio ids are free-standing, so a save designates them with no
 	// whitelist or metadata to satisfy.
-	transcribe, speak := "whisper-1", "tts-1"
+	transcribe, speak, voice := "whisper-1", "tts-1", "alloy"
 	if _, err := cfgs.Update(ctx, config.Patch{Models: &config.ModelsPatch{
 		DefaultTranscriptionModel: &transcribe,
 		DefaultSpeechModel:        &speak,
+		SpeechVoice:               &voice,
 	}}); err != nil {
 		t.Fatalf("update: %v", err)
 	}

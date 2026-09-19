@@ -22,9 +22,9 @@ type Chat struct {
 	Model          string
 	ParamsJson     string
 	ToolsJson      string
+	Pinned         int64
 	CreatedAt      int64
 	UpdatedAt      int64
-	Pinned         int64
 }
 
 type Config struct {
@@ -47,10 +47,10 @@ type Message struct {
 	Model            string
 	PromptTokens     int64
 	CompletionTokens int64
+	ContextTokens    int64
 	DurationMs       int64
 	CreatedAt        int64
 	UpdatedAt        int64
-	ContextTokens    int64
 }
 
 type MessageAttachment struct {
@@ -61,11 +61,11 @@ type MessageAttachment struct {
 type Model struct {
 	ModelID          string
 	InputModality    string
+	Endpoint         string
 	ContextLength    int64
 	ReasoningEfforts string
 	ReasoningDefault string
 	UpdatedAt        int64
-	Endpoint         string
 }
 
 type ToolCall struct {

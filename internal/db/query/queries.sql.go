@@ -275,7 +275,7 @@ func (q *Queries) DistinctToolNamesInChat(ctx context.Context, chatID string) ([
 }
 
 const firstUserMessage = `-- name: FirstUserMessage :one
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, context_tokens, duration_ms, created_at, updated_at FROM messages
 WHERE chat_id = ? AND role = 'user'
 ORDER BY seq ASC
 LIMIT 1
@@ -299,10 +299,10 @@ func (q *Queries) FirstUserMessage(ctx context.Context, chatID string) (Message,
 		&i.Model,
 		&i.PromptTokens,
 		&i.CompletionTokens,
+		&i.ContextTokens,
 		&i.DurationMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ContextTokens,
 	)
 	return i, err
 }
@@ -342,7 +342,7 @@ func (q *Queries) GetAttachmentChatID(ctx context.Context, id string) (string, e
 }
 
 const getChat = `-- name: GetChat :one
-SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at, pinned FROM chats WHERE id = ?
+SELECT id, title, title_generated, model, params_json, tools_json, pinned, created_at, updated_at FROM chats WHERE id = ?
 `
 
 func (q *Queries) GetChat(ctx context.Context, id string) (Chat, error) {
@@ -355,15 +355,15 @@ func (q *Queries) GetChat(ctx context.Context, id string) (Chat, error) {
 		&i.Model,
 		&i.ParamsJson,
 		&i.ToolsJson,
+		&i.Pinned,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.Pinned,
 	)
 	return i, err
 }
 
 const getMessage = `-- name: GetMessage :one
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages WHERE id = ?
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, context_tokens, duration_ms, created_at, updated_at FROM messages WHERE id = ?
 `
 
 func (q *Queries) GetMessage(ctx context.Context, id string) (Message, error) {
@@ -383,16 +383,16 @@ func (q *Queries) GetMessage(ctx context.Context, id string) (Message, error) {
 		&i.Model,
 		&i.PromptTokens,
 		&i.CompletionTokens,
+		&i.ContextTokens,
 		&i.DurationMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ContextTokens,
 	)
 	return i, err
 }
 
 const lastAssistantMessage = `-- name: LastAssistantMessage :one
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, context_tokens, duration_ms, created_at, updated_at FROM messages
 WHERE chat_id = ? AND role = 'assistant'
 ORDER BY seq DESC
 LIMIT 1
@@ -415,10 +415,10 @@ func (q *Queries) LastAssistantMessage(ctx context.Context, chatID string) (Mess
 		&i.Model,
 		&i.PromptTokens,
 		&i.CompletionTokens,
+		&i.ContextTokens,
 		&i.DurationMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ContextTokens,
 	)
 	return i, err
 }
@@ -537,7 +537,7 @@ func (q *Queries) ListAttachmentsByMessage(ctx context.Context, messageID string
 }
 
 const listChats = `-- name: ListChats :many
-SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at, pinned FROM chats
+SELECT id, title, title_generated, model, params_json, tools_json, pinned, created_at, updated_at FROM chats
 ORDER BY updated_at DESC, id DESC
 LIMIT ?
 `
@@ -558,9 +558,9 @@ func (q *Queries) ListChats(ctx context.Context, limit int64) ([]Chat, error) {
 			&i.Model,
 			&i.ParamsJson,
 			&i.ToolsJson,
+			&i.Pinned,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Pinned,
 		); err != nil {
 			return nil, err
 		}
@@ -576,7 +576,7 @@ func (q *Queries) ListChats(ctx context.Context, limit int64) ([]Chat, error) {
 }
 
 const listChatsBefore = `-- name: ListChatsBefore :many
-SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at, pinned FROM chats
+SELECT id, title, title_generated, model, params_json, tools_json, pinned, created_at, updated_at FROM chats
 WHERE (updated_at < ?)
    OR (updated_at = ? AND id < ?)
 ORDER BY updated_at DESC, id DESC
@@ -611,9 +611,9 @@ func (q *Queries) ListChatsBefore(ctx context.Context, arg ListChatsBeforeParams
 			&i.Model,
 			&i.ParamsJson,
 			&i.ToolsJson,
+			&i.Pinned,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Pinned,
 		); err != nil {
 			return nil, err
 		}
@@ -706,7 +706,7 @@ func (q *Queries) ListDanglingToolCalls(ctx context.Context, messageID string) (
 }
 
 const listEmptyChatsOlderThan = `-- name: ListEmptyChatsOlderThan :many
-SELECT c.id, c.title, c.title_generated, c.model, c.params_json, c.tools_json, c.created_at, c.updated_at, c.pinned FROM chats c
+SELECT c.id, c.title, c.title_generated, c.model, c.params_json, c.tools_json, c.pinned, c.created_at, c.updated_at FROM chats c
 WHERE c.created_at < ?
   AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = c.id)
 `
@@ -727,9 +727,9 @@ func (q *Queries) ListEmptyChatsOlderThan(ctx context.Context, createdAt int64) 
 			&i.Model,
 			&i.ParamsJson,
 			&i.ToolsJson,
+			&i.Pinned,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Pinned,
 		); err != nil {
 			return nil, err
 		}
@@ -745,7 +745,7 @@ func (q *Queries) ListEmptyChatsOlderThan(ctx context.Context, createdAt int64) 
 }
 
 const listGeneratingMessages = `-- name: ListGeneratingMessages :many
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages WHERE status = 'generating'
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, context_tokens, duration_ms, created_at, updated_at FROM messages WHERE status = 'generating'
 `
 
 func (q *Queries) ListGeneratingMessages(ctx context.Context) ([]Message, error) {
@@ -771,10 +771,10 @@ func (q *Queries) ListGeneratingMessages(ctx context.Context) ([]Message, error)
 			&i.Model,
 			&i.PromptTokens,
 			&i.CompletionTokens,
+			&i.ContextTokens,
 			&i.DurationMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ContextTokens,
 		); err != nil {
 			return nil, err
 		}
@@ -790,7 +790,7 @@ func (q *Queries) ListGeneratingMessages(ctx context.Context) ([]Message, error)
 }
 
 const listMessagesByChat = `-- name: ListMessagesByChat :many
-SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, duration_ms, created_at, updated_at, context_tokens FROM messages WHERE chat_id = ? ORDER BY seq ASC
+SELECT seq, id, chat_id, role, status, content, reasoning, error, tool_call_id, name, model, prompt_tokens, completion_tokens, context_tokens, duration_ms, created_at, updated_at FROM messages WHERE chat_id = ? ORDER BY seq ASC
 `
 
 func (q *Queries) ListMessagesByChat(ctx context.Context, chatID string) ([]Message, error) {
@@ -816,10 +816,10 @@ func (q *Queries) ListMessagesByChat(ctx context.Context, chatID string) ([]Mess
 			&i.Model,
 			&i.PromptTokens,
 			&i.CompletionTokens,
+			&i.ContextTokens,
 			&i.DurationMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ContextTokens,
 		); err != nil {
 			return nil, err
 		}
@@ -835,7 +835,7 @@ func (q *Queries) ListMessagesByChat(ctx context.Context, chatID string) ([]Mess
 }
 
 const listPinnedChats = `-- name: ListPinnedChats :many
-SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at, pinned FROM chats
+SELECT id, title, title_generated, model, params_json, tools_json, pinned, created_at, updated_at FROM chats
 WHERE pinned = 1
 ORDER BY updated_at DESC, id DESC
 `
@@ -859,9 +859,9 @@ func (q *Queries) ListPinnedChats(ctx context.Context) ([]Chat, error) {
 			&i.Model,
 			&i.ParamsJson,
 			&i.ToolsJson,
+			&i.Pinned,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Pinned,
 		); err != nil {
 			return nil, err
 		}
@@ -926,7 +926,7 @@ func (q *Queries) MarkTitleGenerated(ctx context.Context, id string) error {
 }
 
 const searchChats = `-- name: SearchChats :many
-SELECT c.id, c.title, c.title_generated, c.model, c.params_json, c.tools_json, c.created_at, c.updated_at, c.pinned FROM chats c
+SELECT c.id, c.title, c.title_generated, c.model, c.params_json, c.tools_json, c.pinned, c.created_at, c.updated_at FROM chats c
 WHERE c.id IN (SELECT id FROM chats ORDER BY updated_at DESC, id DESC LIMIT ?)
   AND (
     instr(lower(c.title), lower(?)) > 0
@@ -973,9 +973,9 @@ func (q *Queries) SearchChats(ctx context.Context, arg SearchChatsParams) ([]Cha
 			&i.Model,
 			&i.ParamsJson,
 			&i.ToolsJson,
+			&i.Pinned,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Pinned,
 		); err != nil {
 			return nil, err
 		}

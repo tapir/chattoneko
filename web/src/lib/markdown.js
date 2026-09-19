@@ -89,7 +89,7 @@ export function normalizeHeadings(src) {
 // history; per-fence skipping is the upgrade path if it ever shows up.
 const DOLLAR_PAIR = /\$([^$\n]+)\$/g;
 
-export function escapeCurrency(src) {
+function escapeCurrency(src) {
   return (src ?? "").replace(DOLLAR_PAIR, (raw, body, off, s) => {
     const math = !/^\s|\s$/.test(body) && !/\d/.test(s[off + raw.length] ?? "");
     return math ? raw : "\\$" + body + "\\$";

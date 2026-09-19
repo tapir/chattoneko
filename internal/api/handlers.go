@@ -155,10 +155,6 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		// button when no speech model is designated. The id itself is a setup
 		// detail and stays out of this response.
 		"speech_enabled": cfg.Models.DefaultSpeechModel != "",
-		// Whether attached and tool-created pictures are quantized to a
-		// 256-colour palette before they are stored; the browser's own
-		// conversion reads it (web/src/lib/media.js).
-		"image_quantization": cfg.ImageQuantization,
 		"limits": map[string]any{
 			"upload_max_file_bytes": cfg.Limits.UploadMaxFileBytes,
 			"max_tool_iterations":   cfg.Limits.MaxToolIterations,
@@ -1127,7 +1123,7 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	// attach's media tables (png, webp, jpeg, gif, bmp), none of which can
 	// carry script; an SVG never reaches this branch because it classifies as
 	// text. Text attachments are served as
-	// text/plain regardless of their detected mime so an HTML/SVG upload can
+	// text/plain regardless of their stored mime so an HTML/SVG upload can
 	// never execute in the app's origin, and binary ones as octet-stream for
 	// the same reason — which also makes the browser download rather than
 	// preview. Non-image downloads get the real filename via

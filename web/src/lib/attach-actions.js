@@ -97,7 +97,7 @@ export function downloadAttachment(att) {
 // Filesystem's binary write path takes base64 (no `encoding`); FileReader is
 // the only portable encoder and the data-URL prefix isn't part of it.
 // ponytail: the whole file crosses the bridge as base64 — fine at the sizes
-// the server hands back (images are re-encoded to <=2048px); swap in
+// the server hands back (images are capped at 1920px on the long side); swap in
 // Filesystem.downloadFile, which streams natively, if that ever hurts.
 function blobBase64(blob) {
   return new Promise((resolve, reject) => {

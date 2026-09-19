@@ -310,8 +310,8 @@ func TestCreateFileFromURLImage(t *testing.T) {
 		t.Fatalf("unexpected tool error: %q", out)
 	}
 	c := shownOn(t, fs, "m1")
-	// Converted to PNG exactly as the browser converts an upload, and the name
-	// follows the bytes, not the URL.
+	// Converted to PNG exactly as an upload is, and the name follows the
+	// bytes, not the URL.
 	if c.kind != "image" || c.mime != "image/png" || c.filename != "cat.png" {
 		t.Fatalf("wrong attachment: kind=%q mime=%q name=%q", c.kind, c.mime, c.filename)
 	}

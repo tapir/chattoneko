@@ -51,7 +51,7 @@ function syncSystemBars(dark) {
     .catch(() => {});
 }
 
-export function setTheme(theme) {
+function setTheme(theme) {
   applyTheme(theme);
   lsSet(KEY, theme);
 }

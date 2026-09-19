@@ -1,0 +1,3 @@
+# build.sh regenerates both: the download + extracted tree, and the binary
+src/
+out/

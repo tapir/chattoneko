@@ -6,7 +6,7 @@ Your own cute cat AI assistant, self-hosted.
 
 *Chatto* is the Japanese pronunciation of the English word "chat"; *neko* is Japanese for "cat." ChattoNeko is a chat client for OpenAI-compatible APIs (it plays best with OpenRouter), which exposes extra model metadata, but it works fully with any other OpenAI-compatible provider. You run it on your own server or machine. It is made for personal, self-hosted use, not as a SaaS product: no accounts, no multi-tenancy, no billing.
 
-It is extremely small. Everything is one static Go binary with the web UI embedded, about 8 MB after UPX packing. The Docker image is roughly 12 MB and the Android APK about 10 MB. Small as it is, it has what you expect from a chat app: streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login, plus a few unique features.
+It is extremely small. Everything is one static Go binary with the web UI embedded, about 8 MB after UPX packing. The Docker image is roughly 13 MB and the Android APK about 10 MB. Small as it is, it has what you expect from a chat app: streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login, plus a few unique features.
 
 ## What it does
 
@@ -44,7 +44,7 @@ docker run -d --name chattoneko \
   ghcr.io/tapir/chattoneko
 ```
 
-If you don't prefer the docker images, fully static server and web client binary can be built with `make build`. But you need `ffmpeg` command line tool in `$PATH`. Docker image takes care of that for you with an incredibly slim `ffmpeg` build that is only 2.8 MB.
+If you don't prefer the docker images, fully static server and web client binary can be built with `make build`. But you need `ffmpeg` and `jq` command line tools in `$PATH`. Docker image takes care of that for you with incredibly slim builds of both: 2.8 MB of `ffmpeg` and 0.8 MB of `jq`.
 
 The Android APK is built with `make mobile-apk`.
 
@@ -78,6 +78,7 @@ I also use Exa.ai's web search tool. I usually disable its fetch tool since we h
 | `CHATTO_PASSWORD` | Login password, used as-is. Nothing about the login is written to the database; changing it means restarting. |
 | `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time` tool's result so agents know where you are. Read once at startup. |
 | `CHATTO_FFMPEG` | The ffmpeg that converts uploaded pictures and recordings. Defaults to `ffmpeg` on your PATH; the Docker image ships its own at `/usr/local/bin/ffmpeg`. Read once at startup. |
+| `CHATTO_JQ` | The jq the `jq` tool runs. Defaults to `jq` on your PATH; the Docker image ships its own at `/usr/local/bin/jq`. Read once at startup. |
 
 ### Command-line flags
 
@@ -93,10 +94,11 @@ A conversion stages two temp files under `/tmp/chattoneko-media` and deletes bot
 
 ## Tools
 
-Eight integrated tools, each toggleable per chat and globally in settings:
+Nine integrated tools, each toggleable per chat and globally in settings:
 
 - `time` — the server's current date, time, and timezone, plus your location when `CHATTO_LOCATION_STRING` is set. Lets the model ground "tomorrow," "next Friday," or "near me."
 - `code` — runs a short Lua 5.4 snippet in a restricted sandbox and returns what it prints. Exact arithmetic and data wrangling instead of guessing, with real pattern matching (`string.match`/`gsub`), binary packing, UTF-8, and JSON encode/decode. No file, network, environment, or debug access; capped by time, by work, and by output size.
+- `jq` — runs a jq filter over a JSON value the model supplies, fed in on stdin, and returns what the filter produces as compact JSON. The other half of the same idea: arithmetic, genuine regular expressions (`test`/`match`/`capture`), and querying, reshaping, sorting, grouping or counting structured data in one filter instead of a whole program. Nothing outside that value is reachable — no files, no command-line arguments, no network, and the environment is empty so `$ENV` yields `{}`; capped by time and by output size.
 - `attach` — shows you a file in the conversation window: an image appears inline, a text file opens as a preview, audio shows up as a player, PDFs get an inline preview, and anything else downloads when you click it. The model either writes the file (text as text, binary as base64) or points at files already stored in the chat — the ones `fetch` downloaded — and this puts them on its reply.
 - `speak` — reads text aloud and puts the recording in the conversation as an audio player, the same way `attach` puts a file there. The model either writes the words out or points at a text file already stored in the chat, which is read as written. Any message can also be read aloud straight from its action row, which streams the audio without storing it.
 - `fetch` — reads a URL and returns its text to the model: a page, a JSON API, anything textual, truncated and labelled when very large. A body that isn't text — an image, a PDF, an archive — is stored as a file in the chat and its id comes back instead of bytes the model can't read, so the model can then ask `vision` about it, transcribe it, or hand it to you with `attach`. Uses the `utls` library to impersonate real browsers.
@@ -112,7 +114,7 @@ It is small and meant for self-hosted personal use. Accounts, permissions, quota
 
 **What if I want my family to use it?**
 
-Run one instance per person. The image is 12 MB and idles at almost nothing, so ten of them on a single commodity server is not a thought you need to have twice. Everybody gets a private instance with their own database, their own models, and their own API key.
+Run one instance per person. The image is 13 MB and idles at almost nothing, so ten of them on a single commodity server is not a thought you need to have twice. Everybody gets a private instance with their own database, their own models, and their own API key.
 
 **What about transcription and speech?**
 

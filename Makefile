@@ -1,4 +1,4 @@
-.PHONY: web sqlc build run dev tidy docker ffmpeg mobile mobile-apk \
+.PHONY: web sqlc build run dev tidy docker ffmpeg jq mobile mobile-apk \
 	mobile-avd mobile-emulator mobile-emulator-wait mobile-emulator-kill \
 	mobile-emulator-ensure mobile-install mobile-run mobile-reset
 
@@ -52,6 +52,10 @@ docker:
 # internal/media runs whatever "ffmpeg" is on PATH.
 ffmpeg:
 	cd ffmpeg && ./build.sh
+
+# The static jq the image ships (jq/README.md). Needs musl-gcc: sudo pacman -S musl.
+jq:
+	cd jq && ./build.sh
 
 mobile:
 	cd mobile && npm ci && npm run sync

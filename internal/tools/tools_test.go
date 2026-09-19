@@ -225,7 +225,7 @@ func TestCatalogFlagsToolsWithoutAModel(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"time": false, "code": false, "attach": false, "fetch": false,
+		"time": false, "code": false, "jq": false, "attach": false, "fetch": false,
 		"vision": true, "document": true, "transcribe": true, "speak": true,
 	}
 	checkFlags(want)

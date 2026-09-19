@@ -2,14 +2,15 @@
 #
 # Chattoneko — minimal container image.
 #
-#   Stage 1 (build):  archlinux — ffmpeg/build.sh links the static ffmpeg, then
-#                     `make build` produces the Go binary with the SPA embedded.
+#   Stage 1 (build):  archlinux — ffmpeg/build.sh and jq/build.sh link their
+#                     static binaries, then `make build` produces the Go binary
+#                     with the SPA embedded.
 #                     Arch because build.sh is tuned for that toolchain
 #                     (musl-gcc, a PIE-by-default gcc, its binutils' handling of
 #                     eh_frame.ld); the ~430 MB base is discarded whole.
-#   Stage 2 (final):  busybox — those two static binaries and the CA bundle they
-#                     verify outbound TLS against. No shell entrypoint and no
-#                     su-exec: main.go starts as root, makes the data dir
+#   Stage 2 (final):  busybox — those three static binaries and the CA bundle
+#                     they verify outbound TLS against. No shell entrypoint and
+#                     no su-exec: main.go starts as root, makes the data dir
 #                     writable and drops itself to 1000:1000 (droproot_linux.go).
 #
 # /opt/chattoneko is the binary; all runtime state (neko.db — config AND
@@ -28,10 +29,13 @@ RUN pacman -Syu --noconfirm --needed base-devel musl nasm curl which pkgconf \
 ENV PATH=/root/go/bin:$PATH
 RUN go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 WORKDIR /src
-# The ffmpeg comes first, from its own COPY, so its layer survives every app
-# edit: a frontend or Go change does not rebuild it (~2 min).
+# The vendored tool builds come first, each from its own COPY, so their layers
+# survive every app edit: a frontend or Go change does not rebuild them
+# (~2 min for ffmpeg, ~10 s for jq).
 COPY ffmpeg/ ./ffmpeg/
 RUN cd ffmpeg && ./build.sh
+COPY jq/ ./jq/
+RUN cd jq && ./build.sh
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
@@ -54,6 +58,8 @@ COPY --from=build /etc/ca-certificates/extracted/tls-ca-bundle.pem /etc/ssl/cert
 COPY --from=build /src/chattoneko /opt/chattoneko
 # Found on PATH by internal/media; $CHATTO_FFMPEG overrides it.
 COPY --from=build /src/ffmpeg/out/bin/ffmpeg /usr/local/bin/ffmpeg
+# Also on PATH, and static, so busybox alone is enough to run it.
+COPY --from=build /src/jq/out/bin/jq /usr/local/bin/jq
 RUN mkdir -p /tmp /var/lib/chattoneko \
  && chmod 1777 /tmp \
  && chmod +x /opt/chattoneko \

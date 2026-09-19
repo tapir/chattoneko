@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fully static ffmpeg: image decode, PNG encode, audio decode, MP3 encode.
+# Fully static ffmpeg: image decode, JPEG encode, audio decode, MP3 encode.
 set -euo pipefail
 
 ZLIB_VERSION=1.3.2

@@ -131,7 +131,7 @@
         isGenerating && 'breathing',
         revealed
           ? 'pr-12'
-          : '[@media(hover:hover)]:group-hover:pr-12 group-focus-within:pr-12'
+          : '[@media(hover:hover)]:group-hover:pr-12 [@media(hover:hover)]:group-focus-within:pr-12'
       ]}>{displayTitle()}</span>
   </a>
   <!-- Absolutely positioned so the row never reflows when the actions appear
@@ -143,12 +143,13 @@
   <span
     class={[
       'absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-md transition-opacity',
-      // Hover reveal only on devices with a real pointer: touch browsers
-      // leave :hover stuck after a tap, which would pin the icon open on
-      // the last-touched row. On touch the long-press reveal governs.
+      // Hover/focus reveal only on devices with a real pointer: touch browsers
+      // leave :hover stuck after a tap, and a tap also focuses the <a>, so
+      // either one ungated would pin the icons open on the last-touched row.
+      // On touch the long-press reveal governs.
       revealed
         ? 'opacity-100 pointer-events-auto'
-        : 'opacity-0 pointer-events-none [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto'
+        : 'opacity-0 pointer-events-none [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-hover:pointer-events-auto [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-focus-within:pointer-events-auto'
     ]}
   >
     <IconButton icon={chat.pinned ? PinOff : Pin} label={chat.pinned ? 'Unpin' : 'Pin'} size="sm" onclick={togglePin} />

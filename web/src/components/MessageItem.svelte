@@ -215,11 +215,13 @@
   }
 
   // Resting state is invisible everywhere; `[@media(hover:hover)]` keeps the
-  // desktop hover reveal, `[@media(hover:none)]` makes the tap reveal apply
-  // only where there is no pointer to hover with (a stray `revealed` on a
-  // desktop click is then a no-op instead of a row pinned open forever).
+  // desktop hover and keyboard-focus reveal (a tap focuses a link on touch and
+  // an ungated focus-within would pin the row open), `[@media(hover:none)]`
+  // makes the tap reveal apply only where there is no pointer to hover with (a
+  // stray `revealed` on a desktop click is then a no-op instead of a row pinned
+  // open forever).
   const ACTIONS =
-    'transition-opacity opacity-0 group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100';
+    'transition-opacity opacity-0 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100';
   let actionsClass = $derived(revealed ? `${ACTIONS} [@media(hover:none)]:opacity-100` : ACTIONS);
 
   // ---- inline edit (user messages) ----

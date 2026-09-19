@@ -6,7 +6,7 @@ Your own cute cat AI assistant, self-hosted.
 
 *Chatto* is the Japanese pronunciation of the English word "chat"; *neko* is Japanese for "cat." ChattoNeko is a chat client for OpenAI-compatible APIs (it plays best with OpenRouter), which exposes extra model metadata, but it works fully with any other OpenAI-compatible provider. You run it on your own server or machine. It is made for personal, self-hosted use, not as a SaaS product: no accounts, no multi-tenancy, no billing.
 
-It is extremely small. Everything is one static Go binary with the web UI embedded, about 8 MB after UPX packing. The Docker image is roughly 13 MB and the Android APK about 10 MB. Small as it is, it has what you expect from a chat app: streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login, plus a few unique features.
+It is extremely small. Everything is one static Go binary with the web UI embedded, about 7.5 MB after UPX packing. The Docker image is roughly 13 MB and the Android APK about 10 MB. Small as it is, it has what you expect from a chat app: streaming, reasoning display, attachments, tools, history, search, per-chat settings, optional login, plus a few unique features.
 
 ## What it does
 

@@ -109,7 +109,7 @@ Output is compact JSON, one line per value the filter produces. A bad filter or 
 Nothing outside that value is reachable: no files, no command-line arguments, no network, no input_filename, and the environment is empty — $ENV and env both yield {}. Everything jq can do to a value in memory, it can do here.
 
 Reach for it for arithmetic you need right (pow(2;10), not 2^10 — there is no ^ operator), real regular expressions (test, match, capture, scan, sub, gsub, splits are oniguruma, so \d and (?<name>…) work), and for querying, reshaping, sorting, grouping, joining or counting JSON. Also base64, URL escaping, date math from a unix timestamp, and string splitting/padding/case work.
-Arithmetic is IEEE754 double, so it is exact only for integers within ±2^53: pow(2;53)+1 loses the +1 and 0.1+0.2 is 0.30000000000000004. Big literals DO survive untouched — a 19-digit id passes through and tostring's intact — so read and forward them freely, just never compute on one.
+
 Emit a summary, not a dump — the result is capped and a truncated one is a wasted call.`,
 	Schema:         jqSchema,
 	DefaultEnabled: true,

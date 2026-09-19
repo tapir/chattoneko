@@ -71,6 +71,16 @@ var jqBin = func() string {
 // PATH lookup. Read once, like every other CHATTO_ variable.
 func Binary() string { return jqBin }
 
+// jqLookPath is a var so a test can report a host with no jq.
+var jqLookPath = exec.LookPath
+
+// jqAvailable reports whether the jq this tool runs exists. Checked per
+// catalog listing rather than once at init, so installing jq needs no restart.
+func jqAvailable() bool {
+	_, err := jqLookPath(Binary())
+	return err == nil
+}
+
 // maxJQFilterBytes bounds the filter. A jq program is a few lines; this only
 // keeps a pathological payload from reaching the compiler.
 const maxJQFilterBytes = 64 * 1024
@@ -113,6 +123,7 @@ Reach for it for arithmetic you need right (pow(2;10), not 2^10 — there is no 
 Emit a summary, not a dump — the result is capped and a truncated one is a wasted call.`,
 	Schema:         jqSchema,
 	DefaultEnabled: true,
+	Available:      jqAvailable,
 	Title:          "Running jq…",
 	Handler:        runJQ,
 }

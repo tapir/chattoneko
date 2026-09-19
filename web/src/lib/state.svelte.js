@@ -348,11 +348,12 @@ class AppState {
 
   // A tool this chat cannot use right now: a specialist the picked model makes
   // pointless (it takes that input itself, so the backend leaves the tool out
-  // of the request too), or one whose model is not designated in settings at
-  // all. The row is shown greyed out and dead rather than hidden — the same
-  // row in settings stays live, since that is where its default is set.
+  // of the request too), one whose model is not designated in settings at all,
+  // or one whose external binary the server does not have. The row is shown
+  // greyed out and dead rather than hidden — the same row in settings stays
+  // live for the first two, since that is where their default is set.
   toolUnavailable(tool, modelId) {
-    if (tool?.requires_model) return true;
+    if (tool?.requires_model || tool?.requires_binary) return true;
     return !!tool?.requires_modality && this.inputModalitiesFor(modelId).includes(tool.requires_modality);
   }
 

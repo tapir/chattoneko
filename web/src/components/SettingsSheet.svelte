@@ -919,7 +919,14 @@
             <h3 class="text-base font-semibold">Tool defaults</h3>
             <div class="flex flex-col gap-0.5">
               {#each integratedTools as tool (tool.name)}
-                <ToolToggleRow {tool} checked={toolDefaultOn(tool)} onToggle={(checked) => setToolDefault(tool.name, checked)} />
+                <!-- Greyed only for a missing external binary: unlike a model
+                     designation, that is not fixable from here. -->
+                <ToolToggleRow
+                  {tool}
+                  checked={toolDefaultOn(tool)}
+                  onToggle={(checked) => setToolDefault(tool.name, checked)}
+                  disabled={!!tool.requires_binary}
+                />
               {:else}
                 <p class={hint}>No integrated tools in the catalog yet.</p>
               {/each}

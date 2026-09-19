@@ -50,6 +50,11 @@ type tool struct {
 	// and is listed with RequiresModel set instead of being offered. Nil for a
 	// tool that needs no specialist model.
 	Model func(config.ModelsConfig) string
+	// Available reports whether the tool can run at all — the external binary
+	// it shells out to is on this host. Read live on every catalog listing,
+	// like Model: false lists the tool with RequiresBinary instead of offering
+	// it. Nil means always available.
+	Available func() bool
 	// Timeout bounds one call, overriding callTimeout. Only a handler doing
 	// remote I/O needs it (the specialists wait on another model); 0 keeps the
 	// default.
@@ -120,6 +125,7 @@ func (r *registry) Tools() []mcphub.Entry {
 			Title:          t.Title,
 			Modality:       t.Modality,
 			RequiresModel:  gate && t.Model != nil && t.Model(models) == "",
+			RequiresBinary: t.Available != nil && !t.Available(),
 		})
 	}
 	return out

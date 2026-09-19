@@ -257,6 +257,24 @@ func TestJQEmptyOutputIsExplained(t *testing.T) {
 	}
 }
 
+// A host with no jq still lists the tool, flagged: that is what keeps the
+// engine from offering a call that could only fail and greys both tool rows out.
+func TestJQFlaggedWithoutBinary(t *testing.T) {
+	flagged := func() bool { return newRegistry(JQ).Tools()[0].RequiresBinary }
+
+	real := jqLookPath
+	defer func() { jqLookPath = real }()
+
+	jqLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	if !flagged() {
+		t.Error("a missing jq was not flagged")
+	}
+	jqLookPath = func(string) (string, error) { return "/usr/bin/jq", nil }
+	if flagged() {
+		t.Error("a present jq was flagged")
+	}
+}
+
 func TestJQFilterBeginningWithADash(t *testing.T) {
 	// "--" separates the flags from the filter, so a leading dash is a filter
 	// and not an option jq would reject.

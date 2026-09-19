@@ -1282,13 +1282,15 @@ func TestInputModalities(t *testing.T) {
 // TestEffectiveToolsGates: a specialist tool is advertised only to a chat model
 // that lacks the modality it stands in for, and stays out of the request
 // entirely once that model takes the input itself. A tool whose designated
-// model is not set stays out for every model, even though the catalog lists it.
-// A tool with neither gate is always offered.
+// model is not set stays out for every model, even though the catalog lists it,
+// and so does one whose external binary this host lacks. A tool with no gate at
+// all is always offered.
 func TestEffectiveToolsGates(t *testing.T) {
 	fake := &fakeMCP{tools: []mcphub.Entry{
 		{Display: "vision", Description: "images", DefaultEnabled: true, Modality: "image"},
 		{Display: "document", Description: "PDFs", DefaultEnabled: true, Modality: "file"},
 		{Display: "speak", Description: "audio out", DefaultEnabled: true, RequiresModel: true},
+		{Display: "jq", Description: "json", DefaultEnabled: true, RequiresBinary: true},
 		{Display: "time", Description: "clock", DefaultEnabled: true},
 	}}
 	eng, st, _ := testEngine(t, &scriptedProvider{}, fake)
@@ -1323,23 +1325,24 @@ func TestEffectiveToolsGates(t *testing.T) {
 	if got := offered([]string{"text", "image", "file"}); len(got) != 1 || got["time"] != "clock" {
 		t.Errorf("a model needing no specialist was offered %v, want only time", got)
 	}
-	// No model at all makes speak unofferable, whatever the chat model is — and
-	// a persisted per-chat toggle cannot bring it back, since the flag is a hard
-	// exclusion rather than a default.
+	// No model at all makes speak unofferable and a missing binary does the
+	// same for jq, whatever the chat model is — and a persisted per-chat toggle
+	// cannot bring either back, since the flag is a hard exclusion rather than
+	// a default.
 	for _, mods := range [][]string{nil, {"text"}, {"text", "audio", "image", "file"}} {
-		if got := offered(mods); got["speak"] != "" {
-			t.Errorf("mods=%v: a tool with no designated model was offered: %v", mods, got)
+		if got := offered(mods); got["speak"] != "" || got["jq"] != "" {
+			t.Errorf("mods=%v: a tool that could only fail was offered: %v", mods, got)
 		}
 	}
 	if err := st.UpdateChatSettings(ctx, chat.ID, chat.Model, chat.Params,
-		map[string]bool{"speak": true, "time": false}); err != nil {
+		map[string]bool{"speak": true, "jq": true, "time": false}); err != nil {
 		t.Fatalf("update chat settings: %v", err)
 	}
 	chat, err = st.GetChat(ctx, chat.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := offered(nil); got["speak"] != "" || got["time"] != "" {
-		t.Errorf("speak must stay out despite its on-toggle and time must honor its off-toggle: %v", got)
+	if got := offered(nil); got["speak"] != "" || got["jq"] != "" || got["time"] != "" {
+		t.Errorf("speak and jq must stay out despite their on-toggles and time must honor its off-toggle: %v", got)
 	}
 }

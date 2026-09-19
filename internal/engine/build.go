@@ -128,15 +128,15 @@ func (e *Engine) inputModalities(ctx context.Context, model string) []string {
 
 // enabledTools computes the per-chat effective tool set: config defaults
 // overridden by the chat's persisted toggles (nil chat = config defaults).
-// Returns display names. A tool with no designated model is not a default but a
-// hard exclusion, so a persisted per-chat toggle cannot bring it back: it could
-// only fail, and refusing it as unavailable is what bounds a model that keeps
-// insisting (maxPostCapRounds) instead of handing it an in-band error to retry
-// forever.
+// Returns display names. A tool with no designated model, or no binary to run,
+// is not a default but a hard exclusion, so a persisted per-chat toggle cannot
+// bring it back: it could only fail, and refusing it as unavailable is what
+// bounds a model that keeps insisting (maxPostCapRounds) instead of handing it
+// an in-band error to retry forever.
 func (e *Engine) enabledTools(chat *store.Chat) map[string]bool {
 	out := map[string]bool{}
 	for _, t := range e.catalog.Tools() {
-		if t.RequiresModel {
+		if t.RequiresModel || t.RequiresBinary {
 			continue
 		}
 		on := t.DefaultEnabled

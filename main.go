@@ -27,6 +27,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -80,6 +81,13 @@ func run() error {
 		level = slog.LevelDebug
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+
+	// ffmpeg is a hard dependency, not a runtime surprise: without it every
+	// picture and recording upload fails as ErrUnsupported, which the API
+	// reports as a 415 blaming the user's file.
+	if _, err := exec.LookPath(media.Binary()); err != nil {
+		return fmt.Errorf("ffmpeg not found (%q): install it or point %s at it", media.Binary(), media.EnvBinary)
+	}
 
 	// Before anything is opened: the container starts as root only so a
 	// bind-mounted data directory can be made writable, then the process drops

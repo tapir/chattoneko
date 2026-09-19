@@ -61,6 +61,11 @@ type Entry struct {
 	// chat UI greys its row out like a modality-gated one. Only integrated tools
 	// set it.
 	RequiresModel bool `json:"requires_model,omitempty"`
+	// RequiresBinary marks a tool that shells out to a binary this host does
+	// not have, so a call could only fail. Listed anyway — both tool lists
+	// render a row from this and grey it out — but the engine neither offers
+	// nor runs it. Only integrated tools set it.
+	RequiresBinary bool `json:"requires_binary,omitempty"`
 }
 
 // connectTimeout bounds dialing + tool listing for one MCP server so a dead

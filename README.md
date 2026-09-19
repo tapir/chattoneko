@@ -44,7 +44,7 @@ docker run -d --name chattoneko \
   ghcr.io/tapir/chattoneko
 ```
 
-If you don't prefer the docker images, fully static server and web client binary can be built with `make build`. But you need `ffmpeg` and `jq` command line tools in `$PATH`. Docker image takes care of that for you with incredibly slim builds of both: 2.8 MB of `ffmpeg` and 0.8 MB of `jq`.
+If you don't prefer the docker images, fully static server and web client binary can be built with `make build`. `ffmpeg` is required: the server refuses to start without it, because every uploaded picture and recording is converted through it. `jq` is optional — without it everything else runs and the `jq` tool is greyed out. The docker image takes care of both for you with incredibly slim builds: 2.8 MB of `ffmpeg` and 0.8 MB of `jq`.
 
 The Android APK is built with `make mobile-apk`.
 
@@ -77,8 +77,8 @@ I also use Exa.ai's web search tool. I usually disable its fetch tool since we h
 | `CHATTO_USERNAME` | Login name. Set both this and the password to require a sign-in; if either is missing there is no auth at all. |
 | `CHATTO_PASSWORD` | Login password, used as-is. Nothing about the login is written to the database; changing it means restarting. |
 | `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time` tool's result so agents know where you are. Read once at startup. |
-| `CHATTO_FFMPEG` | The ffmpeg that converts uploaded pictures and recordings. Defaults to `ffmpeg` on your PATH; the Docker image ships its own at `/usr/local/bin/ffmpeg`. Read once at startup. |
-| `CHATTO_JQ` | The jq the `jq` tool runs. Defaults to `jq` on your PATH; the Docker image ships its own at `/usr/local/bin/jq`. Read once at startup. |
+| `CHATTO_FFMPEG` | The ffmpeg that converts uploaded pictures and recordings. Required — the server exits at startup when it cannot be found. Defaults to `ffmpeg` on your PATH; the Docker image ships its own at `/usr/local/bin/ffmpeg`. Read once at startup. |
+| `CHATTO_JQ` | The jq the `jq` tool runs. Optional — when it is missing the tool is never offered and its rows are greyed out. Defaults to `jq` on your PATH; the Docker image ships its own at `/usr/local/bin/jq`. Read once at startup. |
 
 ### Command-line flags
 

@@ -26,7 +26,7 @@ type fileStore interface {
 // config store: attach and fetch read the size limits from it, speak and the
 // specialists their designated models.
 func Builtin(files fileStore, cfgs *config.Store) *registry {
-	ts := []tool{Time, Code, JQ, Attach(files, cfgs), Fetch(files, cfgs), Speak(files, cfgs)}
+	ts := []tool{Time, JQ, Attach(files, cfgs), Fetch(files, cfgs), Speak(files, cfgs)}
 	r := newRegistry(append(ts, Specialists(files, cfgs)...)...)
 	r.cfgs = cfgs
 	return r

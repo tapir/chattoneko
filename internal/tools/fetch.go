@@ -121,8 +121,8 @@ func fetchURL(ctx context.Context, argsJSON string, meta mcphub.CallMeta, files 
 	return out + "\n\nThe FULL body is stored as a file too, not shown to the user:\n" + stagedBlock(m), nil
 }
 
-// textResult is the body handed back to the model, capped at the same budget
-// the code tool's output uses. The cut is rune-safe and announced, so the model
+// textResult is the body handed back to the model, capped at the shared
+// tool-result budget. The cut is rune-safe and announced, so the model
 // knows it is looking at a prefix.
 func textResult(body string) string {
 	if len(body) <= maxOutputBytes {

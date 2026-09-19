@@ -345,14 +345,14 @@ func TestFetchErrors(t *testing.T) {
 	}
 }
 
-// The catalog the engine runs: attach, fetch, code, time and one specialist per
+// The catalog the engine runs: attach, fetch, time and one specialist per
 // file type. The names in the second list must stay out of it.
 func TestBuiltinFileTools(t *testing.T) {
 	names := map[string]bool{}
 	for _, e := range Builtin(&fakeFileStore{}, nil).Tools() {
 		names[e.Display] = true
 	}
-	for _, want := range []string{"attach", "fetch", "code", "time", "vision", "document", "transcribe"} {
+	for _, want := range []string{"attach", "fetch", "time", "vision", "document", "transcribe"} {
 		if !names[want] {
 			t.Fatalf("catalog is missing %q: %v", want, names)
 		}
@@ -367,9 +367,8 @@ func TestBuiltinFileTools(t *testing.T) {
 // No integrated tool's LLM-facing text may point at another tool by name: a
 // name in prose is a promise the user can break by turning that tool off.
 // Matched on word boundaries, because "attachment" is an ordinary word the
-// specialists cannot do without. Only the names below are checked — "code",
-// "time" and "fetch" are ordinary English words that show up in prose ("source
-// code").
+// specialists cannot do without. Only the names below are checked — "time"
+// and "fetch" are ordinary English words that show up in prose.
 func TestNoCrossToolReferences(t *testing.T) {
 	for _, e := range Builtin(&fakeFileStore{}, nil).Tools() {
 		for _, name := range []string{"attach", "create_file", "attach_file"} {

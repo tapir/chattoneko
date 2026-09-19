@@ -15,13 +15,13 @@ import (
 )
 
 // The "jq" tool: runs a jq filter over JSON the model supplies and returns what
-// the filter produces. It exists for the same reason "code" does — exact
-// arithmetic, string matching and data wrangling instead of guessing — but for
-// the work that is already shaped like JSON, where a filter is shorter than a
-// program and the model needs no syntax tutorial because jq is jq.
+// the filter produces — exact arithmetic, string matching and data wrangling
+// instead of guessing, for work already shaped like JSON, where a filter is
+// shorter than a program and the model needs no syntax tutorial because jq is
+// jq.
 //
-// Sandboxing is capability-based, like code.go's, and rests on how jq is
-// invoked rather than on inspecting the filter:
+// Sandboxing is capability-based and rests on how jq is invoked rather than on
+// inspecting the filter:
 //
 //   - no file arguments, ever: the filter is the only non-flag argument, so
 //     there is no path for jq to open, and -- keeps a filter that begins with a

@@ -44,7 +44,7 @@ type Entry struct {
 	Schema         json.RawMessage `json:"schema"`          // JSON schema for arguments
 	DefaultEnabled bool            `json:"default_enabled"` // config default toggle
 	// Title is the USER-facing label the UI shows instead of the raw name
-	// ("Coding…" for code). Empty means "no title" — the UI falls back
+	// ("Speaking…" for speak). Empty means "no title" — the UI falls back
 	// to Display. Never sent to the model, which only ever sees Display.
 	Title string `json:"title"`
 	// Modality is the chat-model input modality that makes the tool pointless,

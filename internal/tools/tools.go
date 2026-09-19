@@ -23,6 +23,11 @@ import (
 // block the turn loop indefinitely.
 const callTimeout = 30 * time.Second
 
+// maxOutputBytes caps a tool result: jq's output and the text body fetch
+// returns inline are both truncated here, so a large one cannot blow up the
+// request the model has to read.
+const maxOutputBytes = 1 * 1024 * 1024
+
 // tool is one integrated tool definition; all of its LLM-facing text lives in
 // the tool's own file. DefaultEnabled is the starting state for chats that
 // have not toggled the tool explicitly (per-chat overrides live in the chat's
@@ -33,7 +38,7 @@ type tool struct {
 	Schema         json.RawMessage // JSON schema for the arguments
 	DefaultEnabled bool            // enabled unless the chat or the config says otherwise
 	// Title is the user-facing label the chat UI shows instead of Name
-	// ("Coding…"); the model never sees it. Empty falls back to Name in the UI.
+	// ("Speaking…"); the model never sees it. Empty falls back to Name in the UI.
 	Title string
 	// Modality is the chat-model input modality that makes the tool pointless,
 	// because the model takes that input itself ("image" for vision). Empty for
@@ -134,9 +139,8 @@ func (r *registry) Call(ctx context.Context, display, argsJSON string, meta mcph
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	// An in-process handler (including third-party VM code like the Lua
-	// sandbox) must not be able to kill the generation or the whole process
-	// with a panic; surface it as an in-band tool error instead.
+	// An in-process handler must not be able to kill the generation or the
+	// whole process with a panic; surface it as an in-band tool error instead.
 	defer func() {
 		if p := recover(); p != nil {
 			slog.Error("integrated tool panicked", "tool", display, "panic", p)

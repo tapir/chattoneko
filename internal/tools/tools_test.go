@@ -69,8 +69,8 @@ func TestRegistryCall(t *testing.T) {
 	}
 }
 
-// A panicking in-process handler (e.g. a bug in the Lua VM) must surface as
-// an in-band tool error, never take down the turn loop or the process.
+// A panicking in-process handler must surface as an in-band tool error,
+// never take down the turn loop or the process.
 func TestRegistryCallPanicIsolated(t *testing.T) {
 	r := newRegistry(tool{
 		Name:    "explode",
@@ -225,7 +225,7 @@ func TestCatalogFlagsToolsWithoutAModel(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"time": false, "code": false, "jq": false, "attach": false, "fetch": false,
+		"time": false, "jq": false, "attach": false, "fetch": false,
 		"vision": true, "document": true, "transcribe": true, "speak": true,
 	}
 	checkFlags(want)

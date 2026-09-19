@@ -57,7 +57,7 @@ func TestTitlesOverrideCatalogTitle(t *testing.T) {
 }
 
 // TestBuiltinTitlesSet: every integrated tool carries a user-facing title, so
-// the chat never falls back to a raw identifier like "code".
+// the chat never falls back to a raw identifier like "jq".
 func TestBuiltinTitlesSet(t *testing.T) {
 	for _, e := range Builtin(nil, nil).Tools() {
 		if strings.TrimSpace(e.Title) == "" {

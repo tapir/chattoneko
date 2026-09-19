@@ -100,9 +100,18 @@ func mustParseRFC(t *testing.T, out string) time.Time {
 	return ts
 }
 
+// setLocation points the time tool at loc for one test: the env var is read
+// once at startup, so the stored value is what a test has to change.
+func setLocation(t *testing.T, loc string) {
+	t.Helper()
+	old := locationString
+	locationString = loc
+	t.Cleanup(func() { locationString = old })
+}
+
 func TestTime(t *testing.T) {
 	t.Run("without location", func(t *testing.T) {
-		t.Setenv(envLocationString, "")
+		setLocation(t, "")
 		out, isErr, err := Builtin(nil, nil).Call(context.Background(), "time", "", mcphub.CallMeta{})
 		if err != nil || isErr {
 			t.Fatalf("time: out=%q isErr=%v err=%v", out, isErr, err)
@@ -119,7 +128,7 @@ func TestTime(t *testing.T) {
 
 	t.Run("with location", func(t *testing.T) {
 		const loc = "Berlin, Germany"
-		t.Setenv(envLocationString, loc)
+		setLocation(t, loc)
 		out, isErr, err := Builtin(nil, nil).Call(context.Background(), "time", "", mcphub.CallMeta{})
 		if err != nil || isErr {
 			t.Fatalf("time: out=%q isErr=%v err=%v", out, isErr, err)

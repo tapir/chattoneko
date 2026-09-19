@@ -14,8 +14,11 @@ import (
 // free-form location string (e.g. "Berlin, Germany"). When set (non-empty
 // after trimming), the time tool appends it to its result so the
 // model can ground place-aware answers; when unset, nothing is appended.
-// Read at call time, like the clock itself.
 const envLocationString = "CHATTO_LOCATION_STRING"
+
+// Read once, like every other CHATTO_ variable: a process's environment never
+// changes underneath it, so there is nothing for a later call to see.
+var locationString = strings.TrimSpace(os.Getenv(envLocationString))
 
 // The "time" tool: returns the server's current local date, time and
 // timezone — plus its configured location when CHATTO_LOCATION_STRING is set —
@@ -39,8 +42,8 @@ const timeLayout = "Monday, 2 January 2006, 15:04:05 MST"
 func reportTime(_ context.Context, _ string, _ mcphub.CallMeta) (string, error) {
 	now := time.Now()
 	out := fmt.Sprintf("%s (%s)", now.Format(timeLayout), now.Format(time.RFC3339))
-	if loc := strings.TrimSpace(os.Getenv(envLocationString)); loc != "" {
-		out += " — " + loc
+	if locationString != "" {
+		out += " — " + locationString
 	}
 	return out, nil
 }

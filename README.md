@@ -76,7 +76,7 @@ I also use Exa.ai's web search tool. I usually disable its fetch tool since we h
 | --- | --- |
 | `CHATTO_USERNAME` | Login name. Set both this and the password to require a sign-in; if either is missing there is no auth at all. |
 | `CHATTO_PASSWORD` | Login password, used as-is. Nothing about the login is written to the database; changing it means restarting. |
-| `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time` tool's result so agents know where you are. |
+| `CHATTO_LOCATION_STRING` | Free-form location, e.g. `Berlin, Germany`. Appended to the `time` tool's result so agents know where you are. Read once at startup. |
 | `CHATTO_FFMPEG` | The ffmpeg that converts uploaded pictures and recordings. Defaults to `ffmpeg` on your PATH; the Docker image ships its own at `/usr/local/bin/ffmpeg`. Read once at startup. |
 
 ### Command-line flags

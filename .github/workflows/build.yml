@@ -1,14 +1,18 @@
-# The only pipeline: push a `vX.Y.Z` tag and it
-#   1. builds + pushes ghcr.io/<repo>:vX.Y.Z and :latest
-#   2. builds the APK with versionName/versionCode derived from the tag and
-#      publishes a GitHub Release with chattoneko-X.Y.Z.apk attached.
+# One pipeline, two tracks:
+#   1. push a `vX.Y.Z` tag -> ghcr.io/<repo>:vX.Y.Z and :latest, plus the APK
+#      with versionName/versionCode derived from the tag, published as a GitHub
+#      Release carrying chattoneko-X.Y.Z.apk.
+#   2. run it by hand (Actions -> Build -> Run workflow) -> the unversioned
+#      testing track: ghcr.io/<repo>-testing:latest and a chattoneko-testing.apk
+#      run artifact. Dispatch it on the `testing` branch.
 # The two jobs run in parallel; the release is published by `apk`, so a Docker
 # failure does not swallow the APK.
-name: Release
+name: Build
 
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
 
 permissions:
   contents: write # create the GitHub Release
@@ -26,13 +30,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A tag names the release image and adds the version tag; a manual run
+      # goes to the separate -testing image, :latest only. The suffix tests
+      # `!= 'tag'` on purpose: '' is falsy in GitHub expressions, so
+      # `cond && '' || '-testing'` would always yield '-testing'.
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}${{ github.ref_type != 'tag' && '-testing' || '' }}
           tags: |
             type=raw,value=latest
-            type=ref,event=tag
+            ${{ github.ref_type == 'tag' && 'type=ref,event=tag' || '' }}
 
       - uses: docker/build-push-action@v6
         with:
@@ -41,7 +49,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Stamped into the binary as main.version (served on /api/meta, shown
-          # in the sidebar); the Dockerfile strips the tag's leading v.
+          # in the sidebar); the Dockerfile strips the tag's leading v. On a
+          # manual run this is the branch name, so the app reports "testing".
           build-args: VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -96,16 +105,23 @@ jobs:
 
       - name: Build APK
         env:
-          TAG: ${{ github.ref_name }}
+          REF: ${{ github.ref_name }}
+          IS_TAG: ${{ github.ref_type == 'tag' }}
         run: |
           set -euo pipefail
-          v="${TAG#v}"
-          IFS=. read -r maj min pat <<<"$v"
-          # ponytail: X*10000+Y*100+Z — collides if minor or patch ever hit 100.
-          make mobile-apk VERSION=$v GRADLE_FLAGS="-PversionCode=$((maj * 10000 + min * 100 + pat))"
+          if [ "$IS_TAG" = true ]; then
+            v="${REF#v}"
+            IFS=. read -r maj min pat <<<"$v"
+            # ponytail: X*10000+Y*100+Z — collides if minor or patch ever hit 100.
+            make mobile-apk VERSION=$v GRADLE_FLAGS="-PversionCode=$((maj * 10000 + min * 100 + pat))"
+          else
+            v=testing
+            make mobile-apk VERSION=$v
+          fi
           cp mobile/android/app/build/outputs/apk/debug/app-debug.apk "chattoneko-$v.apk"
 
       - name: Publish release
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
@@ -118,3 +134,9 @@ jobs:
           apk="chattoneko-${TAG#v}.apk"
           gh release create "$TAG" "$apk" --title "$TAG" --generate-notes ||
             gh release upload "$TAG" "$apk" --clobber
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type != 'tag'
+        with:
+          name: chattoneko-testing.apk
+          path: chattoneko-testing.apk

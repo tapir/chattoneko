@@ -44,8 +44,8 @@ import (
 // ErrTooLarge is returned when the response body exceeds the requested cap.
 var ErrTooLarge = errors.New("response too large")
 
-// fetchTimeout bounds a single fetch. The tools layer additionally wraps
-// every call in its own 30s cap.
+// fetchTimeout bounds a single fetch. The fetch tool that calls this declares
+// its own 2-minute cap on top, because a stored body can go through ffmpeg.
 const fetchTimeout = 25 * time.Second
 
 // maxRedirects caps the redirect hops followed (browser-like, same as the

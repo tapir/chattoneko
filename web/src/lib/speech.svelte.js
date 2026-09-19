@@ -47,9 +47,12 @@ export async function toggleSpeech(messageId) {
     el.onerror = stopSpeech;
     await el.play();
   } catch (e) {
+    // The singleton may already belong to a newer request: tearing it down
+    // here would revoke that one's blob and clear its loading flag.
+    if (speech.id !== messageId) return;
     stopSpeech();
     app.toast('error', `Read aloud failed: ${e?.message || e}`);
   } finally {
-    speech.loading = false;
+    if (speech.id === messageId) speech.loading = false;
   }
 }

@@ -693,6 +693,16 @@ func (s *Store) GetAttachment(ctx context.Context, id string) (*Attachment, erro
 	return &Attachment{AttachmentMeta: attachmentMeta(row), Data: row.Data}, nil
 }
 
+// AttachmentChatID reports which chat owns an attachment without reading its
+// blob (a send validates every referenced id).
+func (s *Store) AttachmentChatID(ctx context.Context, id string) (string, error) {
+	chatID, err := s.q.GetAttachmentChatID(ctx, id)
+	if err != nil {
+		return "", notFound(err)
+	}
+	return chatID, nil
+}
+
 // ListAttachmentsByMessage returns attachment metas of a message.
 func (s *Store) ListAttachmentsByMessage(ctx context.Context, messageID string) ([]AttachmentMeta, error) {
 	rows, err := s.q.ListAttachmentsByMessage(ctx, messageID)

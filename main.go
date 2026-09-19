@@ -187,7 +187,11 @@ func run() error {
 	<-sigCtx.Done()
 
 	slog.Info("shutting down")
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	// Shutdown returns only once every connection is idle, and an open tab's
+	// SSE stream never is — so it gets a short drain window and Close below
+	// drops what is left. Letting it run its full course would spend the whole
+	// `docker stop` grace period here and SIGKILL the teardown that follows.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelShutdown()
 	_ = httpSrv.Shutdown(shutdownCtx)
 	eng.Shutdown() // waits for in-flight generations to persist before the DB closes
@@ -197,6 +201,7 @@ func run() error {
 	// timeout — Close would block on them via reloadMu. Canceled first, the
 	// dials abort at once and Close reaps everything they managed to open.
 	serverCancel()
+	_ = httpSrv.Close()
 	hub.Close()
 	_ = sqlDB.Close()
 	return nil

@@ -237,6 +237,10 @@
   }
   function onKeydown(e) {
     if (!open) return; // svelte:window is always mounted; only act while open
+    // A bits-ui layer (a Select dropdown inside a model card) consumes Escape
+    // with preventDefault but lets it bubble: without this the same keypress
+    // would dismiss the dropdown and the whole overlay.
+    if (e.defaultPrevented) return;
     if (e.key === 'Escape') attemptClose();
   }
   // Android back button closes the overlay (no-op while forced open).
@@ -571,11 +575,12 @@
     <div class="absolute inset-0 cursor-default bg-black/60" role="presentation" aria-hidden="true" onclick={attemptClose}></div>
 
     <!-- Fullscreen on mobile (like the sidebar and panel sheets); a
-         centered dialog on sm+. -->
-    <div class="relative z-10 flex h-app w-full max-w-2xl flex-col bg-card text-card-foreground p-safe sm:h-auto sm:max-h-[92dvh] sm:rounded-xl sm:border sm:shadow-xl ss-panel">
+         centered dialog on sm+. The app layer behind it is inert while this
+         is open (App.svelte), so Tab cannot walk out of the panel. -->
+    <div role="dialog" aria-modal="true" aria-labelledby="settings-title" class="relative z-10 flex h-app w-full max-w-2xl flex-col bg-card text-card-foreground p-safe sm:h-auto sm:max-h-[92dvh] sm:rounded-xl sm:border sm:shadow-xl ss-panel">
       <!-- Header -->
       <div class="flex items-start justify-between gap-4 border-b px-4 py-4 sm:px-6">
-        <h2 class="text-lg font-semibold">Settings</h2>
+        <h2 id="settings-title" class="text-lg font-semibold">Settings</h2>
         {#if canClose}
           <button
             type="button"

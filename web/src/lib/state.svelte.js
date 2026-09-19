@@ -62,9 +62,6 @@ function placeholderAssistant(chatId, messageId) {
     name: "",
     tool_calls: [],
     attachments: [],
-    seq: Number.MAX_SAFE_INTEGER,
-    created_at: Date.now(),
-    updated_at: Date.now(),
   };
 }
 
@@ -390,6 +387,7 @@ class AppState {
 
   toast(kind, text) {
     if (kind === "error") sonnerToast.error(text);
+    else if (kind === "success") sonnerToast.success(text);
     else sonnerToast(text);
   }
 

@@ -38,10 +38,17 @@ export const isPdf = (att) => att?.mime === 'application/pdf';
 // pdfjs-dist's cmaps/ (1.7 MB) is the fix if that ever shows up.
 export async function pdfPages(url) {
   const m = await pdfjs();
-  const task = m.getDocument({ url });
+  // Its own worker: task.destroy() destroys the worker it was handed, and
+  // getDocument hands out the SHARED one from GlobalWorkerOptions.workerPort —
+  // probing with that would deafen every mounted PdfPreview.
+  const port = new Worker(workerUrl, { type: 'module' });
+  const worker = new m.PDFWorker({ name: 'probe', port });
+  const task = m.getDocument({ url, worker });
   try {
     return (await task.promise).numPages;
   } finally {
     task.destroy();
+    worker.destroy();
+    port.terminate();
   }
 }

@@ -35,7 +35,7 @@ func TestSupersededMidFinalizeSuppressesTerminalEvents(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		ch, unsub := eng.Subscribe(chatID, 0)
+		ch, unsub := eng.Subscribe(chatID, 0, "")
 
 		var round []provider.StreamEvent
 		for i := 0; i < danglingCalls; i++ {
@@ -202,7 +202,7 @@ func TestPublishGenBindsToCurrentGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start B: %v", err)
 	}
-	ch, unsub := eng.Subscribe(chatID, 0)
+	ch, unsub := eng.Subscribe(chatID, 0, "")
 	defer unsub()
 	if ev := <-ch; ev.Type != "generation_started" || ev.MessageID != amB.ID {
 		t.Fatalf("want B's generation_started in replay, got %+v", ev)

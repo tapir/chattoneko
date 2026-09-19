@@ -84,9 +84,6 @@ func (l *loginLimiter) refund() {
 	l.tokens = min(l.burst, l.tokens+1)
 }
 
-// ErrInvalidCreds is returned on failed login.
-var ErrInvalidCreds = errors.New("invalid credentials")
-
 // ErrRateLimited is returned on too many login attempts.
 var ErrRateLimited = errors.New("too many login attempts")
 
@@ -126,7 +123,9 @@ func (a *Auth) Login(username, password string) (token string, err error) {
 		pwOK := subtle.ConstantTimeCompare([]byte(password), []byte(c.Auth.Password)) == 1
 		userOK := subtle.ConstantTimeCompare([]byte(username), []byte(c.Auth.Username)) == 1
 		if !pwOK || !userOK {
-			return "", ErrInvalidCreds
+			// Not a sentinel: handleLogin answers every non-rate-limited failure
+			// with the same generic 401.
+			return "", errors.New("invalid credentials")
 		}
 		// A handful of device logins must not lock the owner out.
 		a.limiter.refund()
@@ -210,6 +209,7 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.ValidateRequest(r) {
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 			return

@@ -25,12 +25,14 @@
   // click that follows a long-press must be suppressed to avoid navigating.
   let lpTimer = null;
   let lpFired = false;
+  let lpTouch = false; // a touch press is down (what onContextMenu checks)
   let lpX = 0;
   let lpY = 0;
   const LP_DELAY = 500;
   const LP_TOLERANCE = 10; // px of finger drift that cancels the press
 
   function lpCancel() {
+    lpTouch = false;
     if (lpTimer !== null) {
       clearTimeout(lpTimer);
       lpTimer = null;
@@ -39,6 +41,7 @@
   function lpTouchStart(e) {
     lpCancel();
     lpFired = false;
+    lpTouch = true;
     const t = e.touches[0];
     lpX = t.clientX;
     lpY = t.clientY;
@@ -58,8 +61,11 @@
   }
   // Android Chrome long-press fires the native context menu on <a href>;
   // select-none/-webkit-touch-callout only cover text selection and iOS.
-  // Suppress it so the long-press reveal is the only affordance.
+  // Suppress it so the long-press reveal is the only affordance — but only
+  // for a touch: a mouse right-click must keep the browser's own menu (open
+  // in a new tab, copy link address).
   function onContextMenu(e) {
+    if (!lpTouch) return;
     e.preventDefault();
   }
   function onAnchorClick(e) {

@@ -421,7 +421,7 @@ func TestChatCompletionsIdleTimeout(t *testing.T) {
 	if !sawText {
 		t.Fatal("first chunk lost")
 	}
-	if sawErr == nil || !strings.Contains(sawErr.Error(), "without any data") {
+	if sawErr == nil || !strings.Contains(sawErr.Error(), "delivered no data") {
 		t.Fatalf("want idle-timeout error, got %v", sawErr)
 	}
 	if es.Err() == nil {

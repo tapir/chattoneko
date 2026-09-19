@@ -10,6 +10,6 @@ const app = mount(App, { target: document.querySelector('#app') });
 // assistant message needs it, so that message renders as formatted HTML
 // instead of briefly showing the plain-text fallback. Non-blocking: nothing
 // awaits this.
-loadMarkdown();
+loadMarkdown().catch(() => {});
 
 export default app;

@@ -75,6 +75,11 @@ export class AppStream {
     if (this.chatId) {
       params.chat = this.chatId;
       params.after = this.lastSeq;
+      // The server filters the replay by `after` before anything reaches us,
+      // so a hub recreated after pruning (seq restarted at 1) would have its
+      // whole buffer discarded against our stale baseline. Naming the epoch
+      // the baseline belongs to lets it drop the baseline instead.
+      if (this.epoch) params.epoch = this.epoch;
     }
     return streamUrl("/api/stream", params);
   }

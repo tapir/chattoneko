@@ -362,10 +362,20 @@ func TestTitleGenerationQueries(t *testing.T) {
 		return false
 	}
 
-	// A brand-new chat is a title-task candidate (title_generated defaults to 0).
+	// A chat with no user message is NOT a candidate: nothing could title it,
+	// and a batch slot spent on it is a slot every newer chat is denied.
 	chat := newChat(t, s)
+	if contains(titleless(), chat.ID) {
+		t.Fatal("messageless chat listed as needing a title")
+	}
+	// Its first user message makes it one.
+	if _, err := s.CreateMessage(ctx, NewMessageParams{
+		ChatID: chat.ID, Role: RoleUser, Status: StatusComplete, Content: "hi",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if !contains(titleless(), chat.ID) {
-		t.Fatal("new chat not listed as needing a title")
+		t.Fatal("chat with a user message not listed as needing a title")
 	}
 
 	// SetGeneratedTitle applies while the flag is 0, then never again.

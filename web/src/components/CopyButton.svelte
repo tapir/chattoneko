@@ -6,7 +6,7 @@
   import IconButton from './IconButton.svelte';
   import { copyText } from '../lib/clipboard.js';
 
-  let { text, label = 'Copy', size = 'md', class: cls = '' } = $props();
+  let { text, label = 'Copy', size = 'md' } = $props();
 
   let copied = $state(false);
   let failed = $state(false);
@@ -24,4 +24,4 @@
   }
 </script>
 
-<IconButton icon={copied ? Check : failed ? X : Copy} danger={failed} {label} onclick={copy} {size} class={cls} />
+<IconButton icon={copied ? Check : failed ? X : Copy} danger={failed} {label} onclick={copy} {size} />

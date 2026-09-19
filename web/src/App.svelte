@@ -244,8 +244,12 @@
   </div>
 {:else}
   <Tooltip.Provider delayDuration={400}>
+    <!-- inert while the settings overlay is up: it is a hand-rolled fixed
+         panel, not a <dialog>, so without this Tab walks out of it into the
+         sidebar and the composer underneath. -->
     <div
       class="flex h-app overflow-hidden bg-background text-foreground p-safe"
+      inert={app.settingsOpen || app.setupComplete === false}
       in:screenFade
       out:screenFade={{ hold: true }}
     >

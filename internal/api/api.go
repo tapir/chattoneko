@@ -108,8 +108,13 @@ func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	if p != "" {
 		if _, err := fs.Stat(h.fs, p); err != nil {
+			// Copy the URL too: r2 := *r shares the *url.URL, so rewriting the
+			// path in place would make the access log report "/" for every
+			// client-side route.
+			u := *r.URL
+			u.Path = "/"
 			r2 := *r
-			r2.URL.Path = "/"
+			r2.URL = &u
 			h.static.ServeHTTP(w, &r2)
 			return
 		}

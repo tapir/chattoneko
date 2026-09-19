@@ -32,9 +32,12 @@
   let attachBusy = $state(false);
 
   // New (not-yet-created) chat: focus the prompt on mount so the mobile
-  // soft keyboard pops up and desktop users can type right away.
+  // soft keyboard pops up and desktop users can type right away. The first
+  // send of a new chat remounts this component (ensureChat changes the route
+  // key), which throws away the focus send() just set and drops the keyboard
+  // — app.outgoing identifies that remount, so take the focus back.
   onMount(() => {
-    if (app.activeChatId == null) textArea?.focus();
+    if (app.activeChatId == null || app.outgoing) textArea?.focus();
   });
 
   // Model selection: for an existing chat this patches the chat's model; for a

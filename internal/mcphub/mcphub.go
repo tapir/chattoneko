@@ -41,7 +41,7 @@ type Entry struct {
 	Display        string          `json:"name"`            // LLM-facing name (unique); JSON key "name" per API contract
 	Description    string          `json:"description"`     // tool description
 	Server         string          `json:"server"`          // config server name
-	Schema         json.RawMessage `json:"schema"`          // JSON schema for arguments
+	Schema         json.RawMessage `json:"-"`               // JSON schema for arguments (in-process only: the engine sends it to the provider, no client reads it)
 	DefaultEnabled bool            `json:"default_enabled"` // config default toggle
 	// Title is the USER-facing label the UI shows instead of the raw name
 	// ("Speaking…" for speak). Empty means "no title" — the UI falls back

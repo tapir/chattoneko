@@ -770,10 +770,6 @@
             ></span>
           </div>
         {/if}
-
-        {#if imgLoaded && scale === minScale}
-          <!-- Gesture hint slot at fit zoom; renders nothing. -->
-        {/if}
       </div>
     {:else}
       <!-- The gutter click is a convenience dismissal only (✕ / Esc / Android

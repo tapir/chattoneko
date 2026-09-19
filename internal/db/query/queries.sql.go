@@ -327,6 +327,20 @@ func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, err
 	return i, err
 }
 
+const getAttachmentChatID = `-- name: GetAttachmentChatID :one
+SELECT chat_id FROM attachments WHERE id = ?
+`
+
+// Blob-free ownership check: a send validates up to maxUploadFiles ids and
+// reading each blob just to compare chat_id would pull every referenced file
+// into memory.
+func (q *Queries) GetAttachmentChatID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getAttachmentChatID, id)
+	var chat_id string
+	err := row.Scan(&chat_id)
+	return chat_id, err
+}
+
 const getChat = `-- name: GetChat :one
 SELECT id, title, title_generated, model, params_json, tools_json, created_at, updated_at, pinned FROM chats WHERE id = ?
 `
@@ -615,11 +629,17 @@ func (q *Queries) ListChatsBefore(ctx context.Context, arg ListChatsBeforeParams
 }
 
 const listChatsNeedingTitle = `-- name: ListChatsNeedingTitle :many
-SELECT id FROM chats WHERE title_generated = 0 ORDER BY created_at ASC LIMIT ?
+SELECT id FROM chats WHERE title_generated = 0
+  AND EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = chats.id AND m.role = 'user')
+ORDER BY created_at ASC LIMIT ?
 `
 
-// Background title task: chats whose title is not final yet. Manual renames
+// Background title task: see ListChatsNeedingTitle. Manual renames
 // flip the flag, and the task itself sets it when done.
+// Chats whose title is not final yet AND that already have a user message to
+// title. Without the EXISTS a chat created and never messaged holds a batch
+// slot on every sweep forever (nothing marks it final), and 16 of them would
+// starve every newer chat until a restart.
 func (q *Queries) ListChatsNeedingTitle(ctx context.Context, limit int64) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listChatsNeedingTitle, limit)
 	if err != nil {

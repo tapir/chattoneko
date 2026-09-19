@@ -40,10 +40,14 @@ UPDATE chats SET pinned = ? WHERE id = ?;
 -- name: UpdateChatTitle :exec
 UPDATE chats SET title = ?, title_generated = 1, updated_at = ? WHERE id = ?;
 
--- Background title task: chats whose title is not final yet. Manual renames
--- flip the flag, and the task itself sets it when done.
+-- Background title task candidates. Manual renames flip the flag, and the
+-- task itself sets it when done. The EXISTS matters: a chat created and never
+-- messaged is never marked final, so without it 16 such chats would hold every
+-- batch slot forever and starve all newer ones until a restart.
 -- name: ListChatsNeedingTitle :many
-SELECT id FROM chats WHERE title_generated = 0 ORDER BY created_at ASC LIMIT ?;
+SELECT id FROM chats WHERE title_generated = 0
+  AND EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = chats.id AND m.role = 'user')
+ORDER BY created_at ASC LIMIT ?;
 
 -- Conditional title write for the background task: the title_generated = 0
 -- guard makes a concurrent manual rename win (rows affected = 0 => skip the
@@ -189,6 +193,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetAttachment :one
 SELECT * FROM attachments WHERE id = ?;
+
+-- Blob-free ownership check: a send validates up to maxUploadFiles ids and
+-- reading each blob just to compare chat_id would pull every referenced file
+-- into memory.
+-- name: GetAttachmentChatID :one
+SELECT chat_id FROM attachments WHERE id = ?;
 
 -- name: ListAttachmentsByMessage :many
 SELECT a.* FROM attachments a

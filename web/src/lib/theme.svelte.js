@@ -46,7 +46,7 @@ function syncSystemBars(dark) {
   import('@capacitor/status-bar')
     .then(({ StatusBar, Style }) => {
       StatusBar.setStyle({ style: dark ? Style.Dark : Style.Light }).catch(() => {});
-      StatusBar.setBackgroundColor({ color: dark ? '#171717' : '#fafafa' }).catch(() => {});
+      StatusBar.setBackgroundColor({ color: dark ? '#141414' : '#fcfcfc' }).catch(() => {});
     })
     .catch(() => {});
 }

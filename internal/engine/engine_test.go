@@ -124,7 +124,7 @@ func TestBasicGenerationPersistsAndStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ch, unsub := eng.Subscribe(chatID, 0)
+	ch, unsub := eng.Subscribe(chatID, 0, "")
 	defer unsub()
 
 	am, err := eng.startGeneration(context.Background(), chatID)
@@ -548,7 +548,7 @@ func TestReasoningIsSplitPerTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ch, unsub := eng.Subscribe(chatID, 0)
+	ch, unsub := eng.Subscribe(chatID, 0, "")
 	defer unsub()
 
 	am, err := eng.startGeneration(context.Background(), chatID)
@@ -716,7 +716,7 @@ func TestToolCallDeltasStreamToSubscribers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ch, unsub := eng.Subscribe(chatID, 0)
+	ch, unsub := eng.Subscribe(chatID, 0, "")
 	defer unsub()
 
 	if _, err := eng.startGeneration(context.Background(), chatID); err != nil {
@@ -859,7 +859,7 @@ func TestSubscribeReplayBuffer(t *testing.T) {
 	waitFor(t, "completion", 5*time.Second, func() bool {
 		return !eng.HasActiveGeneration(chatID)
 	})
-	ch, unsub := eng.Subscribe(chatID, 0)
+	ch, unsub := eng.Subscribe(chatID, 0, "")
 	defer unsub()
 	var deltas int
 	sawDone := false
@@ -1022,7 +1022,7 @@ func TestHubEpochChangesAcrossRecreation(t *testing.T) {
 	eng, st, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
 	chatID := newTestChat(t, st)
 
-	ch, unsub := eng.Subscribe(chatID, 0)
+	ch, unsub := eng.Subscribe(chatID, 0, "")
 	ev := <-ch // idle: no generation on this chat
 	if ev.Type != "idle" || ev.Epoch == "" {
 		t.Fatalf("want idle with epoch, got %+v", ev)
@@ -1030,7 +1030,7 @@ func TestHubEpochChangesAcrossRecreation(t *testing.T) {
 	first := ev.Epoch
 	unsub() // last subscriber gone + no generation -> hub pruned
 
-	ch2, unsub2 := eng.Subscribe(chatID, 0)
+	ch2, unsub2 := eng.Subscribe(chatID, 0, "")
 	defer unsub2()
 	ev2 := <-ch2
 	if ev2.Type != "idle" {
@@ -1067,7 +1067,7 @@ func TestToolCreatedAttachment(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ch, unsub := eng.Subscribe(chatID, -1)
+	ch, unsub := eng.Subscribe(chatID, -1, "")
 	defer unsub()
 
 	am, err := eng.startGeneration(context.Background(), chatID)

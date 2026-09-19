@@ -220,11 +220,14 @@ type cappedBuffer struct {
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
+	// len(p) BEFORE truncating: reporting fewer bytes than handed over makes
+	// os/exec's io.Copy fail with ErrShortWrite and a clean jq run an error.
+	n := len(p)
 	if room := c.limit - c.buf.Len(); room > 0 {
 		if len(p) > room {
 			p = p[:room]
 		}
 		c.buf.Write(p)
 	}
-	return len(p), nil
+	return n, nil
 }

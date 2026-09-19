@@ -182,11 +182,19 @@ func TestSkipsChatsWithoutMessages(t *testing.T) {
 	svc := newService(st, gen)
 	svc.sweep(context.Background())
 
-	if !needsTitle(t, st, chat.ID) {
-		t.Fatal("empty chat must stay a candidate until its first message")
+	if needsTitle(t, st, chat.ID) {
+		t.Fatal("empty chat must not hold a candidate slot")
 	}
 	if gen.textCalls != 0 {
 		t.Fatal("generator called for a chat with no messages")
+	}
+
+	// The first user message makes it a candidate again, and the next sweep
+	// titles it — skipping the empty chat must not skip it forever.
+	addUserMessage(t, st, chat.ID, "what is this")
+	svc.sweep(context.Background())
+	if got := chatTitle(t, st, chat.ID); got != "X" {
+		t.Fatalf("title after first message = %q", got)
 	}
 }
 

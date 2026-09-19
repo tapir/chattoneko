@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { on } from 'svelte/events';
   import { app } from '../lib/state.svelte.js';
 import logoUrl from '$lib/logo.svg';
   import { api } from '../lib/api.js';
@@ -99,6 +100,14 @@ import logoUrl from '$lib/logo.svg';
     }
     pull = 0;
   }
+
+  // Svelte registers ontouchmove passively, so the preventDefault above would
+  // be a no-op and the browser would keep owning the gesture (rubber-banding
+  // the list, and chaining to its own pull-to-refresh at scrollTop 0).
+  $effect(() => {
+    if (!listEl) return;
+    return on(listEl, 'touchmove', ptrMove, { passive: false });
+  });
 
   // ---- footer: build version ----
   // Native reads the APK's own versionName through Capacitor's App plugin
@@ -216,7 +225,6 @@ import logoUrl from '$lib/logo.svg';
   <nav
     bind:this={listEl}
     ontouchstart={ptrStart}
-    ontouchmove={ptrMove}
     ontouchend={ptrEnd}
     ontouchcancel={ptrEnd}
     class="min-h-0 flex-1 overflow-y-auto px-2 pb-2 [contain:inline-size]"

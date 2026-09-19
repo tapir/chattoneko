@@ -24,12 +24,19 @@ const listeners = new Set();
 // one promise and one network request.
 export function loadMarkdown() {
   if (impl) return Promise.resolve(impl);
-  pending ??= import("./markdown.impl.js").then((m) => {
-    impl = m;
-    for (const fn of listeners) fn();
-    listeners.clear();
-    return m;
-  });
+  pending ??= import("./markdown.impl.js")
+    .then((m) => {
+      impl = m;
+      for (const fn of listeners) fn();
+      listeners.clear();
+      return m;
+    })
+    .catch((e) => {
+      // A failed chunk fetch must not pin the plain-text fallback for the rest
+      // of the session — drop it so the next caller retries.
+      pending = null;
+      throw e;
+    });
   return pending;
 }
 
@@ -55,7 +62,7 @@ export function onMarkdownReady(fn) {
 // mdReady and picks it up then.
 export function createRenderer(el) {
   if (!impl) {
-    loadMarkdown();
+    loadMarkdown().catch(() => {});
     return null;
   }
   return impl.createRenderer(el);

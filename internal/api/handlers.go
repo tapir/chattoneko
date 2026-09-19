@@ -60,15 +60,11 @@ func (s *Server) chatExists(w http.ResponseWriter, ctx context.Context, id strin
 }
 
 // startClaimedGeneration consumes the generation claim held by the caller:
-// it starts the generation and answers 409/500 on failure. On success it
-// bumps the chat timestamp and returns the new assistant message.
+// it starts the generation and answers 500 on failure. On success it bumps
+// the chat timestamp and returns the new assistant message.
 func (s *Server) startClaimedGeneration(w http.ResponseWriter, r *http.Request, chatID string) (*store.Message, bool) {
 	am, err := s.engine.StartClaimedGeneration(r.Context(), chatID)
 	if err != nil {
-		if errors.Is(err, engine.ErrGenerationActive) {
-			writeError(w, http.StatusConflict, err.Error())
-			return nil, false
-		}
 		internalError(w, "start generation", err)
 		return nil, false
 	}
@@ -637,7 +633,10 @@ func (s *Server) handlePatchChat(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.engine.CancelForChatDeletion(id)
-	if err := s.store.DeleteChat(r.Context(), id); err != nil {
+	// Detached: CancelForChatDeletion already told the turn loop to skip its
+	// finalize, so a client disconnect landing on this delete would leave the
+	// chat alive with an assistant row stuck in `generating` and no hub.
+	if err := s.store.DeleteChat(context.WithoutCancel(r.Context()), id); err != nil {
 		internalError(w, "delete chat", err)
 		return
 	}
@@ -687,8 +686,8 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// link query silently affects zero rows for foreign ids, which would
 	// drop attachments from the message without any error.
 	for _, aid := range body.AttachmentIDs {
-		att, err := s.store.GetAttachment(ctx, aid)
-		if errors.Is(err, store.ErrNotFound) || (err == nil && att.ChatID != id) {
+		owner, err := s.store.AttachmentChatID(ctx, aid)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && owner != id) {
 			release()
 			writeError(w, http.StatusBadRequest, "attachment not found in this chat")
 			return
@@ -749,6 +748,20 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	mid := r.PathValue("mid")
+	var body struct {
+		Content string `json:"content"`
+		// AttachmentIDs, when present, is the full keep-list for the
+		// message: attachments linked to it but absent from the list are
+		// deleted. Nil (omitted) means "leave attachments untouched".
+		AttachmentIDs *[]string `json:"attachment_ids"`
+	}
+	// Decode before claiming: CancelAndClaim stops the running generation, so
+	// a request that is going to be rejected for a malformed body must not
+	// destroy the answer the user is watching.
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeBodyError(w, err)
+		return
+	}
 	// Claim BEFORE reading: the edit truncates everything after the message
 	// and re-generates, so reading first would race a concurrently finishing
 	// edit/regenerate (the message may already be deleted — the content
@@ -787,18 +800,6 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 	if msg.Role != store.RoleUser {
 		release()
 		writeError(w, http.StatusBadRequest, "only user messages can be edited")
-		return
-	}
-	var body struct {
-		Content string `json:"content"`
-		// AttachmentIDs, when present, is the full keep-list for the
-		// message: attachments linked to it but absent from the list are
-		// deleted. Nil (omitted) means "leave attachments untouched".
-		AttachmentIDs *[]string `json:"attachment_ids"`
-	}
-	if err := decodeJSON(w, r, &body); err != nil {
-		release()
-		writeBodyError(w, err)
 		return
 	}
 	current, err := s.store.ListAttachmentsByMessage(ctx, mid)
@@ -953,7 +954,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	var cch <-chan engine.WireEvent
 	if id := q.Get("chat"); id != "" {
 		var cunsub func()
-		cch, cunsub = s.engine.Subscribe(id, after)
+		cch, cunsub = s.engine.Subscribe(id, after, q.Get("epoch"))
 		defer cunsub()
 	}
 
@@ -1041,10 +1042,14 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// rollback deletes the attachments stored so far when a later file
 	// fails: orphans are only swept at startup, so a rejected file must not
 	// leave its predecessors behind in the database. They are unlinked, so
-	// DeleteAttachment with an empty message id hits.
+	// DeleteAttachment with an empty message id hits. Detached from the
+	// request: the usual trigger is a client disconnect, whose canceled
+	// context would make every delete fail and strand exactly the rows this
+	// exists to clean up.
+	rollbackCtx := context.WithoutCancel(r.Context())
 	rollback := func() {
 		for _, m := range out {
-			if err := s.store.DeleteAttachment(r.Context(), m.ID, ""); err != nil {
+			if err := s.store.DeleteAttachment(rollbackCtx, m.ID, ""); err != nil {
 				slog.Warn("rollback attachment", "id", m.ID, "error", err)
 			}
 		}

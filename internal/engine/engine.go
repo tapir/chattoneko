@@ -231,12 +231,15 @@ func (e *Engine) PublishConfigChanged() {
 // generation, so a (re)connecting client reconciles without polling.
 func (e *Engine) SubscribeGlobal() (<-chan WireEvent, func()) {
 	ch := make(chan WireEvent, 64)
+	// Snapshot before registering: deliverGlobal closes a subscriber channel
+	// whose buffer filled, so a send afterwards could panic, and a lifecycle
+	// event landing first would be contradicted by the snapshot that follows.
+	ch <- WireEvent{Type: "generating_snapshot", ChatIDs: e.activeGenerationChatIDs()}
 	e.gmu.Lock()
 	id := e.nextG
 	e.nextG++
 	e.gsubs[id] = ch
 	e.gmu.Unlock()
-	ch <- WireEvent{Type: "generating_snapshot", ChatIDs: e.activeGenerationChatIDs()}
 	unsub := func() {
 		e.gmu.Lock()
 		delete(e.gsubs, id)
@@ -248,12 +251,19 @@ func (e *Engine) SubscribeGlobal() (<-chan WireEvent, func()) {
 // Subscribe returns the event channel for a chat and an unsubscribe func.
 // Replay is lossless: the subscriber channel is sized to the replay buffer
 // plus headroom, so every buffered event with seq > after is delivered.
-// When no generation exists (and no grace-period buffer remains), an "idle"
-// event is emitted immediately.
-func (e *Engine) Subscribe(chatID string, after int64) (<-chan WireEvent, func()) {
+// epoch is the hub incarnation the caller's `after` baseline belongs to (""
+// when it has none); a mismatch means the hub was pruned and recreated, so seq
+// restarted and the baseline is ignored rather than filtering the whole replay
+// away. When no generation exists (and no grace-period buffer remains), an
+// "idle" event is emitted immediately.
+func (e *Engine) Subscribe(chatID string, after int64, epoch string) (<-chan WireEvent, func()) {
 	h := e.hubFor(chatID)
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	if epoch != "" && epoch != h.epoch {
+		after = -1
+	}
 
 	var replay []WireEvent
 	if h.gen != nil {

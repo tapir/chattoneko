@@ -18,11 +18,10 @@
   import { attachMenu } from '../lib/attachmenu.svelte.js';
   import { longPress } from '../lib/longpress.js';
   import { formatClock } from '../lib/format.js';
-  import { cn } from '../lib/utils.js';
+  import { onDestroy } from 'svelte';
 
   let {
     att, // AttachmentMeta ({id, filename, mime, …}) of a stored audio file
-    class: cls = '',
   } = $props();
 
   let el = $state(null);
@@ -59,17 +58,25 @@
   function commit(v) {
     if (el) el.currentTime = v;
   }
+
+  // The row can unmount mid-playback (chat switch, logout) with the detached
+  // <audio> still going and the module ref pinning it, so nothing on screen
+  // could stop it. `mine` rather than `el`: bind:this is already cleared by
+  // the time onDestroy runs.
+  let mine = null;
+  onDestroy(() => {
+    if (!mine) return;
+    mine.pause();
+    if (current === mine) current = null;
+  });
 </script>
 
-<!-- The row is the long-press target, exactly like a picture or a file chip. -->
+<!-- The row is the long-press target, exactly like a picture or a file chip.
+     The fill is a translucent black veil, not a surface token: every token
+     surface is BRIGHTER than the page in dark mode, so black alpha is the only
+     fill that reads "a tad darker" in both themes, over the bubble and the page. -->
 <div
-  class={cn(
-    // A translucent black veil, not a surface token: every token surface is
-    // BRIGHTER than the page in dark mode, so black alpha is the only fill
-    // that reads "a tad darker" in both themes, over the bubble and the page.
-    'flex w-64 max-w-full items-center gap-2 rounded-lg border bg-black/10 px-2 py-1.5 select-none [-webkit-touch-callout:none] sm:w-80',
-    cls,
-  )}
+  class="flex w-64 max-w-full items-center gap-2 rounded-lg border bg-black/10 px-2 py-1.5 select-none [-webkit-touch-callout:none] sm:w-80"
   {...longPress(() => attachMenu.open(att))}
 >
   <Button
@@ -107,6 +114,7 @@
   onplay={() => {
     playing = true;
     current = el;
+    mine = el;
   }}
   onpause={() => {
     playing = false;

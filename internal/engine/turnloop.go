@@ -121,7 +121,6 @@ func (e *Engine) runGeneration(ag *activeGen) {
 		ag.mu.Lock()
 		deleted := ag.deleted
 		text, reasoning := ag.text, slices.Clone(ag.reasoning)
-		ag.done = true
 		ag.mu.Unlock()
 
 		if status == store.StatusFailed {
@@ -153,6 +152,14 @@ func (e *Engine) runGeneration(ag *activeGen) {
 			}
 			_ = e.store.TouchChat(persistCtx, ag.chatID)
 		}
+
+		// Only now is the generation over: marking it done earlier opens the
+		// claim slot while the synthetic tool results are still being inserted,
+		// and the next generation's ListMessages would feed the provider an
+		// assistant message with unanswered tool calls (a 400 on every retry).
+		ag.mu.Lock()
+		ag.done = true
+		ag.mu.Unlock()
 
 		// Include usage in done so the client can render per-message stats and
 		// the top-bar totals without a refetch. done is replayed, so it can't be

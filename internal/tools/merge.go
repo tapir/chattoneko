@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"chattoneko/internal/config"
 	"chattoneko/internal/mcphub"
@@ -34,6 +35,10 @@ type source interface {
 type Merged struct {
 	cfg     *config.Store
 	sources []source
+	// Display names already warned about. dedup runs several times per
+	// generation turn and a collision is permanent, so without this the same
+	// warning would repeat for the life of the process.
+	collided sync.Map
 }
 
 // Merge combines tool sources into one live catalog with the configured
@@ -44,7 +49,8 @@ func Merge(cfg *config.Store, sources ...source) *Merged {
 
 // dedup merges the sources' tool lists, first source wins on display-name
 // collisions (the later entry is dropped, keeping Tools and Call consistent),
-// and applies the configured per-tool defaults and titles.
+// and applies the configured per-tool defaults and titles. A collision is
+// warned about once per name, not once per read.
 func (m *Merged) dedup() []mcphub.Entry {
 	var over map[string]bool
 	var titles map[string]string
@@ -58,8 +64,10 @@ func (m *Merged) dedup() []mcphub.Entry {
 	for _, src := range m.sources {
 		for _, e := range src.Tools() {
 			if owners[e.Display] {
-				slog.Warn("tool name collision; dropping later entry",
-					"name", e.Display, "server", e.Server)
+				if _, warned := m.collided.LoadOrStore(e.Display, true); !warned {
+					slog.Warn("tool name collision; dropping later entry",
+						"name", e.Display, "server", e.Server)
+				}
 				continue
 			}
 			owners[e.Display] = true

@@ -167,6 +167,24 @@ func TestJQStderrIsCapped(t *testing.T) {
 	}
 }
 
+// A successful run whose stderr crosses the cap must still succeed: Write has
+// to report the full slice length, or os/exec's io.Copy fails with
+// ErrShortWrite and turns the good stdout into an error.
+func TestJQStderrOverCapKeepsSuccess(t *testing.T) {
+	requireJQ(t)
+	// range(5000)|debug writes ~79 KB to stderr (over the 16 KiB cap) and exits 0.
+	out, isErr, err := callJQ(t, `{"filter":"range(5000)|debug"}`)
+	if err != nil {
+		t.Fatalf("host error: %v", err)
+	}
+	if isErr {
+		t.Fatalf("clean run reported as an error: %q", out[:min(200, len(out))])
+	}
+	if !strings.HasPrefix(out, "0\n1\n") {
+		t.Fatalf("stdout lost: %q", out[:min(80, len(out))])
+	}
+}
+
 func TestJQCancelledContextAborts(t *testing.T) {
 	requireJQ(t)
 	ctx, cancel := context.WithCancel(context.Background())

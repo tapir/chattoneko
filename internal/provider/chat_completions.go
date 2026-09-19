@@ -259,7 +259,7 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 			if idleTimedOut.Load() {
 				// The cancel came from the watchdog, not a user stop: report the
 				// idle cause instead of a bare context error.
-				err = fmt.Errorf("provider stream went %v without any data", c.idleTimeout)
+				err = fmt.Errorf("provider stream delivered no data for %v", c.idleTimeout)
 			}
 			es.Publish(StreamEvent{Kind: EventError, Err: err})
 			es.Finish(err)
@@ -274,10 +274,11 @@ func (c *chatCompletionsProvider) StreamChat(ctx context.Context, msgs []Message
 			for _, i := range idxs {
 				acc := toolAcc[i]
 				// A call without an id can never be answered (tool messages
-				// reference calls by tool_call_id) and would poison every request
-				// replaying that history, so drop it loudly.
-				if acc.id == "" {
-					slog.Warn("provider: dropping tool call without id", "index", i, "name", acc.name)
+				// reference calls by tool_call_id) and one without a name can
+				// never be routed — either would poison every request replaying
+				// that history, so drop them loudly.
+				if acc.id == "" || acc.name == "" {
+					slog.Warn("provider: dropping incomplete tool call", "index", i, "id", acc.id, "name", acc.name)
 					continue
 				}
 				if !es.Publish(StreamEvent{Kind: EventToolCallDone, CallID: acc.id, Name: acc.name, Args: acc.args.String()}) {

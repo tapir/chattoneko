@@ -4,7 +4,7 @@
   // CONTAINER queries, not viewport breakpoints, because the chat column width
   // is user-resizable (sidebar drag handle) and collapses on mobile.
   //
-  // Beyond `cap` images the last cell darkens into a "+N" tile, keeping a
+  // Beyond CAP images the last cell darkens into a "+N" tile, keeping a
   // message scannable when a tool gathers a dozen pictures; tapping the tile
   // opens the lightbox AT that image, where the rest are one swipe / arrow-key
   // away (viewer.open(att, items) hands the whole set over).
@@ -19,10 +19,11 @@
   // native long-press affordances off the cell; message text keeps them.
   const PRESS = 'select-none [-webkit-touch-callout:none]';
   const press = (att) => longPress(() => attachMenu.open(att));
+  // 6 fills whole rows (3x2 or 2x3) before the "+N" tile takes over.
+  const CAP = 6;
 
   let {
     items, // image attachments ({id, filename, kind, ...}); see AttachmentImage for local previews
-    cap = 6,
     singleClass = 'max-h-60', // max-height for the lone-image case
     // Explicit width for the grid when the parent is shrink-to-fit (the
     // right-aligned user bubble): a fr-track grid inside a fit-content
@@ -32,7 +33,7 @@
   } = $props();
 
   let count = $derived(items?.length ?? 0);
-  let visible = $derived(items?.slice(0, cap) ?? []);
+  let visible = $derived(items?.slice(0, CAP) ?? []);
   let hidden = $derived(count - visible.length);
 
   // Exactly 2 or 3 images get one cell each, so a phone never ends up with

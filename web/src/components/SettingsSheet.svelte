@@ -953,14 +953,26 @@
       </div>
 
       <!-- Footer -->
-      <div class="flex items-center justify-end gap-2 border-t px-4 py-4 sm:px-6">
-        {#if canClose}
-          <Button variant="outline" onclick={attemptClose} disabled={saving}>Cancel</Button>
-        {/if}
-        <Button onclick={save} disabled={saving || loading || !dirty}>
-          {#if saving}<Spinner class="size-4" light label="Saving" />{/if}
-          Save changes
-        </Button>
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-t px-4 py-4 sm:px-6">
+        <!-- Furniture, not content: 11px, muted, no icons. -->
+        <p class="text-[11px] leading-snug text-muted-foreground">
+          All meow art by
+          <a
+            href="https://magnific.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="underline decoration-dotted underline-offset-2 hover:text-foreground"
+          >magnific.com</a>
+        </p>
+        <div class="ml-auto flex shrink-0 items-center gap-2">
+          {#if canClose}
+            <Button variant="outline" onclick={attemptClose} disabled={saving}>Cancel</Button>
+          {/if}
+          <Button onclick={save} disabled={saving || loading || !dirty}>
+            {#if saving}<Spinner class="size-4" light label="Saving" />{/if}
+            Save changes
+          </Button>
+        </div>
       </div>
     </div>
   </div>

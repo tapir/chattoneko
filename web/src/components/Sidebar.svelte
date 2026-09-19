@@ -100,7 +100,7 @@ import logoUrl from '$lib/logo.svg';
     pull = 0;
   }
 
-  // ---- footer: build version + cat-art attribution ----
+  // ---- footer: build version ----
   // Native reads the APK's own versionName through Capacitor's App plugin
   // (dynamic import, so the web bundle never pulls it in) and shows ONLY that —
   // falling back to the server's would flash the wrong number for the tick
@@ -282,18 +282,9 @@ import logoUrl from '$lib/logo.svg';
   {/if}
 
   <!-- Furniture, not content: 11px, muted, no icons. -->
-  <footer class="shrink-0 space-y-0.5 border-t border-sidebar-border px-4 py-2 text-[11px] leading-snug text-muted-foreground">
-    {#if version}
+  {#if version}
+    <footer class="shrink-0 border-t border-sidebar-border px-4 py-2 text-[11px] leading-snug text-muted-foreground">
       <p>Version: {version}</p>
-    {/if}
-    <p>
-      All meow art by
-      <a
-        href="https://magnific.com"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="underline decoration-dotted underline-offset-2 hover:text-sidebar-foreground"
-      >magnific.com</a>
-    </p>
-  </footer>
+    </footer>
+  {/if}
 </aside>

@@ -53,7 +53,7 @@ lib/
   viewer.svelte.js          singleton state for the attachment lightbox (open/close/step)
   speech.svelte.js          read-aloud playback singleton (one message at a time, blob revoked after)
   format.js, clipboard.js, resize.js, utils.js (cn), turns.js (per-turn thinking timeline)
-  logo.svg                  sidebar + login-screen mark (also the favicon via index.html)
+  logo.svg                  sidebar + login-screen mark (also the tab favicon via index.html; bookmark/history surfaces use the raster web/public/favicon.ico instead)
   neko*.png                 cat art, one picked at random for the empty-chat screen
 components/
   ChatView.svelte           header + message list + composer column

@@ -98,6 +98,29 @@ func TestImageToPNG(t *testing.T) {
 	}
 }
 
+// The cap is on the long side, which for a portrait picture is its height:
+// clamping the width alone left tall pictures uncapped.
+func TestScaleCapsLongSide(t *testing.T) {
+	requireFFmpeg(t)
+	for _, tc := range []struct{ w, h, maxW, maxH int }{
+		{40, 2000, 1080, 1080},
+		{20, 30, 20, 30}, // a small portrait is never upscaled
+	} {
+		out, err := toPNG(context.Background(), ".png", makePNG(t, tc.w, tc.h), false)
+		if err != nil {
+			t.Fatalf("toPNG(%dx%d): %v", tc.w, tc.h, err)
+		}
+		cfg, err := png.DecodeConfig(bytes.NewReader(out))
+		if err != nil {
+			t.Fatalf("output is not a PNG: %v", err)
+		}
+		if cfg.Width > tc.maxW || cfg.Height > tc.maxH {
+			t.Errorf("a %dx%d picture came out %dx%d, want at most %dx%d",
+				tc.w, tc.h, cfg.Width, cfg.Height, tc.maxW, tc.maxH)
+		}
+	}
+}
+
 // The extension, not the bytes, is what reaches a TGA: ffmpeg has no parser for
 // it at all.
 func TestTGAByExtension(t *testing.T) {

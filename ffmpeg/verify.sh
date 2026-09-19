@@ -10,6 +10,11 @@ fail=0
 
 sys() { ffmpeg -hide_banner -v error -y "$@" </dev/null; }
 
+# cli.md's quantized invocation verbatim, so this checks the graph the server
+# runs and not a hand-rolled palette.
+SCALE="scale=w='min(iw,if(gte(iw,ih),1920,1080))':h='min(ih,if(gte(iw,ih),1920,1080))':force_original_aspect_ratio=decrease"
+QUANT="[0:V]$SCALE,trim=end_frame=1,palettegen[p];[0:V]$SCALE[t];[t][p]paletteuse"
+
 # ------------------------------------------------- every requested component present
 expect() { # <type> <names...>
   local type=$1; shift
@@ -80,11 +85,15 @@ echo "== other paths =="
 enc() { local label=$1; shift
   if "$FF" -nostdin -v error -y "$@" 2>"$T/e"; then printf '  %-16s ok\n' "$label"
   else printf '  %-16s FAIL %s\n' "$label" "$(head -1 "$T/e")"; fail=1; fi; }
-enc palettegen     -i "$T/img.png" -vf palettegen "$T/pal.png"
-enc "png quantized" -i "$T/img.png" -i "$T/pal.png" -lavfi paletteuse "$T/oq.png"
+enc "png quantized" -i "$T/img.png" -lavfi "$QUANT" -frames:v 1 "$T/oq.png"
 enc print_graphs   -i "$T/img.jpg" -print_graphs_file "$T/g.json" -print_graphs_format json "$T/o3.png"   # aborts in unpatched --enable-small builds
 enc "png from pipe" -i pipe:0 -f image2 -c:v png "$T/o4.png" <"$T/img.jpg"   # needs the image parsers
 sys -i "$T/oq.png" -f null - || { echo "  quantized png unreadable"; fail=1; }
+# IHDR colour type 3 is indexed: a truecolour PNG here means the graph stopped
+# quantizing.
+ct=$(od -An -j25 -N1 -tu1 "$T/oq.png" 2>/dev/null | tr -d ' ')
+[ "$ct" = 3 ] && printf '  %-16s ok\n' "quantized indexed" \
+  || { printf '  %-16s NOT INDEXED (IHDR colour type %s)\n' "quantized indexed" "$ct"; fail=1; }
 
 echo
 echo "== everything this build has =="

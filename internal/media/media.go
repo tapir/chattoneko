@@ -59,8 +59,9 @@ func Sweep() error {
 var (
 	common = []string{"-nostdin", "-v", "error", "-y", "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1"}
 	// Caps the long side at 1920, or 1080 for a portrait picture, and never
-	// upscales.
-	scale = "scale=w='min(iw,if(gte(iw,ih),1920,1080))':h=-1"
+	// upscales — hence clamping both dimensions, not just the width.
+	scale = "scale=w='min(iw,if(gte(iw,ih),1920,1080))'" +
+		":h='min(ih,if(gte(iw,ih),1920,1080))':force_original_aspect_ratio=decrease"
 	// Bounds the decode side of a picture whose header claims absurd dimensions.
 	maxPixels = []string{"-max_pixels", "33177600"}
 )

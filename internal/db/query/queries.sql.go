@@ -634,12 +634,10 @@ SELECT id FROM chats WHERE title_generated = 0
 ORDER BY created_at ASC LIMIT ?
 `
 
-// Background title task: see ListChatsNeedingTitle. Manual renames
-// flip the flag, and the task itself sets it when done.
-// Chats whose title is not final yet AND that already have a user message to
-// title. Without the EXISTS a chat created and never messaged holds a batch
-// slot on every sweep forever (nothing marks it final), and 16 of them would
-// starve every newer chat until a restart.
+// Background title task candidates. Manual renames flip the flag, and the
+// task itself sets it when done. The EXISTS matters: a chat created and never
+// messaged is never marked final, so without it 16 such chats would hold every
+// batch slot forever and starve all newer ones until a restart.
 func (q *Queries) ListChatsNeedingTitle(ctx context.Context, limit int64) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listChatsNeedingTitle, limit)
 	if err != nil {

@@ -1,0 +1,328 @@
+<script>
+  import { onMount } from 'svelte';
+  import { initTheme } from './lib/theme.svelte.js';
+  import { initViewport } from './lib/viewport.js';
+  import { app } from './lib/state.svelte.js';
+  import { isNative } from './lib/server.js';
+  import { registerOverlay, closeTopOverlay } from './lib/overlays.svelte.js';
+  import { Button } from '$lib/components/ui/button';
+  import * as Sheet from '$lib/components/ui/sheet';
+  import * as Tooltip from '$lib/components/ui/tooltip';
+  import { Toaster } from '$lib/components/ui/sonner';
+  import Sidebar from './components/Sidebar.svelte';
+  import ChatView from './components/ChatView.svelte';
+  import LoginScreen from './components/LoginScreen.svelte';
+  import SettingsSheet from './components/SettingsSheet.svelte';
+  import AttachmentViewer from './components/AttachmentViewer.svelte';
+  import AttachmentMenu from './components/AttachmentMenu.svelte';
+  import { viewer } from './lib/viewer.svelte.js';
+  import { lsGet, lsSet } from './lib/persist.js';
+  import Spinner from './components/Spinner.svelte';
+  import ResizeHandle from './components/ResizeHandle.svelte';
+  import { cubicOut } from 'svelte/easing';
+
+  let route = $state(parseHash());
+  let sidebarOpen = $state(false);
+  // Desktop sidebar collapse (persisted). The header toggle collapses the
+  // inline sidebar on lg+ screens and opens the mobile Sheet below lg.
+  const SIDEBAR_KEY = 'chattoneko-sidebar-collapsed';
+  let desktopSidebarCollapsed = $state(lsGet(SIDEBAR_KEY) === '1');
+
+  function toggleDesktopSidebar() {
+    desktopSidebarCollapsed = !desktopSidebarCollapsed;
+    lsSet(SIDEBAR_KEY, desktopSidebarCollapsed ? '1' : '0');
+  }
+
+  // User-resizable desktop sidebar width (persisted by ResizeHandle).
+  let sidebarWidth = $state(288);
+
+  // The mobile sidebar sheet is an overlay like any other: register it so
+  // the Android back button closes it (topmost-first).
+  $effect(() => {
+    if (sidebarOpen) return registerOverlay(() => (sidebarOpen = false));
+  });
+
+  // Desktop inline-sidebar slide-in/out. Svelte's built-in `slide` can't be
+  // used: the wrapper enforces min-w-max (the drag floor), which would clamp
+  // the width and kill the animation. This variant overrides min-width for
+  // the duration of the transition and animates width only (no height
+  // collapse on a full-height panel).
+  function widthSlide(node, { duration = 200 } = {}) {
+    const w = node.getBoundingClientRect().width;
+    return {
+      duration,
+      easing: cubicOut,
+      // min-width/overflow travel inside the keyframes so they only apply
+      // while animating; afterwards the class min-w-max (the drag floor)
+      // governs again.
+      css: (t) =>
+        `width: ${(w * t).toFixed(1)}px; opacity: ${t}; min-width: 0; overflow: hidden`,
+    };
+  }
+
+  // Fullscreen gate swaps (login / change-server, server-down, app). Both
+  // helpers pin the OUTGOING screen out of flow (and click-through) for the
+  // length of the move: left in flow it would push the incoming one below the
+  // fold. Declared as separate in:/out: directives because Svelte caches one
+  // `transition:` config for both directions, which would leave us unable to
+  // tell them apart here.
+  // ponytail: the spinner branch gets no transition — its .loading-delay
+  // animation keeps it invisible for 0.5s, and an outro would force it to
+  // opacity 1 and flash it on fast boots.
+  const SCREEN_MS = 200; // one timing for every gate swap
+
+  function pinOut(node, direction) {
+    if (direction === 'out')
+      Object.assign(node.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+  }
+
+  // The gates travel the way every other fullscreen overlay here does (Tools,
+  // Settings, the bottom drawers): up from the bottom, back down on the way
+  // out. u is 1 - t, so the one expression covers both directions.
+  function screenRise(node, { duration = SCREEN_MS } = {}, { direction } = {}) {
+    pinOut(node, direction);
+    return {
+      duration,
+      easing: cubicOut,
+      css: (t, u) => `opacity: ${t}; transform: translateY(${u * 100}%)`,
+    };
+  }
+
+  // The app is the layer UNDERNEATH: it fades in on boot, then holds still
+  // (`hold`) while a gate travels over it, so the swap reads as one page over
+  // another instead of crossfading down to the bare background.
+  function screenFade(node, { duration = SCREEN_MS, hold = false } = {}, { direction } = {}) {
+    pinOut(node, direction);
+    return { duration, easing: cubicOut, css: (t) => (hold ? 'opacity: 1' : `opacity: ${t}`) };
+  }
+
+  function parseHash() {
+    const h = location.hash || '#/';
+    const m = h.match(/^#\/c\/([^/]+)/);
+    return m ? { name: 'chat', id: m[1] } : { name: 'home' };
+  }
+
+  // True after the first route application (fresh page load / first login).
+  let initialRouteApplied = false;
+
+  // Per-tab "did this tab already load the app" flag. sessionStorage is
+  // scoped to a top-level tab and survives reloads and browser tab/session
+  // restore, but is empty in a brand-new tab. That lets us tell an
+  // explicit deep link (pasted/shared into a fresh tab) apart from a
+  // browser-restored hash: only the latter should land on the new-chat
+  // screen, while a real #/c/<id> link must open its chat.
+  let restoredTab = false;
+  const BOOT_KEY = 'chattoneko-booted';
+  try {
+    restoredTab = sessionStorage.getItem(BOOT_KEY) === '1';
+    sessionStorage.setItem(BOOT_KEY, '1');
+  } catch {
+    /* storage unavailable (private mode) -> treat as a fresh deep link */
+  }
+
+  function applyRoute(opts = {}) {
+    // Parse into a LOCAL first: reading `route` (a $state) inside the
+    // auth-gated $effect below while also writing it loops forever
+    // (effect_update_depth_exceeded).
+    let r = parseHash();
+    // Fresh page load or first login: if this tab already ran the app
+    // (reload / browser session restore), the restored hash points at the
+    // last visited chat (#/c/…) and we land on the new-chat screen —
+    // never auto-restore the most recent chat. A brand-new tab means the
+    // hash came from an explicit deep link, so honour it.
+    if (opts.initial && r.name === 'chat' && restoredTab) {
+      history.replaceState(null, '', '#/');
+      r = { name: 'home' };
+    }
+    route = r;
+    // Close the mobile sidebar whenever the route changes.
+    sidebarOpen = false;
+    if (r.name === 'chat') {
+      app.openChat(r.id);
+    } else {
+      app.closeChat();
+    }
+  }
+
+  onMount(() => {
+    initTheme(); // re-sync theme (head script already seeded it pre-paint)
+    initViewport(); // mirror the viewport height so the keyboard squeeze animates
+    app.init(); // route is applied by the auth-gated $effect below
+    // Dynamic import so the web bundle never loads Capacitor plugins
+    // (same pattern as the camera/file-picker/status-bar plugins). The
+    // resolved App plugin is kept for exitApp() in onAndroidBack.
+    if (isNative())
+      import('@capacitor/app').then(({ App }) => {
+        capacitorApp = App;
+        App.addListener('backButton', onAndroidBack);
+        // Foreground resume: the WebView's `focus` event isn't guaranteed
+        // when Android brings the app back, so hook the native lifecycle too
+        // and reuse the same handler.
+        App.addListener('appStateChange', ({ isActive }) => {
+          if (isActive) app.onFocus();
+        });
+      });
+  });
+
+  // The Capacitor App plugin, resolved by the dynamic import above (native
+  // only; null on the web build where the back button never fires).
+  let capacitorApp = null;
+
+  // Android back button/gesture (native only). Registering the listener
+  // overrides Capacitor's default handling, so the fallback (hash history
+  // back, then exit) is implemented here too. Overlays close first:
+  // server-switch screen, then the mobile sidebar sheet.
+  function onAndroidBack() {
+    if (app.needsServerSetup && app.serverUrl) {
+      app.cancelChangeServer();
+      sidebarOpen = false; // don't re-open the sheet the gear was tapped from
+      return;
+    }
+    if (closeTopOverlay()) return;
+    if (location.hash && location.hash !== '#/') history.back();
+    else capacitorApp?.exitApp();
+  }
+
+  // ChatHeader's menu button (data-sidebar="trigger") has no direct access
+  // to this component's state, so a window-level click listener routes it:
+  // desktop (lg+) collapses the inline sidebar; mobile opens the Sheet.
+  function openSidebarFromTrigger(e) {
+    const trigger = e.target?.closest?.('[data-sidebar="trigger"]');
+    if (!trigger) return;
+    if (window.matchMedia('(min-width: 1024px)').matches) {
+      toggleDesktopSidebar();
+    } else {
+      sidebarOpen = true;
+    }
+  }
+
+  // Opening a chat after signing in (init runs before auth).
+  $effect(() => {
+    if (app.authChecked && app.authed) {
+      applyRoute({ initial: !initialRouteApplied });
+      initialRouteApplied = true;
+    }
+  });
+</script>
+
+<svelte:window onhashchange={() => applyRoute()} onfocus={() => app.onFocus()} onclick={openSidebarFromTrigger} />
+
+{#if !app.authChecked}
+  <div class="loading-delay flex min-h-app items-center justify-center p-safe-pad">
+    <Spinner class="size-8" />
+  </div>
+{:else if app.needsServerSetup || (app.authEnabled && !app.authed)}
+  <!-- One screen for both gates: native adds the server-address field on
+       top; web renders the same card without it. The wrapper carries the
+       rise: transitions go on elements, not components. -->
+  <div in:screenRise out:screenRise>
+    <LoginScreen />
+  </div>
+{:else if app.serverDown}
+  <!-- bg-background: the rise only reads as a page over a page while the
+       travelling screen is opaque. -->
+  <div
+    class="flex min-h-app items-center justify-center bg-background p-safe-pad"
+    in:screenRise
+    out:screenRise
+  >
+    <div class="flex w-full max-w-md flex-col items-center gap-4 rounded-xl border bg-card p-8 text-center shadow-sm">
+      <div class="space-y-1.5">
+        <div class="text-base font-semibold">Cannot reach the server</div>
+        <p class="text-sm text-muted-foreground">
+          The backend did not respond to <code class="font-mono text-xs">/api/meta</code>. Start the server and
+          reload.
+        </p>
+      </div>
+      <div class="flex gap-2">
+        <Button variant="outline" size="sm" onclick={() => location.reload()}>Reload</Button>
+        {#if app.nativeApp}
+          <Button variant="outline" size="sm" onclick={() => app.changeServer()}>Change server</Button>
+        {/if}
+      </div>
+    </div>
+  </div>
+{:else}
+  <Tooltip.Provider delayDuration={400}>
+    <!-- inert while the settings overlay is up: it is a hand-rolled fixed
+         panel, not a <dialog>, so without this Tab walks out of it into the
+         sidebar and the composer underneath. -->
+    <div
+      class="flex h-app overflow-hidden bg-background text-foreground p-safe"
+      inert={app.settingsOpen || app.setupComplete === false}
+      in:screenFade
+      out:screenFade={{ hold: true }}
+    >
+    <!-- Desktop sidebar (user-resizable via the right-edge drag handle) -->
+    {#if !desktopSidebarCollapsed}
+      <!-- min-w-max: the sidebar can never be dragged narrower than its
+           content (header row: logo + title + gap + buttons); the chat list
+           is excluded via contain:inline-size on its <nav>. ResizeHandle's
+           numeric min stays as the drag-state floor. The widthSlide
+           transition overrides min-width via keyframes while it runs. -->
+      <div class="relative hidden h-full min-w-max shrink-0 lg:block" style="width: {sidebarWidth}px" transition:widthSlide>
+        <Sidebar />
+        <ResizeHandle
+          bind:width={sidebarWidth}
+          storageKey="chattoneko-sidebar-width"
+          fallback={288}
+          min={200}
+          max={480}
+          label="Resize sidebar"
+        />
+      </div>
+    {/if}
+
+    <!-- Mobile sidebar -->
+    <Sheet.Root bind:open={sidebarOpen}>
+      <!-- Fullscreen on mobile: the !important overrides beat the Sheet
+           base classes (w-3/4, sm:max-w-sm). border-r-0! removes the base
+           data-[side=left]:border-r, which shows as a stray 1px line at the
+           right screen edge when fullscreen.
+           p-safe keeps the header row clear of the status bar when the
+           WebView is laid out edge-to-edge (native). The sheet's absolute X
+           is off: it would sit under the New button, and Sidebar renders its
+           own close button in the header row, centered with New.
+           Safe-area padding comes from the sheet-content primitive. -->
+      <Sheet.Content side="left" class="w-full! max-w-full! gap-0 border-r-0! bg-sidebar p-0" showCloseButton={false}>
+        <Sheet.Title class="sr-only">Chats</Sheet.Title>
+        <Sidebar onClose={() => (sidebarOpen = false)} />
+      </Sheet.Content>
+    </Sheet.Root>
+
+    <div class="flex h-full min-w-0 flex-1 flex-col">
+      {#key route.name === 'chat' ? route.id : 'home'}
+        <ChatView />
+      {/key}
+    </div>
+    </div>
+
+    <!-- Server settings overlay. Auto-opens (and locks) when setup is
+         incomplete; otherwise reachable from the sidebar / header. -->
+    <SettingsSheet />
+  </Tooltip.Provider>
+{/if}
+
+<!-- Attachment lightbox (text / image), opened by clicking any attachment
+     in a message. <dialog> lives in the browser top layer, so mounting it
+     at the root is about lifetime only, not stacking. `items` is the
+     message's image set: with more than one, the viewer becomes a gallery
+     (swipe / arrows / chevrons) that just re-points `viewer.attachment`.
+     Deliberately NOT keyed on the attachment id — navigating must reuse the
+     mounted dialog, not tear it down and rebuild it. -->
+{#if viewer.attachment}
+  <AttachmentViewer
+    attachment={viewer.attachment}
+    items={viewer.items}
+    onclose={() => viewer.close()}
+    onprev={() => viewer.step(-1)}
+    onnext={() => viewer.step(1)}
+  />
+{/if}
+
+<!-- Long-press sheet for an image / file chip in the chat (Share, Copy).
+     Always mounted, opens off the attachMenu singleton — the drawer needs
+     its close animation, so it can't be {#if}-mounted per press. -->
+<AttachmentMenu />
+
+<Toaster position="bottom-right" />

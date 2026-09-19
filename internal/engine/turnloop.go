@@ -1,0 +1,540 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"slices"
+	"time"
+
+	"chattoneko/internal/mcphub"
+	"chattoneko/internal/provider"
+	"chattoneko/internal/store"
+)
+
+// defaultGracePeriod is how long a finished generation's replay buffer is
+// kept for late subscribers (Engine.graceInterval overrides it in tests).
+const defaultGracePeriod = 5 * time.Second
+
+// defaultFlushInterval is how often streamed content is persisted
+// mid-generation (Engine.flushInterval overrides it in tests).
+const defaultFlushInterval = 500 * time.Millisecond
+
+// overBudgetText is the synthetic result for an MCP tool call the response's
+// budget refused. Telling the model to finish in text is what makes the budget
+// a soft limit: the generation always gets a final round.
+const overBudgetText = "Error: this response has used up its MCP tool call limit; this call was not executed. Continue without MCP tools and answer with what you already have."
+
+// maxPostCapRounds is the runaway backstop for a round that executes nothing:
+// every call in it was refused, either for being past the response's MCP
+// budget or for naming a tool this chat does not have (toggled off, an MCP
+// server that went away, a name the model invented). Such a round only burns
+// tokens, so a few ignored instructions end the generation cleanly (every call
+// has a result).
+// ponytail: a sane model never reaches this; the alternative is an unbounded
+// spend loop.
+const maxPostCapRounds = 3
+
+// unavailableText is the synthetic result for a call to a tool this chat does
+// not have. Like overBudgetText it tells the model to finish without it —
+// counting these as refusals is what keeps a model that insists from looping
+// forever, which no budget covers because integrated tools are unbudgeted.
+func unavailableText(name string) string {
+	return "Error: the tool '" + name + "' is not available in this chat, so this call was not executed. " +
+		"Do not call it again — continue without it and answer with what you already have."
+}
+
+// cancelOutcome maps a canceled generation to (status, error text): a user
+// stop keeps "stopped" with no error; any other cancellation (server
+// shutdown) is a failed generation with a clear reason.
+func cancelOutcome(ag *activeGen) (string, string) {
+	ag.mu.Lock()
+	stopped := ag.stopped
+	ag.mu.Unlock()
+	if stopped {
+		return store.StatusStopped, ""
+	}
+	return store.StatusFailed, "server shutting down"
+}
+
+// runGeneration is the turn loop for one generation. It publishes events to
+// the chat hub, persists incrementally, executes tool calls up to the
+// per-response MCP budget (limits.max_tool_iterations), and finalizes with the
+// tool-call history invariant on EVERY exit path. Running out of budget never
+// ends the generation — over-budget MCP calls are refused with an error result
+// so the model can finish in text.
+func (e *Engine) runGeneration(ag *activeGen) {
+	h := e.hubFor(ag.chatID)
+	ctx := ag.ctx
+
+	// Track per-turn usage + wall-clock duration across all iterations.
+	// Declared before the finish closure so it can capture them.
+	startTime := time.Now()
+	// total* = billed sum over every request of the turn; last* = final
+	// request only, i.e. the context snapshot the next request resends.
+	var totalPrompt, totalCompletion, lastPrompt, lastCompletion int64
+
+	// Incremental persistence ticker.
+	done := make(chan struct{})
+	flushDone := make(chan struct{})
+	go func() {
+		defer close(flushDone)
+		ticker := time.NewTicker(e.flushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ag.mu.Lock()
+				if ag.dirty && !ag.deleted && !ag.done {
+					text, reasoning := ag.text, slices.Clone(ag.reasoning)
+					ag.dirty = false
+					ag.mu.Unlock()
+					if err := e.store.UpdateMessageContent(ctx, ag.messageID, text, reasoning); err != nil {
+						slog.Debug("engine: flush content", "error", err)
+						// A failed flush (transient DB error) must be retried on
+						// the next tick or the snapshot is silently lost.
+						// After a cancel the finalize persistence covers the
+						// content, so don't retry then.
+						if ctx.Err() == nil {
+							ag.mu.Lock()
+							ag.dirty = true
+							ag.mu.Unlock()
+						}
+					}
+				} else {
+					ag.mu.Unlock()
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	finish := func(status, errText string) {
+		// Stop the incremental flusher FIRST and wait for any in-flight flush
+		// to land: a stale flush snapshot (up to flushInterval old) committing
+		// AFTER FinalizeMessage would overwrite the final content and lose the
+		// last tokens on the serialized DB connection.
+		close(done)
+		<-flushDone
+
+		ag.mu.Lock()
+		deleted := ag.deleted
+		text, reasoning := ag.text, slices.Clone(ag.reasoning)
+		ag.mu.Unlock()
+
+		if status == store.StatusFailed {
+			slog.Error("engine: generation failed", "chat", ag.chatID, "message", ag.messageID, "error", errText)
+		}
+
+		// Persistence in finalize MUST survive the generation ctx being
+		// canceled (stop/shutdown/deletion): detach cancellation. DB writes
+		// happen OUTSIDE the hub lock so subscribers are not blocked.
+		persistCtx := context.WithoutCancel(ctx)
+
+		// Persist per-turn usage + duration on the assistant message.
+		durationMs := time.Since(startTime).Milliseconds()
+
+		if !deleted {
+			// Invariant finalize: synthetic results for dangling tool calls,
+			// then the terminal status. Order matters: readers must never see
+			// a terminal assistant message with unanswered calls.
+			if err := e.synthesizeToolResults(persistCtx, ag.chatID, ag.messageID, interruptText(status)); err != nil {
+				slog.Error("engine: synthesize tool results", "error", err)
+			}
+			if err := e.store.FinalizeMessage(persistCtx, ag.messageID, status, errText, text, reasoning); err != nil {
+				slog.Error("engine: finalize message", "error", err)
+			}
+			if totalPrompt > 0 || totalCompletion > 0 || durationMs > 0 {
+				if err := e.store.UpdateMessageUsage(persistCtx, ag.messageID, totalPrompt, totalCompletion, lastPrompt+lastCompletion, durationMs); err != nil {
+					slog.Debug("engine: persist usage", "error", err)
+				}
+			}
+			_ = e.store.TouchChat(persistCtx, ag.chatID)
+		}
+
+		// Only now is the generation over: marking it done earlier opens the
+		// claim slot while the synthetic tool results are still being inserted,
+		// and the next generation's ListMessages would feed the provider an
+		// assistant message with unanswered tool calls (a 400 on every retry).
+		ag.mu.Lock()
+		ag.done = true
+		ag.mu.Unlock()
+
+		// Include usage in done so the client can render per-message stats and
+		// the top-bar totals without a refetch. done is replayed, so it can't be
+		// lost.
+		h.mu.Lock()
+		h.publishGen(ag, WireEvent{Type: "status", Status: status, Error: errText})
+		h.publishGen(ag, WireEvent{
+			Type:             "done",
+			PromptTokens:     totalPrompt,
+			CompletionTokens: totalCompletion,
+			ContextTokens:    lastPrompt + lastCompletion,
+			DurationMs:       durationMs,
+		})
+		h.mu.Unlock()
+
+		// Grace period: keep the replay buffer for late subscribers, then
+		// drop the reference (after this, Subscribe yields "idle"). With no
+		// generation and no subscribers left, the hub itself can go too.
+		time.AfterFunc(e.graceInterval, func() {
+			h.mu.Lock()
+			replaced := h.gen != ag
+			h.mu.Unlock()
+			if replaced {
+				return // deleted or superseded; that lifecycle owns the hub now
+			}
+			h.mu.Lock()
+			if h.gen == ag {
+				h.gen = nil
+			}
+			h.mu.Unlock()
+			e.maybePruneHub(ag.chatID, h)
+		})
+	}
+
+	// stepFailed finishes the generation after a ctx-aware step failed. If
+	// the generation context is done, the step error is only a symptom of the
+	// cancel (user stop / chat deletion / shutdown) — without this check a
+	// stop racing a step would finalize the message as "failed" with a
+	// confusing context/store error instead of the cancel outcome. Otherwise
+	// it is a real failure.
+	stepFailed := func(errText string) {
+		if ctx.Err() != nil {
+			status, cancelText := cancelOutcome(ag)
+			finish(status, cancelText)
+			return
+		}
+		finish(store.StatusFailed, errText)
+	}
+
+	chat, params, err := e.chatParams(ctx, ag.chatID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			finish(store.StatusFailed, "chat not found")
+			return
+		}
+		stepFailed("load chat: " + err.Error())
+		return
+	}
+	// Read once per generation: the model cannot change mid-run, and the
+	// metadata lookup is a DB read we don't want inside the tool loop. The
+	// modalities decide both how attachments reach the prompt and which
+	// specialist tools are left to offer.
+	mods := e.inputModalities(ctx, params.Model)
+	vision := slices.Contains(mods, "image")
+
+	// turn is the 0-based index of the provider round trip being streamed: it
+	// keys this generation's reasoning parts, is stamped on the turn's wire
+	// events, and is what the client groups tool calls under.
+	turn := 0
+	// Generation-wide tool-call counter: position stays chronological across
+	// turns so a reloaded multi-turn message keeps its call order.
+	callPos := int64(0)
+	// Remaining MCP calls this response may make. Read once, so the budget is
+	// stable even if settings change mid-run.
+	budget := e.cfg.Get().Limits.MaxToolIterations
+	// Rounds since a round handed back nothing but budget refusals; see
+	// maxPostCapRounds.
+	overCap := 0
+	for {
+		// Cancellation check between iterations.
+		select {
+		case <-ctx.Done():
+			status, errText := cancelOutcome(ag)
+			finish(status, errText)
+			return
+		default:
+		}
+
+		msgs, err := e.store.ListMessages(ctx, ag.chatID)
+		if err != nil {
+			stepFailed("load history: " + err.Error())
+			return
+		}
+		providerMsgs, err := e.buildProviderMessages(ctx, chat, msgs, ag.attCache, vision)
+		if err != nil {
+			stepFailed("build request: " + err.Error())
+			return
+		}
+		tools, err := e.effectiveTools(ctx, chat, mods)
+		if err != nil {
+			stepFailed("tools: " + err.Error())
+			return
+		}
+
+		stream, err := e.prov.StreamChat(ctx, providerMsgs, tools, params)
+		if err != nil {
+			stepFailed("provider error: " + err.Error())
+			return
+		}
+
+		var calls []provider.ToolCall
+		var streamErr error
+		var finishReason string
+	drain:
+		for ev := range stream.Events() {
+			switch ev.Kind {
+			case provider.EventTextDelta:
+				ag.mu.Lock()
+				ag.text += ev.Text
+				ag.dirty = true
+				ag.mu.Unlock()
+				h.mu.Lock()
+				h.publishGen(ag, WireEvent{Type: "delta", Content: ev.Text})
+				h.mu.Unlock()
+			case provider.EventReasoningDelta:
+				ag.mu.Lock()
+				for len(ag.reasoning) <= turn {
+					ag.reasoning = append(ag.reasoning, "")
+				}
+				ag.reasoning[turn] += ev.Text
+				ag.dirty = true
+				ag.mu.Unlock()
+				h.mu.Lock()
+				h.publishGen(ag, WireEvent{Type: "reasoning_delta", Turn: turn, Content: ev.Text})
+				h.mu.Unlock()
+			case provider.EventToolCallStart:
+				h.mu.Lock()
+				h.publishGen(ag, WireEvent{Type: "tool_call_started", Turn: turn, CallID: ev.CallID, Name: ev.Name})
+				h.mu.Unlock()
+			case provider.EventToolCallDelta:
+				// Incremental arguments fragment; the client appends it to the
+				// call's args. tool_call_done re-delivers the full arguments,
+				// so a reconnect mid-stream self-heals.
+				h.mu.Lock()
+				h.publishGen(ag, WireEvent{Type: "tool_call_delta", Turn: turn, CallID: ev.CallID, Arguments: ev.Args})
+				h.mu.Unlock()
+			case provider.EventToolCallDone:
+				calls = append(calls, provider.ToolCall{ID: ev.CallID, Name: ev.Name, Arguments: ev.Args})
+				h.mu.Lock()
+				h.publishGen(ag, WireEvent{Type: "tool_call_done", Turn: turn, CallID: ev.CallID, Name: ev.Name, Arguments: ev.Args})
+				h.mu.Unlock()
+			case provider.EventError:
+				streamErr = ev.Err
+			case provider.EventDone:
+				// Finish reason is provider-dependent ("stop", "tool_calls",
+				// "length", ...); the tool loop below keys on the presence of
+				// collected calls. Accumulate usage per turn.
+				finishReason = ev.Finish
+				totalPrompt += ev.Usage.PromptTokens
+				totalCompletion += ev.Usage.CompletionTokens
+				lastPrompt, lastCompletion = ev.Usage.PromptTokens, ev.Usage.CompletionTokens
+			}
+			// Honor stop promptly even mid-stream.
+			select {
+			case <-ctx.Done():
+				stream.Close()
+				break drain
+			default:
+			}
+		}
+		if streamErr == nil {
+			streamErr = stream.Err()
+		}
+		// Always release the stream: unblocks a producer goroutine that could
+		// otherwise sit in Publish forever once we stop consuming (leak).
+		stream.Close()
+
+		select {
+		case <-ctx.Done():
+			status, errText := cancelOutcome(ag)
+			finish(status, errText)
+			return
+		default:
+		}
+
+		if streamErr != nil {
+			stepFailed("provider error: " + streamErr.Error())
+			return
+		}
+
+		// This turn's stream ended cleanly, so its thinking is complete: the
+		// client stops that block's spinner. Published only on the clean path —
+		// a canceled or failed stream left the turn unfinished.
+		h.mu.Lock()
+		h.publishGen(ag, WireEvent{Type: "turn_complete", Turn: turn})
+		h.mu.Unlock()
+
+		// Tool loop gate: the presence of collected calls drives the next
+		// iteration, independent of the finish-reason spelling.
+		if len(calls) > 0 {
+			// Persist the assistant's accumulated content + calls before
+			// executing tools (crash safety) and before the next iteration.
+			ag.mu.Lock()
+			text, reasoning := ag.text, slices.Clone(ag.reasoning)
+			ag.dirty = false
+			ag.mu.Unlock()
+			if err := e.store.UpdateMessageContent(ctx, ag.messageID, text, reasoning); err != nil {
+				stepFailed("persist: " + err.Error())
+				return
+			}
+			for _, c := range calls {
+				if _, err := e.store.CreateToolCall(ctx, ag.messageID, c.ID, c.Name, c.Arguments, callPos, int64(turn)); err != nil {
+					stepFailed("persist tool call: " + err.Error())
+					return
+				}
+				callPos++
+			}
+			used, refused := e.executeTools(ctx, h, chat, ag, calls, budget)
+			budget -= used
+
+			// A round of nothing but refusals — past the MCP budget, or tools this
+			// chat does not have — ran no work at all, so the model gets a few
+			// chances to answer without them and then the generation ends. Either
+			// way every call has a result, so finalize stays clean.
+			if refused > 0 && refused == len(calls) {
+				if overCap++; overCap >= maxPostCapRounds {
+					finish(store.StatusComplete, "")
+					return
+				}
+			} else {
+				overCap = 0
+			}
+			turn++
+			continue
+		}
+
+		// A truncation finish reason means the provider cut the answer off at
+		// the output-token limit: surface it as a failure instead of silently
+		// finalizing a cut-off message as a clean success. Providers spell it
+		// differently ("length", "max_tokens", "max_output_tokens", ...).
+		if isTruncationFinish(finishReason) {
+			finish(store.StatusFailed, "provider stopped at the output length limit ("+finishReason+"); the answer was truncated")
+			return
+		}
+
+		finish(store.StatusComplete, "")
+		return
+	}
+}
+
+// isTruncationFinish reports whether a provider finish reason means the
+// answer was cut off at an output-token limit (as opposed to a clean stop or
+// a tool-call handoff). The reason strings are provider-specific, so match
+// on the well-known spellings.
+func isTruncationFinish(reason string) bool {
+	switch reason {
+	case "length", // OpenAI
+		"max_tokens",        // Anthropic / some OpenAI-compatible
+		"max_output_tokens", // Anthropic
+		"output_length",     // generic
+		"model_max_tokens":  // some proxies
+		return true
+	}
+	return false
+}
+
+// executeTools runs each tool call and persists + publishes the results.
+// budget is the response's remaining MCP-call allowance; used is how much of
+// it this batch spent and refused how many calls it turned away (over budget,
+// or a tool this chat does not have). Refusals never run, which is what lets
+// the loop hand control back to the model — and, when a round is nothing but
+// refusals, end the generation. Integrated tools are not budgeted.
+// A canceled generation aborts the remaining calls; the invariant finalize
+// covers any left dangling with synthetic results. Events publish to the
+// generation's own hub (never re-resolved: after a chat deletion the old
+// hub is dropped and hubFor would create a fresh one nobody subscribes to).
+func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat, ag *activeGen, calls []provider.ToolCall, budget int) (used, refused int) {
+	enabled := e.enabledTools(chat)
+	// Only MCP tools are budgeted. A name absent from the catalog reads as
+	// integrated, which is harmless: Call fails on it and failures are free.
+	mcp := map[string]bool{}
+	for _, t := range e.catalog.Tools() {
+		mcp[t.Display] = t.Server != mcphub.BuiltinServer
+	}
+	meta := mcphub.CallMeta{ChatID: chat.ID, MessageID: ag.messageID}
+	// Tool side effects happen under the cancellable ctx, but persisting a
+	// result that EXISTS must survive a user stop / server shutdown landing
+	// mid-batch: otherwise the invariant finalize would record an executed
+	// call as interrupted and the model would re-run the tool on the next
+	// generation, doubling its side effects.
+	persistCtx := context.WithoutCancel(ctx)
+	for _, c := range calls {
+		if ctx.Err() != nil {
+			return
+		}
+		var result string
+		isError := false
+		switch {
+		case !enabled[c.Name]:
+			result = unavailableText(c.Name)
+			isError = true
+			refused++
+		case mcp[c.Name] && budget <= 0:
+			result = overBudgetText
+			isError = true
+			refused++
+		default:
+			r, toolErr, err := e.catalog.Call(ctx, c.Name, c.Arguments, meta)
+			if err != nil {
+				result = "Error: " + err.Error()
+				isError = true
+			} else {
+				result = r
+				isError = toolErr
+			}
+			// Every MCP call spends budget, success or failure: a free retry is
+			// an endless loop against a server that always errors.
+			if mcp[c.Name] {
+				budget--
+				used++
+			}
+			if isError {
+				slog.Warn("engine: tool call failed", "tool", c.Name, "chat", chat.ID, "error", result)
+			}
+		}
+		if _, err := e.store.CreateMessage(persistCtx, store.NewMessageParams{
+			ChatID:     chat.ID,
+			Role:       store.RoleTool,
+			Status:     store.StatusComplete,
+			Content:    result,
+			ToolCallID: c.ID,
+			Name:       c.Name,
+		}); err != nil {
+			slog.Error("engine: persist tool result", "error", err)
+			continue
+		}
+		h.mu.Lock()
+		h.publishGen(ag, WireEvent{Type: "tool_result", CallID: c.ID, Name: c.Name, Result: result, IsError: isError})
+		h.mu.Unlock()
+		e.publishNewAttachments(persistCtx, h, ag)
+	}
+	return used, refused
+}
+
+// publishNewAttachments publishes an attachment_created event for every
+// attachment on the generating assistant message not yet announced (files
+// persisted by integrated tools during executeTools). Metas only — no blob
+// reads; the event is replayed so reconnecting clients don't lose the chip.
+func (e *Engine) publishNewAttachments(ctx context.Context, h *chatHub, ag *activeGen) {
+	metas, err := e.store.ListAttachmentsByMessage(ctx, ag.messageID)
+	if err != nil {
+		slog.Debug("engine: list message attachments", "error", err)
+		return
+	}
+	for i := range metas {
+		if ag.attSent[metas[i].ID] {
+			continue
+		}
+		ag.attSent[metas[i].ID] = true
+		m := metas[i]
+		h.mu.Lock()
+		h.publishGen(ag, WireEvent{Type: "attachment_created", Attachment: &m})
+		h.mu.Unlock()
+	}
+}
+
+// interruptText is the synthetic tool result for each termination cause.
+func interruptText(status string) string {
+	switch status {
+	case store.StatusStopped:
+		return "Error: generation stopped by user before this tool call could run."
+	default:
+		// Failed, or any other terminal status. The budget is deliberately NOT
+		// a termination cause: an over-budget call is refused inside
+		// executeTools and the generation keeps going.
+		return "Error: generation was interrupted before this tool call could run."
+	}
+}

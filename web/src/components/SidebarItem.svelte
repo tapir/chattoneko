@@ -1,0 +1,174 @@
+<script>
+  import { app } from '../lib/state.svelte.js';
+  import { Pin, PinOff, Trash2 } from '@lucide/svelte';
+  import IconButton from './IconButton.svelte';
+  import Confirm from './Confirm.svelte';
+
+  // revealed/onreveal: mobile long-press delete affordance. The parent
+  // sidebar owns which row is revealed so only one chat at a time shows its
+  // delete icon; revealing another row hides the previous one.
+  let { chat, active, revealed = false, onreveal = null } = $props();
+
+  // Pulse the title while this chat has an active generation. The active chat
+  // reflects app.generating; other chats reflect app.chatGeneratingIds,
+  // reconciled against server-side live generation state (background chats
+  // have no stream to learn about completion from).
+  let isGenerating = $derived(
+    chat.id === app.activeChatId
+      ? app.generating
+      : app.chatGeneratingIds.has(chat.id),
+  );
+
+  let confirmingDelete = $state(false);
+
+  // Long-press (touch) reveals the delete icon. The row is an <a>, so the
+  // click that follows a long-press must be suppressed to avoid navigating.
+  let lpTimer = null;
+  let lpFired = false;
+  let lpTouch = false; // a touch press is down (what onContextMenu checks)
+  let lpX = 0;
+  let lpY = 0;
+  const LP_DELAY = 500;
+  const LP_TOLERANCE = 10; // px of finger drift that cancels the press
+
+  function lpCancel() {
+    lpTouch = false;
+    if (lpTimer !== null) {
+      clearTimeout(lpTimer);
+      lpTimer = null;
+    }
+  }
+  function lpTouchStart(e) {
+    lpCancel();
+    lpFired = false;
+    lpTouch = true;
+    const t = e.touches[0];
+    lpX = t.clientX;
+    lpY = t.clientY;
+    lpTimer = setTimeout(() => {
+      lpTimer = null;
+      lpFired = true;
+      navigator.vibrate?.(10);
+      onreveal?.(chat.id);
+    }, LP_DELAY);
+  }
+  function lpTouchMove(e) {
+    if (lpTimer === null) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - lpX) > LP_TOLERANCE || Math.abs(t.clientY - lpY) > LP_TOLERANCE) {
+      lpCancel();
+    }
+  }
+  // Android Chrome long-press fires the native context menu on <a href>;
+  // select-none/-webkit-touch-callout only cover text selection and iOS.
+  // Suppress it so the long-press reveal is the only affordance — but only
+  // for a touch: a mouse right-click must keep the browser's own menu (open
+  // in a new tab, copy link address).
+  function onContextMenu(e) {
+    if (!lpTouch) return;
+    e.preventDefault();
+  }
+  function onAnchorClick(e) {
+    if (lpFired) {
+      // This click is the tail end of a long-press: reveal only, don't open.
+      e.preventDefault();
+      lpFired = false;
+      return;
+    }
+    // A normal tap on the revealed row dismisses the icon before navigating.
+    if (revealed) onreveal?.(null);
+  }
+  // Stop a pending long-press timer if the row unmounts (deleted, list
+  // refreshed) before the delay elapses.
+  $effect(() => lpCancel);
+
+  function displayTitle() {
+    return chat.title || 'New Chat';
+  }
+
+  function openDelete() {
+    confirmingDelete = true;
+  }
+
+  function togglePin() {
+    // Dismiss the reveal: the row survives a pin (it moves to the other
+    // section) and would otherwise come back with its icons still showing.
+    // A delete gets this for free because the row unmounts.
+    onreveal?.(null);
+    app.setPinned(chat, !chat.pinned);
+  }
+</script>
+
+<!-- group + relative live on the <li>: the action icons are a SIBLING of the
+     link, not a child. A <button> nested in an <a> is invalid HTML and mobile
+     browsers hand the tap to the link, so icons inside the link are
+     untappable on a phone. Covering the whole row with oncontextmenu keeps
+     Android's native menu off a long press that lands on an icon. -->
+<li class="group relative" oncontextmenu={onContextMenu}>
+  <a
+    href="#/c/{chat.id}"
+    ontouchstart={lpTouchStart}
+    ontouchmove={lpTouchMove}
+    ontouchend={lpCancel}
+    ontouchcancel={lpCancel}
+    onclick={onAnchorClick}
+    class={[
+      // select-none + no callout: without them a long-press also triggers
+      // text selection / the iOS link preview on top of our reveal.
+      'flex select-none items-center gap-1 rounded-md px-2.5 py-2 text-sm transition-colors [-webkit-touch-callout:none]',
+      active
+        ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+        : // The revealed row takes the accent background too: touch browsers
+          // can leave :hover stuck on the long-pressed row, and the delete
+          // overlay's gradient must always match the row's background.
+          revealed
+          ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+          : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+    ]}
+  >
+    <!-- The pin + delete icons are an absolute overlay that takes no layout
+         space, so reserve their width (right-1 + two size-6 icons + gap =
+         pr-12) in exactly the states they are visible: the title then
+         ellipsizes like it does on a narrower sidebar instead of sliding
+         under the icons. -->
+    <span
+      class={[
+        'min-w-0 flex-1 truncate',
+        isGenerating && 'breathing',
+        revealed
+          ? 'pr-12'
+          : '[@media(hover:hover)]:group-hover:pr-12 [@media(hover:hover)]:group-focus-within:pr-12'
+      ]}>{displayTitle()}</span>
+  </a>
+  <!-- Absolutely positioned so the row never reflows when the actions appear
+       (only the title's padding, above). No background/gradient here: the row
+       itself carries the hover color, and a separate overlay background would
+       lag behind the row's color transition and show as a patch.
+       pointer-events follow the visibility: an invisible overlay sitting on
+       top of the link would swallow taps on the row's right edge. -->
+  <span
+    class={[
+      'absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-md transition-opacity',
+      // Hover/focus reveal only on devices with a real pointer: touch browsers
+      // leave :hover stuck after a tap, and a tap also focuses the <a>, so
+      // either one ungated would pin the icons open on the last-touched row.
+      // On touch the long-press reveal governs.
+      revealed
+        ? 'opacity-100 pointer-events-auto'
+        : 'opacity-0 pointer-events-none [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-hover:pointer-events-auto [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-focus-within:pointer-events-auto'
+    ]}
+  >
+    <IconButton icon={chat.pinned ? PinOff : Pin} label={chat.pinned ? 'Unpin' : 'Pin'} size="sm" onclick={togglePin} />
+    <IconButton icon={Trash2} label="Delete" size="sm" danger onclick={openDelete} />
+  </span>
+</li>
+
+{#if confirmingDelete}
+  <Confirm
+    title="Delete chat?"
+    body={`"${displayTitle()}" and all its messages will be permanently deleted.`}
+    confirmLabel="Delete Chat"
+    onconfirm={() => { confirmingDelete = false; app.deleteChat(chat.id); }}
+    oncancel={() => (confirmingDelete = false)}
+  />
+{/if}

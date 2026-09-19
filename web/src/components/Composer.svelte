@@ -1,0 +1,361 @@
+<script>
+  import { app } from '../lib/state.svelte.js';
+  import { onMount } from 'svelte';
+  import { Paperclip, SendHorizontal, Square, X } from '@lucide/svelte';
+  import Spinner from './Spinner.svelte';
+  import { Button } from '$lib/components/ui/button';
+  import * as Select from '$lib/components/ui/select';
+  import ModelPickerSheet from './ModelPickerSheet.svelte';
+  import AttachmentSheet from './AttachmentSheet.svelte';
+  import { isNative } from '../lib/server.js';
+  import { viewer } from '../lib/viewer.svelte.js';
+  import { capturePhoto, pickPhotos, pickFiles } from '../lib/native-attachments.js';
+
+  // Draft text lives in the store (keyed by chat id) so it survives the
+  // Composer remount that ensureChat() triggers on the first send, and chat
+  // switches. Same for pending attachments, which are staged client-side
+  // (File objects) and only uploaded when the message is actually sent.
+  let pending = $derived(app.pendingList());
+  // Staged pictures are the lightbox's gallery set, so opening one chip lets
+  // you swipe through the others before sending (as with a sent message).
+  // Text files stay out: they have no server copy, and the viewer reads those
+  // by id.
+  let stagedImages = $derived(
+  pending.filter((a) => a.kind === 'image' && a.previewUrl),
+);
+  let sending = $state(false);
+  let fileInput = $state(null);
+  let textArea = $state(null);
+  // Native (Capacitor): the attach button opens a bottom drawer with
+  // camera/photos/files shortcuts instead of the plain file input.
+  let attachOpen = $state(false);
+  let attachBusy = $state(false);
+
+  // New (not-yet-created) chat: focus the prompt on mount so the mobile
+  // soft keyboard pops up and desktop users can type right away. The first
+  // send of a new chat remounts this component (ensureChat changes the route
+  // key), which throws away the focus send() just set and drops the keyboard
+  // — app.outgoing identifies that remount, so take the focus back.
+  onMount(() => {
+    if (app.activeChatId == null || app.outgoing) textArea?.focus();
+  });
+
+  // Model selection: for an existing chat this patches the chat's model; for a
+  // not-yet-created chat it sets the draft model used at creation.
+  let models = $derived(app.config?.models?.whitelist ?? []);
+  let currentModel = $derived(app.chat ? (app.chat.model ?? '') : app.newChatModel);
+  let modelLabel = $derived(currentModel || 'Select model');
+
+  // Reasoning effort: per-model levels from the provider's /models endpoint
+  // (via /api/config model_info), shown lowest -> highest intensity.
+  const EFFORT_RANK = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
+  let effortOptions = $derived(
+    [...app.effortOptionsFor(currentModel)].sort(
+      (a, b) => (EFFORT_RANK[a] ?? 99) - (EFFORT_RANK[b] ?? 99),
+    ),
+  );
+  // Effective selection: explicit choice when valid for the model, else the
+  // model's configured default. Invalid selections (e.g. after a model
+  // switch) fall back to the default rather than showing a stale value.
+  let currentEffort = $derived.by(() => {
+    const chosen = app.chat ? app.chat.params?.reasoning_effort : app.newChatEffort;
+    const opts = app.effortOptionsFor(currentModel);
+    if (chosen && opts.includes(chosen)) return chosen;
+    return app.defaultEffortFor(currentModel);
+  });
+
+  // Switching model snaps to that model's configured default effort.
+  function handleModelChange(value) {
+    if (!value || value === currentModel) return;
+    const def = app.defaultEffortFor(value);
+    if (app.chat) {
+      const params = { ...(app.chat.params ?? {}) };
+      if (def) params.reasoning_effort = def;
+      else delete params.reasoning_effort;
+      app.patchChat({ model: value, params });
+    } else {
+      app.newChatModel = value;
+      app.newChatEffort = def;
+      app.newChatModelTouched = true; // explicit draft choice: stop following the default
+    }
+  }
+
+  function handleEffortChange(value) {
+    if (!value) return;
+    if (app.chat) {
+      app.patchChat({ params: { ...(app.chat.params ?? {}), reasoning_effort: value } });
+    } else {
+      app.newChatEffort = value;
+    }
+  }
+
+  // Sending waits on the chat still loading: ensureChat() would see no
+  // chat object and create a NEW chat, delivering the message to the wrong
+  // conversation and abandoning the one being opened.
+  let canSend = $derived(
+    (app.draftFor().trim().length > 0 || pending.length > 0) &&
+      !sending &&
+      !app.chatLoading,
+  );
+
+  function autoGrow() {
+    if (!textArea) return;
+    textArea.style.height = 'auto';
+    textArea.style.height = `${Math.min(textArea.scrollHeight, 240)}px`;
+  }
+
+  // Grow to fit a restored draft (store-backed drafts survive remounts and
+  // chat switches, so the initial value may be multi-line).
+  $effect(() => {
+    app.draftFor(); // dependency
+    requestAnimationFrame(autoGrow);
+  });
+
+  function onKeydown(e) {
+    // Touch devices (mobile web + native app) have no Shift+Enter, so plain
+    // Enter must insert a newline there; sending happens via the send button.
+    // Checked live per keydown so docking/undocking keyboards on hybrids is
+    // picked up without a remount.
+    const touchOnly = matchMedia('(pointer: coarse)').matches;
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touchOnly) {
+      e.preventDefault();
+      if (canSend) send();
+    }
+  }
+
+  async function send() {
+    if (!canSend) return;
+    const content = app.draftFor().trim();
+    // Snapshot BEFORE clearing: staged File objects survive the Composer
+    // remount that ensureChat() triggers on the first send.
+    const staged = pending;
+    app.setDraft('');
+    textArea?.focus();
+    requestAnimationFrame(autoGrow);
+    app.clearPendingAttachments();
+    sending = true;
+    try {
+      await app.send(content, staged);
+    } catch {
+      // toast already shown by state; restore draft + attachments so the
+      // user doesn't lose them. ensureChat() may have remounted this Composer —
+      // the store-backed draft lands in the NEW instance.
+      app.setDraft(content);
+      for (const a of staged) app.restorePendingAttachment(a);
+      requestAnimationFrame(autoGrow);
+    } finally {
+      sending = false;
+    }
+  }
+
+  // Clipboard paste: images (and files) land as clipboardData.files, not as
+  // insertable text — stage them as pending attachments instead of letting the
+  // paste drop binary gibberish into the draft. Staging is client-side only
+  // (no network — the text sniff reads local bytes), so both handlers fire it
+  // and forget; addAttachments reports its own rejects by toast.
+  function onPaste(e) {
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (files.length === 0) return; // plain text paste: default behavior
+    e.preventDefault();
+    app.addAttachments(files);
+  }
+
+  function onFiles(e) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (files.length === 0) return;
+    app.addAttachments(files);
+  }
+
+  function onAttachButton(e) {
+    // Blur before the native file dialog opens: without this Firefox/Chrome
+    // keep the button :focus-visible (and touch emulators leave :hover
+    // stuck) once the dialog closes, making hover look broken afterwards.
+    e?.currentTarget?.blur();
+    if (isNative()) attachOpen = true;
+    else fileInput?.click();
+  }
+
+  // A drawer row was tapped: close the drawer right away (the native picker
+  // covers the screen), then stage whatever comes back. Cancellation yields
+  // [] and is silent; real failures toast.
+  async function handleAttachAction(kind) {
+    attachOpen = false;
+    attachBusy = true;
+    try {
+      let files = [];
+      if (kind === 'camera') files = await capturePhoto();
+      else if (kind === 'photos') files = await pickPhotos();
+      else files = await pickFiles();
+      if (files.length) app.addAttachments(files);
+    } catch (err) {
+      app.toast('error', `Couldn't attach: ${err?.message ?? 'unknown error'}`);
+    } finally {
+      attachBusy = false;
+    }
+  }
+
+  function removePending(id) {
+    app.removePendingAttachment(id);
+  }
+</script>
+
+<div class="shrink-0 px-3 pb-4 pt-2 sm:px-6">
+  <div class="mx-auto max-w-4xl">
+    <div class="rounded-2xl border bg-card shadow-sm transition-colors focus-within:border-ring/50">
+      {#if pending.length > 0}
+        <div class="flex flex-wrap items-center gap-1.5 px-3 pt-3">
+          {#each pending as att (att.id)}
+            <span class="inline-flex h-7 items-center gap-1.5 rounded-full bg-accent px-2.5 text-xs">
+              {#if att.kind === 'image' && att.previewUrl}
+                <!-- Everything but ✕ opens the lightbox: a staged image only
+                     has a local object URL, which is what AttachmentViewer
+                     prefers, so this works before the file is uploaded.
+                     Nested buttons are invalid, hence the sibling pair. -->
+                <button
+                  type="button"
+                  class="inline-flex min-w-0 items-center gap-1.5 rounded-full"
+                  title={`View ${att.filename}`}
+                  aria-label={`View ${att.filename}`}
+                  onclick={() => viewer.open(att, stagedImages)}
+                >
+                  <img src={att.previewUrl} alt={att.filename} class="size-5 rounded object-cover" />
+                  <span class="max-w-40 truncate">{att.filename}</span>
+                </button>
+              {:else}
+                <Paperclip class="size-3" strokeWidth={1.75} aria-hidden="true" />
+                <span class="max-w-40 truncate">{att.filename}</span>
+              {/if}
+              <button
+                class="flex size-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-foreground/10"
+                title="Remove attachment"
+                aria-label={`Remove ${att.filename}`}
+                onclick={() => removePending(att.id)}
+              >
+                <X class="size-3" strokeWidth={1.75} aria-hidden="true" />
+              </button>
+            </span>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="flex items-end gap-1.5 p-2.5">
+        <Button
+          variant="ghost"
+          size="icon"
+          class="size-9 shrink-0 rounded-full"
+          title="Attach files (images, text/code, audio, pdf)"
+          onclick={onAttachButton}
+          disabled={attachBusy}
+        >
+          {#if attachBusy}
+            <Spinner class="size-4" label="Attaching" />
+          {:else}
+            <Paperclip class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
+          {/if}
+        </Button>
+        <!-- No accept="": browsers map it through the OS extension→MIME table,
+             which has no entry for .go/.toml and calls .ts a video, so any
+             allow-list hides files the server would accept. addAttachments()
+             filters by extension and content instead. -->
+        <input bind:this={fileInput} type="file" class="hidden" multiple onchange={onFiles} />
+
+        <textarea
+          bind:this={textArea}
+          bind:value={() => app.draftFor(), (v) => app.setDraft(v)}
+          class="max-h-60 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-[0.9375rem] leading-6 outline-none placeholder:text-muted-foreground"
+          rows="1"
+          placeholder="Message…"
+          oninput={autoGrow}
+          onkeydown={onKeydown}
+          onpaste={onPaste}
+        ></textarea>
+
+        {#if app.generating}
+          <Button
+            variant="outline"
+            size="icon"
+            class="size-9 shrink-0 rounded-full border-destructive/50 text-destructive hover:bg-destructive/10"
+            title="Stop generation"
+            onclick={() => app.stopGeneration()}
+          >
+            <Square class="size-4" strokeWidth={1.75} aria-hidden="true" />
+          </Button>
+        {:else}
+          <Button
+            size="icon"
+            class="size-9 shrink-0 rounded-full"
+            title="Send"
+            onclick={send}
+            disabled={!canSend}
+          >
+            {#if sending}
+              <Spinner class="size-4" label="Sending" />
+            {:else}
+              <SendHorizontal class="size-4" strokeWidth={1.75} aria-hidden="true" />
+            {/if}
+          </Button>
+        {/if}
+      </div>
+
+      <div class="flex items-center justify-between gap-2 border-t border-border/60 px-2 py-1">
+        <!-- Desktop: popover selects. Below sm: ModelPickerSheet (bottom drawer). -->
+        <div class="hidden min-w-0 items-center gap-1 sm:flex">
+          <Select.Root
+            type="single"
+            value={currentModel}
+            onValueChange={handleModelChange}
+            disabled={!app.config}
+          >
+            <Select.Trigger
+              class="h-8 w-auto max-w-56 overflow-hidden border-transparent bg-transparent px-2 font-mono text-xs text-muted-foreground shadow-none hover:bg-accent hover:text-accent-foreground dark:bg-transparent dark:hover:bg-accent"
+              title={modelLabel}
+            >
+              <span class="min-w-0 truncate">{modelLabel}</span>
+            </Select.Trigger>
+            <Select.Content side="top" align="start">
+              {#each models as m (m)}
+                <Select.Item value={m} label={m} class="font-mono text-xs" />
+              {/each}
+            </Select.Content>
+          </Select.Root>
+
+          {#if effortOptions.length > 0}
+            <Select.Root type="single" value={currentEffort} onValueChange={handleEffortChange}>
+              <Select.Trigger
+                class="h-8 w-auto border-transparent bg-transparent px-2 font-mono text-xs text-muted-foreground shadow-none hover:bg-accent hover:text-accent-foreground dark:bg-transparent dark:hover:bg-accent"
+                title="Reasoning effort for the next response"
+              >
+                {currentEffort}
+              </Select.Trigger>
+              <Select.Content side="top" align="start">
+                {#each effortOptions as e (e)}
+                  <Select.Item value={e} label={e} class="font-mono text-xs" />
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          {/if}
+        </div>
+
+        <div class="flex min-w-0 flex-1 items-center justify-center sm:hidden">
+          <ModelPickerSheet
+            {models}
+            currentModel={currentModel}
+            currentEffort={currentEffort}
+            {effortOptions}
+            onModelChange={handleModelChange}
+            onEffortChange={handleEffortChange}
+          />
+        </div>
+
+        <span class="hidden text-[11px] text-muted-foreground/60 sm:inline">
+          Enter to send · Shift+Enter for newline
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Native-only: camera / photos / files shortcuts (plain web keeps the
+     hidden file input above). -->
+<AttachmentSheet bind:open={attachOpen} busy={attachBusy} onAction={handleAttachAction} />

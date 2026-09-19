@@ -1,0 +1,142 @@
+# One pipeline, two tracks:
+#   1. push a `vX.Y.Z` tag -> ghcr.io/<repo>:vX.Y.Z and :latest, plus the APK
+#      with versionName/versionCode derived from the tag, published as a GitHub
+#      Release carrying chattoneko-X.Y.Z.apk.
+#   2. run it by hand (Actions -> Build -> Run workflow) -> the unversioned
+#      testing track: ghcr.io/<repo>-testing:latest and a chattoneko-testing.apk
+#      run artifact. Dispatch it on the `testing` branch.
+# The two jobs run in parallel; the release is published by `apk`, so a Docker
+# failure does not swallow the APK.
+name: Build
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the GitHub Release
+  packages: write # push to ghcr.io
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A tag names the release image and adds the version tag; a manual run
+      # goes to the separate -testing image, :latest only. The suffix tests
+      # `!= 'tag'` on purpose: '' is falsy in GitHub expressions, so
+      # `cond && '' || '-testing'` would always yield '-testing'.
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}${{ github.ref_type != 'tag' && '-testing' || '' }}
+          tags: |
+            type=raw,value=latest
+            ${{ github.ref_type == 'tag' && 'type=ref,event=tag' || '' }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Stamped into the binary as main.version (served on /api/meta, shown
+          # in the sidebar); the Dockerfile strips the tag's leading v. On a
+          # manual run this is the branch name, so the app reports "testing".
+          build-args: VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            mobile/package-lock.json
+
+      # mobile/scripts/sync.mjs runs `npm run build` in web/, so the web
+      # dependencies must be installed first.
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      # mobile/scripts/icons.mjs renders the launcher icons with rsvg-convert.
+      - name: Install rsvg-convert
+        run: sudo apt-get update && sudo apt-get install -y librsvg2-bin
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # No android-actions/setup-android: the ubuntu-latest image already ships
+      # the SDK (ANDROID_HOME + platform-tools + build-tools 36 + android-36,
+      # which is all variables.gradle asks for) and gradle finds it. v3 broke
+      # the release by 404ing on its hardcoded cmdline-tools download.
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Same shared debug keystore as before, so CI APKs stay update-installable
+      # over each other. `base64 -w0 ~/.android/debug.keystore` -> DEBUG_KEYSTORE.
+      - name: Restore persistent debug keystore
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p "$HOME/.android"
+            echo "$DEBUG_KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+            echo "persistent debug keystore restored"
+          else
+            echo "::warning::DEBUG_KEYSTORE secret not set — using an ephemeral auto-generated keystore"
+          fi
+
+      - name: Build APK
+        env:
+          REF: ${{ github.ref_name }}
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_TAG" = true ]; then
+            v="${REF#v}"
+            IFS=. read -r maj min pat <<<"$v"
+            # ponytail: X*10000+Y*100+Z — collides if minor or patch ever hit 100.
+            make mobile-apk VERSION=$v GRADLE_FLAGS="-PversionCode=$((maj * 10000 + min * 100 + pat))"
+          else
+            v=testing
+            make mobile-apk VERSION=$v
+          fi
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk "chattoneko-$v.apk"
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        # Idempotent: a re-pushed tag or a re-run of this job finds the release
+        # already there, and `gh release create` dies on "release already
+        # exists" — taking the whole release down with it even though the APK
+        # built fine. Replace the asset on the existing release instead.
+        run: |
+          set -euo pipefail
+          apk="chattoneko-${TAG#v}.apk"
+          gh release create "$TAG" "$apk" --title "$TAG" --generate-notes ||
+            gh release upload "$TAG" "$apk" --clobber
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type != 'tag'
+        with:
+          name: chattoneko-testing.apk
+          path: chattoneko-testing.apk

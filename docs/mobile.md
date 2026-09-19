@@ -1,0 +1,98 @@
+# Mobile Architecture
+
+The mobile app is an Android client for Chattoneko: a Capacitor wrapper around the same Svelte SPA the server embeds (`web/`), pointed at a server address the user configures in the app. The web frontend is the single source of truth — the app adds no UI of its own.
+
+```
+mobile/
+  capacitor.config.json    app identity + WebView server settings
+  package.json             scripts: icons, sync
+  scripts/
+    icons.mjs              launcher icons from canonical SVGs (rsvg-convert)
+  icons/                   canonical SVG sources (background, foreground, combined)
+  android/                 committed Capacitor Android project
+    app/src/main/java/com/chattoneko/app/MainActivity.java
+    app/src/main/AndroidManifest.xml
+    app/src/main/res/      adaptive + non-adaptive launcher icons, splash, file_paths
+    capacitor.settings.gradle, app/capacitor.build.gradle   generated plugin wiring
+```
+
+## How it runs
+
+- **Capacitor 8** (`@capacitor/android`, `@capacitor/core`) hosts the SPA in a WebView. `capacitor.config.json`: appId `com.chattoneko.app`, appName `ChattoNeko`, `webDir: ../web/dist` (the Vite output is copied straight into the APK), `server.androidScheme: http` with `cleartext: true` so the app can reach a plain-HTTP server on a LAN (a typical self-hosted setup), and `android.adjustMarginsForEdgeToEdge: "disable"`, which leaves edge-to-edge inset handling to the SPA's own `.p-safe` CSS.
+- The WebView serves the bundled SPA from its own origin (`http://localhost` on Android) and talks to the user's server **cross-origin**. The server cooperates: its CORS middleware whitelists exactly the Capacitor origins (`http://localhost`, `https://localhost`, `capacitor://localhost`) and answers preflights before auth. Credentials are deliberately OFF — the app authenticates with Bearer tokens, never cookies.
+- `MainActivity` is a `com.getcapacitor.BridgeActivity` subclass with exactly one job: it installs a `BridgeWebViewClient` whose `onReceivedSslError` asks the page for its `chattoneko-insecure-tls` localStorage flag (the login screen's **Disable certificate verification** switch) and calls `handler.proceed()` when it is set, `handler.cancel()` otherwise. That callback is the only lever Android offers: no WebView setting ignores bad certificates and the WebView cancels such requests outright, so without it a self-signed server reports as plain "cannot reach server". Reading the flag out of the page at error time keeps Java and the SPA in step and avoids racing Capacitor's first page load.
+- Every other native capability is an npm plugin, reached from the SPA through a dynamic `import()` guarded by `isNative()` so the web bundle never evaluates it; `cap sync` generates their Gradle wiring (`capacitor.settings.gradle`, `app/capacitor.build.gradle`):
+  - `@capacitor/app` — back button, `exitApp`.
+  - `@capacitor/camera` — camera only.
+  - `@capacitor/status-bar` — bar style and background color follow the theme.
+  - `@capacitor/share` + `@capacitor/filesystem` — the attachment share path (the viewer's share button and the chat's long-press sheet): stage the file in the cache dir and hand the system sheet a `file://` URL, since the WebView has no `navigator.share`.
+  - `@capawesome/capacitor-file-picker` — photo picker + documents; its `pickImages` is the AndroidX photo picker.
+- The only Android permission the app declares is `INTERNET`, and no plugin adds more (the camera and pickers go through system intents). A `FileProvider` (`res/xml/file_paths.xml`: external + cache paths) exposes app files to other apps, and its cache entry is what makes a shared attachment readable by the receiving app.
+
+## Native detection & server configuration
+
+The SPA detects the WebView at runtime via `window.Capacitor.isNativePlatform()` (Capacitor injects it — detection needs no npm dependency). Native mode changes these things, all in `web/src/lib/server.js` + the app store:
+
+1. **Server address.** `LoginScreen` is one screen with two phases: with no stored server URL it opens in the **address** phase (enter the address → normalize: default `http://` scheme, trailing path junk trimmed → probe unauthenticated `GET <server>/api/meta` → persist). The address phase also carries the **Disable certificate verification** switch (`localStorage['chattoneko-insecure-tls']`, read by `MainActivity`'s SSL handler — see above), which is what makes an HTTPS server with a self-signed certificate reachable. A probed server that reports auth enabled locks the address and shows the credential fields below it; one that reports auth disabled lets boot continue straight away. The web build renders the same screen without the address field. A deliberate "change server" (sidebar / server-down screen) reopens the address phase and clears nothing until confirmed.
+2. **Base URL.** Every REST call and EventSource URL is prefixed with the stored server (`localStorage['chattoneko-server-url']`) instead of same-origin `/api`; `credentials` is `omit`.
+3. **Auth without cookies.** Login posts the credentials to `POST /api/auth/login` and stores ONLY the returned JWT (`localStorage['chattoneko-token']`, 90-day TTL); the password is never persisted. REST calls send `Authorization: Bearer <token>`, and EventSource streams plus attachment `<img>` loads (neither can set headers) append `?token=<jwt>` — the server accepts the query form on GET requests. An expired or rejected token (401) drops the app back to the login screen. With auth disabled on the server the app runs with no token.
+4. **Android back button.** `@capacitor/app`'s `backButton` listener overrides Capacitor's default handling, so `App.svelte` owns the whole fallback chain: close the change-server screen, then the topmost entry of the LIFO overlay registry (`lib/overlays.svelte.js` — every sheet, dialog and popover registers its close callback), then hash-history back, then `exitApp()`.
+5. **Status bar.** `@capacitor/status-bar` matches the bar icon style and background color to the current theme.
+
+Everything else — the chat UI, streaming/resume semantics, drafts, attachment staging, sidebar reconciliation — is the identical web implementation (see `docs/frontend.md`), which serves this dual mode.
+
+## Touch-specific UI
+
+The SPA renders these mobile variants from the same components (viewport/`pointer` queries and `isNative()`, one codebase):
+
+| Desktop | Mobile |
+| --- | --- |
+| File input for attachments | `AttachmentSheet` bottom drawer → camera / photo gallery / file picker (`lib/native-attachments.js`) |
+| Popover `Select` for model + reasoning effort | `ModelPickerSheet` bottom drawer (segmented effort control, large tappable model rows) |
+| `Confirm` centered `<dialog>` | `Confirm` bottom action sheet — any dismissal reports cancel |
+| Resizable `PanelSheet` side panels | fullscreen sheets, no resize handle |
+| Header refresh button | pull-to-refresh on the sidebar list |
+| Inline resizable sidebar | fullscreen left `Sheet` |
+| — | `.p-safe` padding for status-bar / gesture insets |
+
+The drawers are `vaul-svelte` behind the vendored `ui/drawer` component.
+
+## Build pipeline
+
+The Android project is committed; the web bundle is regenerated from `web/` on every build:
+
+1. `scripts/icons.mjs` — renders all launcher icon PNGs from the canonical SVGs with `rsvg-convert`: adaptive-icon layers (background + foreground) at 108dp per density bucket (mdpi 108 → xxxhdpi 432px), non-adaptive glyphs (`ic_launcher`, `ic_launcher_round`) at launcher sizes (48 → 192px).
+2. `npm run sync` — `npm run build` in `web/`, then `npx cap sync android` (copies `web/dist` into the Android project's assets and regenerates plugin wiring).
+3. `cd mobile/android && ./gradlew assembleDebug -PversionName=<version>` → APK at `app/build/outputs/apk/debug/app-debug.apk`.
+
+Versioning: `versionName` defaults to `1.0.0-local` in `app/build.gradle` and the Makefile's `VERSION` overrides it (CI passes the git tag); `versionCode` comes from `GRADLE_FLAGS` (`-PversionCode=X*10000+Y*100+Z`). The sidebar's version line reads `versionName` back at runtime through Capacitor's `App.getInfo()` — the mobile counterpart of the server binary's version from `/api/meta`.
+
+Gradle/Android versions: Android Gradle Plugin 8.13, Java 21 source/target compatibility, `minSdk 24`, `compileSdk`/`targetSdk 36`.
+
+npm scripts (in `mobile/`): `icons`, `sync` (icons + web build + cap sync). Building and installing the APK goes through the Makefile (`mobile-apk`, `mobile-install`).
+
+Repo-root Makefile targets wrap emulator development (`ANDROID_SDK`, `AVD=chattoneko`, `DEVICE=emulator-5554`, `SYS_IMG=system-images;android-36;google_apis;x86_64`, `AVD_DEVICE=pixel_8`, all overridable):
+
+| Target | Does |
+| --- | --- |
+| `mobile` | `npm ci` + `npm run sync` in `mobile/` |
+| `mobile-apk` | `mobile` + `./gradlew assembleDebug -PversionName=$(VERSION) $(GRADLE_FLAGS)` |
+| `mobile-avd` | create the AVD if missing (and enable hardware keyboard input) |
+| `mobile-emulator` | start the AVD headless in the background (log: `/tmp/emulator.log`) |
+| `mobile-emulator-wait` | block until `sys.boot_completed` |
+| `mobile-emulator-kill` | `adb emu kill`, falling back to a precise process match |
+| `mobile-emulator-ensure` | start + wait only if the device is unreachable |
+| `mobile-install` | build the APK and install it, uninstalling first on a signature mismatch |
+| `mobile-run` | `mobile-install` + launch the activity |
+| `mobile-reset` | `pm clear` — wipes server URL, JWT and WebView storage, so the next launch starts at the address phase |
+
+## What lives where
+
+| Concern | Location |
+| --- | --- |
+| All UI + app logic | `web/` (shared with the server-embedded SPA) |
+| Server URL, JWT | WebView `localStorage` (per-app sandbox) |
+| Chats, messages, files | the user's Chattoneko server — nothing chat-related is stored on the device |
+| Native shell, icons, manifest | `mobile/android/` |
+| Launcher icon sources | `mobile/icons/*.svg` |
+| Server-side support for the app | CORS origin allowlist + Bearer/`?token=` JWT auth (see `docs/backend.md`) |

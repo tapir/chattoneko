@@ -1,0 +1,46 @@
+<script>
+  // Right-side panel sheet (Tools).
+  // Owns the user-resizable width (persisted under `storageKey`) and the
+  // left-edge drag handle, so callers only supply a body snippet.
+  // Mobile (<sm): no resize handle, the sheet is truly fullscreen
+  // (100% width — the max-sm !important overrides beat the inline
+  // width/max-width below). At every size the sheet is opened from the
+  // top bar's 3-dot menu through the bound `open` prop.
+  import * as Sheet from '$lib/components/ui/sheet';
+  import ResizeHandle from './ResizeHandle.svelte';
+  import { registerOverlay } from '../lib/overlays.svelte.js';
+
+  let {
+    storageKey,
+    title,
+    description = '',
+    children,
+    open = $bindable(false),
+  } = $props();
+
+  let width = $state(448);
+
+  // Native Android back button: while open, this sheet is the topmost
+  // overlay, so back closes it (registerOverlay's return value is the
+  // $effect cleanup that unregisters on close / unmount).
+  $effect(() => {
+    if (open) return registerOverlay(() => (open = false));
+  });
+</script>
+
+<Sheet.Root {open} onOpenChange={(next) => (open = next)}>
+  <Sheet.Content side="right" class="w-full gap-0 max-sm:w-full! max-sm:max-w-full! sm:max-w-none" style="width: {width}px; max-width: 94vw;">
+    <div class="max-sm:hidden">
+      <ResizeHandle bind:width {storageKey} invert label="Resize {title} panel" />
+    </div>
+    <Sheet.Header>
+      <Sheet.Title>{title}</Sheet.Title>
+      {#if description}
+        <Sheet.Description>{description}</Sheet.Description>
+      {/if}
+    </Sheet.Header>
+    <div class="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      {@render children()}
+    </div>
+  </Sheet.Content>
+</Sheet.Root>

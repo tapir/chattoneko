@@ -1,0 +1,12 @@
+{
+  "appId": "com.chattoneko.app",
+  "appName": "ChattoNeko",
+  "webDir": "../web/dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  },
+  "android": {
+    "adjustMarginsForEdgeToEdge": "disable"
+  }
+}

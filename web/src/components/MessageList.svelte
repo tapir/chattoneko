@@ -1,0 +1,266 @@
+<script module>
+  // Picked ONCE per app session (module scope), not per component instance.
+  // Sending the first message flips the route (#/ → #/c/<id>), which remounts
+  // ChatView/MessageList via the {#key} in App.svelte; an instance-scoped
+  // pick would roll a different cat during the send round-trip.
+  const nekos = Object.values(
+    import.meta.glob('../lib/neko*.png', { eager: true, query: '?url', import: 'default' })
+  );
+  const neko = nekos[Math.floor(Math.random() * nekos.length)];
+</script>
+
+<script>
+  import { app } from '../lib/state.svelte.js';
+  import { ArrowDown } from '@lucide/svelte';
+  import MessageItem from './MessageItem.svelte';
+  import Scramble from './Scramble.svelte';
+  import { Button } from '$lib/components/ui/button';
+
+  // A send is in flight and no reply is live yet (see app.outgoing).
+  let sending = $derived(!!app.outgoing && !app.live);
+
+  // Build display items: tool-result messages are folded into the preceding
+  // assistant message's tool calls; tool messages don't render standalone.
+  let items = $derived.by(() => {
+    // Pass 1: collect tool results. They are persisted AFTER the assistant
+    // message that requested them (higher seq), so a single forward pass
+    // would never match them and calls would render as pending forever.
+    const toolResults = {};
+    for (const m of app.messages) {
+      if (m.role === 'tool') toolResults[m.tool_call_id] = m;
+    }
+    // Pass 2: build display items.
+    const out = [];
+    for (const m of app.messages) {
+      if (m.role === 'tool') continue;
+      if (m.role === 'assistant') {
+        const calls = (m.tool_calls ?? []).map((tc) => {
+          const res = toolResults[tc.provider_call_id];
+          return {
+            call_id: tc.provider_call_id,
+            name: tc.name,
+            args: tc.arguments,
+            // The tool-loop turn that produced the call: MessageItem renders it
+            // under that turn's thinking block.
+            turn: tc.turn ?? 0,
+            // A just-finished generation carries its live results on the call
+            // itself; the tool messages backing them land with refreshChat.
+            result: res?.content ?? tc.result ?? '',
+            is_error: res ? (res.content || '').startsWith('Error:') : !!tc.is_error,
+            pending: res ? false : (tc.pending ?? true)
+          };
+        });
+        out.push({ msg: m, toolCalls: calls, key: m.id });
+      } else {
+        out.push({ msg: m, toolCalls: [], key: m.id });
+      }
+    }
+    // fold live tool calls into the live assistant placeholder
+    if (app.live) {
+      const idx = out.findIndex((it) => it.msg.id === app.live.messageId);
+      if (idx >= 0) out[idx].toolCalls = app.live.toolCalls;
+    }
+    // The message being sent, until the server has it (see app.outgoing).
+    // Hidden as soon as a reply is live: by then its real row is in the list.
+    if (sending) out.push({ msg: app.outgoing, toolCalls: [], key: app.outgoing.id });
+    return out;
+  });
+
+  // ---- tap-to-reveal message actions (touch) ----
+  // One message at a time, owned here so revealing another hides the previous.
+  // ponytail: no dismiss on tapping empty space — tapping another message or
+  // the same one again covers it; add a container-level listener if it annoys.
+  let revealId = $state(null);
+
+  function reveal(id) {
+    revealId = id;
+    // The row adds height under the tapped message; a pinned list follows so
+    // the actions don't land below the fold on the last message.
+    trackContent();
+  }
+
+  let lastAssistantId = $derived.by(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].msg.role === 'assistant') return items[i].msg.id;
+    }
+    return null;
+  });
+
+  // ---- auto-scroll with jump-to-bottom affordance ----
+  // Pinned = follow the stream. ANY deliberate upward scroll (wheel, touch
+  // drag, keyboard) unpins instantly so the user takes control; re-pin only
+  // when they scroll back to the bottom or hit the jump button.
+  let container = $state(null);
+  let pinned = $state(true);
+  // Whether the conversation is actually taller than the viewport — the
+  // jump-to-bottom button is pointless (and distracting) otherwise.
+  let canScroll = $state(false);
+  let lastTop = 0;
+  let lastHeight = 0;
+  // clientHeight as of the last scroll event: a difference means the box was
+  // resized, which must never be read as a scroll (see onScroll).
+  let lastBox = 0;
+  let touchStartY = null;
+
+  // Seeded from the container, else the first scroll event reads as a resize
+  // and swallows the user's first upward drag.
+  $effect(() => {
+    if (!container) return;
+    lastBox = container.clientHeight;
+  });
+
+  function isNearBottom() {
+    if (!container) return true;
+    return container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+  }
+
+  function updateCanScroll() {
+    if (!container) return;
+    canScroll = container.scrollHeight - container.clientHeight > 4;
+  }
+
+  // Content changes (stream growth, chat switch) can make the pane scrollable
+  // or remove scrollability entirely.
+  $effect(() => {
+    items.length;
+    requestAnimationFrame(updateCanScroll);
+  });
+
+  function onScroll() {
+    if (!container) return;
+    updateCanScroll();
+    const top = container.scrollTop;
+    const height = container.scrollHeight;
+    const box = container.clientHeight;
+    const resized = box !== lastBox;
+    lastBox = box;
+    if (resized) {
+      // The box changed height — soft keyboard show/hide (the native WebView
+      // resizes; mobile browsers only shrink the visual viewport), rotation,
+      // window drag. The browser clamps scrollTop into the new range and that
+      // clamp is indistinguishable from a deliberate upward scroll, so a
+      // resize never unpins; a pinned list re-pins to the new bottom instead.
+      if (pinned) scrollToBottom();
+      else {
+        lastTop = top;
+        lastHeight = height;
+      }
+      return;
+    }
+    if (height < lastHeight) {
+      // Content shrank (chat switch, history reset): the browser clamps
+      // scrollTop, which looks like an upward scroll but isn't user intent.
+    } else if (top < lastTop - 1) {
+      pinned = false;
+    } else if (top > lastTop + 1 && isNearBottom()) {
+      // Re-pin ONLY on deliberate downward movement into the near-bottom
+      // zone. Without the `top > lastTop` guard, any no-op scroll event
+      // (browser clamp adjustment, scroll anchoring, sub-pixel wobble) would
+      // re-pin — and when the whole scrollable range is smaller than the 80px
+      // near-bottom threshold, EVERY position is "near bottom", so the pane
+      // would fight the user's upward scrolls and vibrate.
+      pinned = true;
+    }
+    lastTop = top;
+    lastHeight = height;
+  }
+
+  function onWheel(e) {
+    if (e.deltaY < 0) pinned = false;
+  }
+
+  function onTouchStart(e) {
+    touchStartY = e.touches[0]?.clientY ?? null;
+  }
+
+  function onTouchMove(e) {
+    if (touchStartY == null) return;
+    const y = e.touches[0]?.clientY;
+    // Dragging a finger down pulls the content down = scrolling toward the top.
+    if (y != null && y > touchStartY + 8) pinned = false;
+  }
+
+  function scrollToBottom() {
+    if (!container) return;
+    pinned = true;
+    container.scrollTop = container.scrollHeight;
+    lastTop = container.scrollTop;
+    lastHeight = container.scrollHeight;
+  }
+
+  // Each NEW reply re-engages auto-scroll: the user scrolled up mid-stream to
+  // read, then asked again — they expect to follow the fresh answer. Keyed on
+  // the live message id (a new uuid per generation), so stream deltas of the
+  // same reply don't yank a deliberately-unpinned list back down.
+  let liveId = app.live?.messageId ?? null;
+  $effect(() => {
+    const id = app.live?.messageId ?? null;
+    if (!id || id === liveId) return;
+    liveId = id;
+    scrollToBottom();
+  });
+
+  function trackContent() {
+    updateCanScroll();
+    if (!pinned || !container) return;
+    requestAnimationFrame(() => {
+      if (!container || !pinned) return;
+      container.scrollTop = container.scrollHeight;
+      lastTop = container.scrollTop;
+      lastHeight = container.scrollHeight;
+    });
+  }
+</script>
+
+<div class="relative min-h-0 flex-1">
+  <div
+    bind:this={container}
+    role="main"
+    class="absolute inset-0 overflow-y-auto px-5 sm:px-6 [container-type:size]"
+    onscroll={onScroll}
+    onwheel={onWheel}
+    ontouchstart={onTouchStart}
+    ontouchmove={onTouchMove}
+  >
+    <div class="mx-auto max-w-4xl pb-4">
+      {#if items.length === 0}
+        <!-- cqh, not vh: the pane is a size container so this tracks the
+             animated shell height (lib/viewport.js) while the soft keyboard
+             squeezes it — a vh box resolves against the new viewport at once
+             and the cat jumps instead of gliding. 80% of the pane equals 60vh
+             once header + composer are subtracted. -->
+        <div class="flex min-h-[80cqh] flex-col items-center justify-center py-16 text-center">
+          <img src={neko} alt="neko" class="mb-4 h-24 w-auto" />
+          <h1 class="text-xl font-semibold tracking-tight">How can I てつだう?</h1>
+        </div>
+      {/if}
+      {#each items as item (item.key)}
+        <MessageItem
+          {item}
+          isLive={!!app.live && app.live.messageId === item.msg.id}
+          isLastAssistant={item.msg.id === lastAssistantId}
+          track={trackContent}
+          revealed={revealId === item.msg.id}
+          onreveal={reveal}
+        />
+      {/each}
+      {#if sending}
+        <!-- Same spot the reply's row takes over (MessageItem's mt-6 wrapper). -->
+        <div class="mt-6"><Scramble /></div>
+      {/if}
+      <div class="h-2"></div>
+    </div>
+  </div>
+
+  {#if !pinned && canScroll}
+    <Button
+      variant="outline"
+      size="icon"
+      class="pop-in bounce-hint absolute bottom-4 left-1/2 size-9 -translate-x-1/2 rounded-full border-border bg-background shadow-md hover:bg-accent hover:text-accent-foreground dark:bg-background dark:hover:bg-accent"
+      title="Jump to bottom"
+      onclick={scrollToBottom}
+    >
+      <ArrowDown class="size-4" strokeWidth={1.75} aria-hidden="true" />
+    </Button>
+  {/if}
+</div>

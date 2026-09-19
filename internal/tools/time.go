@@ -1,0 +1,49 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"chattoneko/internal/mcphub"
+)
+
+// envLocationString is the environment variable that optionally supplies a
+// free-form location string (e.g. "Berlin, Germany"). When set (non-empty
+// after trimming), the time tool appends it to its result so the
+// model can ground place-aware answers; when unset, nothing is appended.
+const envLocationString = "CHATTO_LOCATION_STRING"
+
+// Read once, like every other CHATTO_ variable: a process's environment never
+// changes underneath it, so there is nothing for a later call to see.
+var locationString = strings.TrimSpace(os.Getenv(envLocationString))
+
+// The "time" tool: returns the server's current local date, time and
+// timezone — plus its configured location when CHATTO_LOCATION_STRING is set —
+// so the model can ground relative expressions ("tomorrow", "next Friday", "in
+// two hours") and place-aware answers ("near me", "local").
+var Time = tool{
+	Name: "time",
+	Description: "Get the current date, time, timezone, and — when the " +
+		"server has one configured — location. Call this when the answer " +
+		"depends on what day or time it is now, or on where the user is.",
+	Schema:         nil, // defaults to an empty object schema
+	DefaultEnabled: true,
+	Title:          "Checking the time…",
+	Handler:        reportTime,
+}
+
+// timeLayout is the human-readable part of the result; the RFC 3339
+// timestamp appended after it keeps the answer machine-unambiguous.
+const timeLayout = "Monday, 2 January 2006, 15:04:05 MST"
+
+func reportTime(_ context.Context, _ string, _ mcphub.CallMeta) (string, error) {
+	now := time.Now()
+	out := fmt.Sprintf("%s (%s)", now.Format(timeLayout), now.Format(time.RFC3339))
+	if locationString != "" {
+		out += " — " + locationString
+	}
+	return out, nil
+}

@@ -1,0 +1,1228 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"mime"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"chattoneko/internal/attach"
+	"chattoneko/internal/auth"
+	"chattoneko/internal/config"
+	"chattoneko/internal/engine"
+	"chattoneko/internal/mcphub"
+	"chattoneko/internal/media"
+	"chattoneko/internal/provider"
+	"chattoneko/internal/store"
+)
+
+const maxUploadFiles = 8
+
+// ---- shared handler plumbing ----
+
+// chatByID fetches a chat, answering 404 when it does not exist and 500 on
+// store errors. On failure the response is already written and ok is false.
+func (s *Server) chatByID(w http.ResponseWriter, ctx context.Context, id string) (*store.Chat, bool) {
+	chat, err := s.store.GetChat(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "chat not found")
+		return nil, false
+	}
+	if err != nil {
+		internalError(w, "get chat", err)
+		return nil, false
+	}
+	return chat, true
+}
+
+// chatExists answers 404 when the chat is missing and 500 on store errors,
+// reporting whether the handler can proceed. (A store failure must not
+// surface as "chat not found".)
+func (s *Server) chatExists(w http.ResponseWriter, ctx context.Context, id string) bool {
+	ok, err := s.store.ChatExists(ctx, id)
+	if err != nil {
+		internalError(w, "check chat", err)
+		return false
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "chat not found")
+	}
+	return ok
+}
+
+// startClaimedGeneration consumes the generation claim held by the caller:
+// it starts the generation and answers 500 on failure. On success it bumps
+// the chat timestamp and returns the new assistant message.
+func (s *Server) startClaimedGeneration(w http.ResponseWriter, r *http.Request, chatID string) (*store.Message, bool) {
+	am, err := s.engine.StartClaimedGeneration(r.Context(), chatID)
+	if err != nil {
+		internalError(w, "start generation", err)
+		return nil, false
+	}
+	if err := s.store.TouchChat(r.Context(), chatID); err != nil {
+		slog.Warn("touch chat", "chat", chatID, "error", err)
+	}
+	return am, true
+}
+
+// message_attachments.message_id carries ON DELETE CASCADE, so deleting
+// messages unlinks their files; the blobs themselves wait for
+// DeleteOrphanAttachments.
+// ponytail: that sweep only runs at startup — move it to a ticker if a
+// long-lived server's disk notices.
+
+// attachmentByID fetches an attachment, answering 404 when it does not
+// exist and 500 on store errors. On failure the response is already
+// written and ok is false.
+func (s *Server) attachmentByID(w http.ResponseWriter, ctx context.Context, id string) (*store.Attachment, bool) {
+	att, err := s.store.GetAttachment(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return nil, false
+	}
+	if err != nil {
+		internalError(w, "get attachment", err)
+		return nil, false
+	}
+	return att, true
+}
+
+// ---- auth ----
+
+func (s *Server) handleMeta(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"auth_enabled":   s.auth.Enabled(),
+		"setup_complete": s.cfg.Complete(),
+		// Immutable for the process lifetime and public (the image tag /
+		// release name), so it rides along on the boot probe the SPA already
+		// makes — the sidebar's version line needs no extra call.
+		"version": s.version,
+	})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+	token, err := s.auth.Login(body.Username, body.Password)
+	if err != nil {
+		if errors.Is(err, auth.ErrRateLimited) {
+			writeError(w, http.StatusTooManyRequests, "too many login attempts")
+			return
+		}
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"username": s.auth.Username(), "token": token})
+}
+
+func (s *Server) handleMe(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"username": s.auth.Username()})
+}
+
+// ---- config ----
+
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg.Get()
+	info := s.engine.ModelInfo(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"models": map[string]any{
+			"whitelist":            chatModels(cfg.Models.Whitelist, info),
+			"default_chat_model":   cfg.Models.DefaultChatModel,
+			"default_vision_model": cfg.Models.DefaultVisionModel,
+		},
+		"model_info": info,
+		"tools":      s.tools.Tools(),
+		// Whether the read-aloud action can work at all: the chat UI hides the
+		// button when no speech model is designated. The id itself is a setup
+		// detail and stays out of this response.
+		"speech_enabled": cfg.Models.DefaultSpeechModel != "",
+		"limits": map[string]any{
+			"upload_max_file_bytes": cfg.Limits.UploadMaxFileBytes,
+			"max_tool_iterations":   cfg.Limits.MaxToolIterations,
+			// Exposed so the client can validate attachments it stages
+			// locally before uploading them at send time (no upload at
+			// attach time).
+			"max_upload_files":     maxUploadFiles,
+			"max_raw_upload_bytes": attach.MaxRawUploadBytes,
+		},
+	})
+}
+
+// ---- setup ----
+//
+// The setup endpoints expose the full server configuration — secrets
+// included — for the initial setup flow and later admin edits: the settings
+// UI displays and edits the provider API key and MCP header values in
+// plain text. Auth is not exposed here at all (it is env-var driven).
+
+// setupConfigJSON is the full config view returned by GET /api/setup.
+func setupConfigJSON(c *config.Config, metas []config.ModelMeta) map[string]any {
+	servers := make([]map[string]any, 0, len(c.MCPServers))
+	for _, s := range c.MCPServers {
+		// Go marshals maps with sorted keys, so the JSON stays deterministic
+		// (the settings UI compares snapshots to detect unsaved edits).
+		headers := s.Headers
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		servers = append(servers, map[string]any{
+			"name":            s.Name,
+			"transport":       s.Transport,
+			"url":             s.URL,
+			"headers":         headers,
+			"default_enabled": s.DefaultEnabled,
+		})
+	}
+	toolDefaults := c.ToolDefaults
+	if toolDefaults == nil {
+		toolDefaults = map[string]bool{}
+	}
+	toolTitles := c.ToolTitles
+	if toolTitles == nil {
+		toolTitles = map[string]string{}
+	}
+	return map[string]any{
+		"system_prompt": c.SystemPrompt,
+		"provider": map[string]any{
+			"base_url":    c.Provider.BaseURL,
+			"api_key":     c.Provider.APIKey,
+			"api_key_set": c.Provider.APIKey != "",
+		},
+		"models": map[string]any{
+			"whitelist":                   c.Models.Whitelist,
+			"default_chat_model":          c.Models.DefaultChatModel,
+			"default_task_model":          c.Models.DefaultTaskModel,
+			"default_vision_model":        c.Models.DefaultVisionModel,
+			"default_document_model":      c.Models.DefaultDocumentModel,
+			"default_transcription_model": c.Models.DefaultTranscriptionModel,
+			"default_speech_model":        c.Models.DefaultSpeechModel,
+			"speech_voice":                c.Models.SpeechVoice,
+			"metas":                       metas,
+		},
+		"mcp_servers": servers,
+		// Global per-tool default toggles. Go marshals maps with sorted keys,
+		// so the JSON stays deterministic (the settings UI compares snapshots
+		// to detect unsaved edits).
+		"tool_defaults": toolDefaults,
+		// Global per-tool user-facing titles (MCP tools; integrated tools are
+		// hardcoded). Same determinism note as above.
+		"tool_titles": toolTitles,
+		"limits": map[string]any{
+			"upload_max_file_bytes":    c.Limits.UploadMaxFileBytes,
+			"max_tool_iterations":      c.Limits.MaxToolIterations,
+			"mcp_call_timeout_seconds": c.Limits.MCPCallTimeoutSeconds,
+		},
+		// Auth is deliberately omitted: it is env-var driven (CHATTO_USERNAME /
+		// CHATTO_PASSWORD), fixed at startup, and not editable through the API.
+	}
+}
+
+func (s *Server) handleGetSetup(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg.Get()
+	metas, err := s.cfg.ModelMetas(r.Context(), cfg.Models.Whitelist)
+	if err != nil {
+		internalError(w, "load model metadata", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"complete": s.cfg.Complete(),
+		"config":   setupConfigJSON(cfg, metas),
+	})
+}
+
+// handlePutSetup applies a partial config update. Only the fields present in
+// the body change; absent fields keep their current value. Auth has no
+// representation here: it is env-var driven and the patch carries no auth
+// fields, so any auth keys in the body are dropped by the decode. On
+// success the new (full) config is returned.
+func (s *Server) handlePutSetup(w http.ResponseWriter, r *http.Request) {
+	var patch config.Patch
+	if err := decodeJSON(w, r, &patch); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+	if _, err := s.cfg.Update(r.Context(), patch); err != nil {
+		var verr *config.ValidationError
+		if errors.As(err, &verr) {
+			writeError(w, http.StatusBadRequest, verr.Error())
+		} else {
+			internalError(w, "save settings", err)
+		}
+		return
+	}
+	s.handleGetSetup(w, r)
+}
+
+// handleSetupModels fetches metadata for one or more models from the
+// provider's /models endpoint (when configured and reachable) and stores it
+// in the models table. The request may carry unsaved base_url/api_key
+// overrides from the settings UI; empty fields fall back to the stored
+// provider config. Every requested id gets a row: fields the provider
+// doesn't report fall back to the spec defaults, so models on providers
+// without OpenRouter-style /models data still get usable metadata.
+func (s *Server) handleSetupModels(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ModelIDs []string `json:"model_ids"`
+		// Optional unsaved provider credentials from the settings UI. When
+		// present they take precedence over the stored provider config, so a
+		// freshly typed base URL + API key works before the form is saved.
+		BaseURL string `json:"base_url"`
+		APIKey  string `json:"api_key"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+	// Dedup + trim; keep first-seen order.
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(body.ModelIDs))
+	for _, id := range body.ModelIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		writeError(w, http.StatusBadRequest, "model_ids must be a non-empty array of model ids")
+		return
+	}
+
+	cfg := s.cfg.Get()
+	// Resolve the provider to query: explicit overrides win; anything left
+	// empty falls back to the stored (database) provider config.
+	baseURL := strings.TrimSpace(body.BaseURL)
+	if baseURL == "" {
+		baseURL = cfg.Provider.BaseURL
+	}
+	apiKey := body.APIKey
+	if apiKey == "" {
+		apiKey = cfg.Provider.APIKey
+	}
+	var (
+		fetched  []provider.FetchedModel
+		fetchErr error
+	)
+	if baseURL != "" {
+		fetched, fetchErr = provider.FetchModels(r.Context(), baseURL, apiKey)
+	}
+	byID := map[string]provider.FetchedModel{}
+	for _, f := range fetched {
+		byID[f.ID] = f
+	}
+
+	metas := make([]config.ModelMeta, 0, len(ids))
+	sources := make(map[string]string, len(ids))
+	for _, id := range ids {
+		f, found := byID[id]
+		var m config.ModelMeta
+		if found {
+			m = metaFromFetched(id, f)
+			sources[id] = "provider"
+		} else {
+			m = config.DefaultModelMeta(id)
+			sources[id] = "defaults"
+		}
+		metas = append(metas, m)
+	}
+	if err := s.cfg.UpsertModelMetas(r.Context(), metas); err != nil {
+		internalError(w, "store model metadata", err)
+		return
+	}
+
+	resp := map[string]any{
+		"models": metas,
+		"source": sources,
+	}
+	switch {
+	case baseURL == "":
+		resp["provider"] = "not configured; defaults stored"
+	case fetchErr != nil:
+		resp["provider"] = "unreachable (" + fetchErr.Error() + "); defaults stored"
+	default:
+		resp["provider"] = "ok"
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSetupMCPTools lists ONE MCP server's tools without saving or
+// connecting it: the settings UI's per-card "Fetch" button posts that
+// card's current (possibly unsaved) name/url/headers and gets the tool list
+// back, so a brand-new server's tools can be toggled before the first save.
+// The dial is a throwaway session — the hub's live connections and the tool
+// catalog are untouched, and nothing is persisted. The endpoint sits behind
+// auth, and saving the same card makes the hub dial the posted URL anyway.
+func (s *Server) handleSetupMCPTools(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name    string            `json:"name"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+	sc := config.MCPServerConfig{
+		Name:      strings.TrimSpace(body.Name),
+		Transport: "http", // the only supported transport
+		URL:       strings.TrimSpace(body.URL),
+		Headers:   body.Headers,
+		// What a save stores for every server, so a fetched tool without an
+		// explicit override reads as enabled.
+		DefaultEnabled: true,
+	}
+	if sc.URL == "" {
+		writeError(w, http.StatusBadRequest, "url is required")
+		return
+	}
+	entries, err := mcphub.Probe(r.Context(), sc)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "could not list tools: "+err.Error())
+		return
+	}
+	// Name + description + the server's own display title is all the card
+	// renders; the schemas stay server-side.
+	tools := make([]map[string]string, 0, len(entries))
+	for _, e := range entries {
+		tools = append(tools, map[string]string{"name": e.Display, "description": e.Description, "title": e.Title})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
+}
+
+// chatModels drops whitelist ids the chat picker must not offer: a legacy row
+// on a route that is not /chat/completions (an audio model whitelisted before
+// those became free-standing ids) and a chat model whose metadata offers no
+// "text" input. Ids with no metadata (defaults = chat + text) are kept.
+func chatModels(whitelist []string, metas []config.ModelMeta) []string {
+	byID := make(map[string]config.ModelMeta, len(metas))
+	for _, m := range metas {
+		byID[m.ModelID] = m
+	}
+	out := make([]string, 0, len(whitelist))
+	for _, id := range whitelist {
+		if m, ok := byID[id]; !ok || (m.Endpoint == config.EndpointChat && slices.Contains(m.InputModality, "text")) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// metaFromFetched builds one stored ModelMeta from provider-reported data,
+// falling back per field to the spec defaults for everything the provider
+// didn't report.
+func metaFromFetched(id string, f provider.FetchedModel) config.ModelMeta {
+	m := config.DefaultModelMeta(id)
+	if len(f.InputModalities) > 0 {
+		m.InputModality = f.InputModalities
+	}
+	if f.ContextLength > 0 {
+		m.ContextLength = f.ContextLength
+	}
+	if len(f.ReasoningEfforts) > 0 {
+		m.ReasoningEfforts = append([]string(nil), f.ReasoningEfforts...)
+		m.ReasoningDefault = f.ReasoningDefault
+	}
+	config.SanitizeMeta(&m)
+	return m
+}
+
+// ---- chats ----
+
+func (s *Server) handleListChats(w http.ResponseWriter, r *http.Request) {
+	limit := int64(50)
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	var before int64
+	beforeID := r.URL.Query().Get("before_id")
+	if v := r.URL.Query().Get("before"); v != "" {
+		before, _ = strconv.ParseInt(v, 10, 64)
+	}
+	// Title + content search: when q is present, return matching chats instead
+	// of the recent-conversations page.
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		found, err := s.store.SearchChats(r.Context(), q, 50)
+		if err != nil {
+			internalError(w, "search chats", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"chats": s.annotateGenerating(found)})
+		return
+	}
+	chats, err := s.store.ListChats(r.Context(), limit, before, beforeID)
+	if err != nil {
+		internalError(w, "list chats", err)
+		return
+	}
+	// The pinned section rides along on the FIRST page only (no cursor): it
+	// is the complete list, so later pages have nothing to add to it.
+	out := map[string]any{"chats": s.annotateGenerating(chats)}
+	if before == 0 && beforeID == "" {
+		pinned, err := s.store.ListPinnedChats(r.Context())
+		if err != nil {
+			internalError(w, "list pinned chats", err)
+			return
+		}
+		out["pinned"] = s.annotateGenerating(pinned)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// chatListItem is a chat plus its live generation state (used by the sidebar
+// breathing title; background chats have no SSE stream to learn it from).
+type chatListItem struct {
+	*store.Chat
+	Generating bool `json:"generating"`
+}
+
+func (s *Server) annotateGenerating(chats []*store.Chat) []chatListItem {
+	out := make([]chatListItem, 0, len(chats))
+	for _, c := range chats {
+		out = append(out, chatListItem{Chat: c, Generating: s.engine.HasActiveGeneration(c.ID)})
+	}
+	return out
+}
+
+func (s *Server) handleCreateChat(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Model  string           `json:"model"`
+		Params *store.GenParams `json:"params"`
+		// Session-scoped tool overrides chosen before the chat exists; the
+		// frontend resets them to config defaults on the next chat switch or
+		// page refresh, so they are not user-persistent settings.
+		Tools map[string]bool `json:"tools"`
+	}
+	// An empty body is fine (default chat); malformed JSON is not.
+	if err := decodeJSON(w, r, &body); err != nil && !errors.Is(err, io.EOF) {
+		writeBodyError(w, err)
+		return
+	}
+	model := body.Model
+	if model == "" {
+		model = s.cfg.Get().Models.DefaultChatModel
+	}
+	params := store.GenParams{}
+	if body.Params != nil {
+		params = *body.Params
+	}
+	tools := body.Tools
+	if tools == nil {
+		tools = map[string]bool{}
+	}
+	chat, err := s.store.CreateChat(r.Context(), model, params, tools)
+	if err != nil {
+		internalError(w, "create chat", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"chat": chat})
+}
+
+func (s *Server) handleGetChat(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	chat, ok := s.chatByID(w, r.Context(), id)
+	if !ok {
+		return
+	}
+	msgs, err := s.store.ListMessages(r.Context(), id)
+	if err != nil {
+		internalError(w, "list messages", err)
+		return
+	}
+	promptTotal, completionTotal, err := s.store.ChatTokenTotals(r.Context(), id)
+	if err != nil {
+		internalError(w, "chat usage", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"chat":     chat,
+		"messages": msgs,
+		"active":   s.engine.HasActiveGeneration(id),
+		"usage": map[string]any{
+			"prompt_tokens":     promptTotal,
+			"completion_tokens": completionTotal,
+		},
+	})
+}
+
+func (s *Server) handlePatchChat(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	chat, ok := s.chatByID(w, r.Context(), id)
+	if !ok {
+		return
+	}
+	var body struct {
+		Title  *string          `json:"title"`
+		Model  *string          `json:"model"`
+		Params *store.GenParams `json:"params"`
+		Tools  *map[string]bool `json:"tools"`
+		Pinned *bool            `json:"pinned"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+
+	if body.Title != nil {
+		if err := s.store.UpdateChatTitle(r.Context(), id, *body.Title); err != nil {
+			internalError(w, "update chat title", err)
+			return
+		}
+		s.engine.BroadcastChat(id, engine.WireEvent{Type: "chat_updated", Title: *body.Title})
+	}
+	if body.Pinned != nil {
+		if err := s.store.SetChatPinned(r.Context(), id, *body.Pinned); err != nil {
+			internalError(w, "set chat pinned", err)
+			return
+		}
+	}
+	if body.Model != nil || body.Params != nil || body.Tools != nil {
+		model := chat.Model
+		if body.Model != nil {
+			model = *body.Model
+		}
+		params := chat.Params
+		if body.Params != nil {
+			params = *body.Params
+		}
+		tools := chat.Tools
+		if body.Tools != nil {
+			tools = *body.Tools
+		}
+		if err := s.store.UpdateChatSettings(r.Context(), id, model, params, tools); err != nil {
+			internalError(w, "update chat settings", err)
+			return
+		}
+	}
+	updated, err := s.store.GetChat(r.Context(), id)
+	if err != nil {
+		internalError(w, "patch chat: reload", err)
+		return
+	}
+	if body.Model != nil || body.Params != nil || body.Tools != nil {
+		// Broadcast carries the fresh chat so other clients apply settings
+		// without a refetch.
+		s.engine.BroadcastChat(id, engine.WireEvent{Type: "settings_updated", Chat: updated})
+	}
+	if body.Pinned != nil {
+		// Full chat on the wire: a client that never loaded this row (an old
+		// chat beyond its first page) can still materialize it in the pinned
+		// section instead of waiting for a refetch.
+		s.engine.BroadcastChat(id, engine.WireEvent{Type: "chat_updated", Chat: updated})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"chat": updated})
+}
+
+func (s *Server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.engine.CancelForChatDeletion(id)
+	// Detached: CancelForChatDeletion already told the turn loop to skip its
+	// finalize, so a client disconnect landing on this delete would leave the
+	// chat alive with an assistant row stuck in `generating` and no hub.
+	if err := s.store.DeleteChat(context.WithoutCancel(r.Context()), id); err != nil {
+		internalError(w, "delete chat", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---- messages ----
+
+func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.chatExists(w, r.Context(), id) {
+		return
+	}
+	// Claim the generation slot BEFORE persisting anything: a concurrent
+	// request (cross-tab race) loses the claim up front instead of getting a
+	// 409 after leaving an unanswered user message behind.
+	if err := s.engine.ClaimGeneration(id); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	release := func() { s.engine.ReleaseClaim(id) }
+	// Once the claim is ours, a client that vanishes mid-request (app killed,
+	// tab closed on a slow link) must not abort the persistence: the
+	// generation itself already runs on the server context, so a canceled
+	// r.Context() here would leave a user message with no reply.
+	ctx := context.WithoutCancel(r.Context())
+	var body struct {
+		Content       string   `json:"content"`
+		AttachmentIDs []string `json:"attachment_ids"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		release()
+		writeBodyError(w, err)
+		return
+	}
+	if len(body.AttachmentIDs) > maxUploadFiles {
+		release()
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("too many attachments (max %d)", maxUploadFiles))
+		return
+	}
+	if strings.TrimSpace(body.Content) == "" && len(body.AttachmentIDs) == 0 {
+		release()
+		writeError(w, http.StatusBadRequest, "message content is empty")
+		return
+	}
+	// Every referenced attachment must exist and belong to this chat: the
+	// link query silently affects zero rows for foreign ids, which would
+	// drop attachments from the message without any error.
+	for _, aid := range body.AttachmentIDs {
+		owner, err := s.store.AttachmentChatID(ctx, aid)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && owner != id) {
+			release()
+			writeError(w, http.StatusBadRequest, "attachment not found in this chat")
+			return
+		}
+		if err != nil {
+			release()
+			internalError(w, "check attachment", err)
+			return
+		}
+	}
+
+	msg, err := s.store.CreateMessage(ctx, store.NewMessageParams{
+		ChatID:  id,
+		Role:    store.RoleUser,
+		Status:  store.StatusComplete,
+		Content: body.Content,
+	})
+	if err != nil {
+		release()
+		internalError(w, "create user message", err)
+		return
+	}
+	for _, aid := range body.AttachmentIDs {
+		if err := s.store.LinkAttachmentToMessage(ctx, aid, msg.ID, id); err != nil {
+			release()
+			internalError(w, "link attachment", err)
+			return
+		}
+	}
+	// Reload with attachments for the broadcast.
+	full, err := s.store.GetMessage(ctx, msg.ID)
+	if err != nil {
+		release()
+		internalError(w, "reload user message", err)
+		return
+	}
+	atts, err := s.store.ListAttachmentsByMessage(ctx, msg.ID)
+	if err != nil {
+		release()
+		internalError(w, "reload attachments", err)
+		return
+	}
+	full.Attachments = atts
+	s.engine.BroadcastChat(id, engine.WireEvent{Type: "user_message", Message: full})
+
+	// startClaimedGeneration consumes the claim (releases it on failure).
+	am, ok := s.startClaimedGeneration(w, r, id)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"chat_id":              id,
+		"user_message":         full,
+		"assistant_message_id": am.ID,
+	})
+}
+
+func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	mid := r.PathValue("mid")
+	var body struct {
+		Content string `json:"content"`
+		// AttachmentIDs, when present, is the full keep-list for the
+		// message: attachments linked to it but absent from the list are
+		// deleted. Nil (omitted) means "leave attachments untouched".
+		AttachmentIDs *[]string `json:"attachment_ids"`
+	}
+	// Decode before claiming: CancelAndClaim stops the running generation, so
+	// a request that is going to be rejected for a malformed body must not
+	// destroy the answer the user is watching.
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+	// Claim BEFORE reading: the edit truncates everything after the message
+	// and re-generates, so reading first would race a concurrently finishing
+	// edit/regenerate (the message may already be deleted — the content
+	// update would silently affect zero rows — or its seq shifted,
+	// truncating the wrong range).
+	//
+	// An edit rewrites history, so unlike send/regenerate it does NOT 409 on a
+	// running generation: that one is stopped and the reply re-generated from
+	// the edited message. CancelAndClaim waits for the stopped turn loop to
+	// exit, so the truncation below can't race its writes.
+	if err := s.engine.CancelAndClaim(id); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	release := func() { s.engine.ReleaseClaim(id) }
+	// Detached like handleSendMessage: an edit truncates history, and a
+	// client disconnect between truncation and start must not strand it.
+	ctx := context.WithoutCancel(r.Context())
+
+	msg, err := s.store.GetMessage(ctx, mid)
+	if errors.Is(err, store.ErrNotFound) {
+		release()
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	if err != nil {
+		release()
+		internalError(w, "get message", err)
+		return
+	}
+	if msg.ChatID != id {
+		release()
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	if msg.Role != store.RoleUser {
+		release()
+		writeError(w, http.StatusBadRequest, "only user messages can be edited")
+		return
+	}
+	current, err := s.store.ListAttachmentsByMessage(ctx, mid)
+	if err != nil {
+		release()
+		internalError(w, "list attachments", err)
+		return
+	}
+	// Resolve which attachments (if any) the edit removes, validating the
+	// keep-list against the attachments actually linked to this message.
+	var removeIDs []string
+	keepCount := len(current)
+	if body.AttachmentIDs != nil {
+		keep := make(map[string]bool, len(*body.AttachmentIDs))
+		for _, aid := range *body.AttachmentIDs {
+			keep[aid] = true
+		}
+		keepCount = 0
+		for _, a := range current {
+			if keep[a.ID] {
+				keepCount++
+				delete(keep, a.ID)
+			} else {
+				removeIDs = append(removeIDs, a.ID)
+			}
+		}
+		if len(keep) > 0 {
+			release()
+			writeError(w, http.StatusBadRequest, "attachment id not linked to this message")
+			return
+		}
+	}
+	if strings.TrimSpace(body.Content) == "" && keepCount == 0 {
+		release()
+		writeError(w, http.StatusBadRequest, "message content is empty")
+		return
+	}
+	if err := s.store.UpdateUserMessageContent(ctx, mid, body.Content); err != nil {
+		release()
+		internalError(w, "update user message", err)
+		return
+	}
+	for _, aid := range removeIDs {
+		if err := s.store.DeleteAttachment(ctx, aid, mid); err != nil {
+			release()
+			internalError(w, "delete attachment", err)
+			return
+		}
+	}
+	// Delete every message after this one, then re-generate from here.
+	if err := s.store.DeleteMessagesAfterSeq(ctx, id, msg.Seq); err != nil {
+		release()
+		internalError(w, "truncate history", err)
+		return
+	}
+	// Attachments of the deleted messages unlink themselves (FK cascade).
+	s.engine.BroadcastChat(id, engine.WireEvent{Type: "messages_reset"})
+	// startClaimedGeneration consumes the claim (releases it on failure).
+	am, ok := s.startClaimedGeneration(w, r, id)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"chat_id":              id,
+		"assistant_message_id": am.ID,
+	})
+}
+
+func (s *Server) handleRegenerate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	// Claim BEFORE locating the last assistant message: reading first would
+	// race a concurrently finishing regenerate, whose freshly generated
+	// messages sit after the stale seq and would be truncated along with the
+	// intended ones.
+	if err := s.engine.ClaimGeneration(id); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	release := func() { s.engine.ReleaseClaim(id) }
+	ctx := context.WithoutCancel(r.Context()) // see handleSendMessage
+
+	last, err := s.store.LastAssistantMessage(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		release()
+		writeError(w, http.StatusNotFound, "no assistant message to regenerate")
+		return
+	}
+	if err != nil {
+		release()
+		internalError(w, "last assistant message", err)
+		return
+	}
+	// Delete the last assistant message AND everything after it.
+	if err := s.store.DeleteMessagesFromSeq(ctx, id, last.Seq); err != nil {
+		release()
+		internalError(w, "truncate history", err)
+		return
+	}
+	s.engine.BroadcastChat(id, engine.WireEvent{Type: "messages_reset"})
+	// startClaimedGeneration consumes the claim (releases it on failure).
+	am, ok := s.startClaimedGeneration(w, r, id)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"chat_id":              id,
+		"assistant_message_id": am.ID,
+	})
+}
+
+func (s *Server) handleStopGeneration(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.engine.StopGeneration(id) {
+		writeError(w, http.StatusNotFound, "no active generation")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---- SSE ----
+
+// handleStream is the app's ONE SSE endpoint. Browsers cap an origin at 6
+// concurrent HTTP/1.1 connections, so a tab multiplexes both halves over a
+// single connection instead of one socket per event kind:
+//
+//	GET /api/stream                      lifecycle + title events, all chats
+//	GET /api/stream?chat=<id>&after=<n>  ... plus chat <id>'s replayable half
+//
+// A chat id that does not exist just yields `idle` on its half (openChat's
+// own GET is what reports a missing chat); 404ing here would cut the
+// sidebar's lifecycle events too and leave the client retry-looping.
+//
+// The subscribed chat's lifecycle events arrive on BOTH halves (deliver fans
+// every chat event out to global subscribers). They carry the same seq, and
+// the client's per-chat dedupe drops the second copy.
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	q := r.URL.Query()
+	var after int64
+	if v := q.Get("after"); v != "" {
+		after, _ = strconv.ParseInt(v, 10, 64)
+	}
+
+	gch, gunsub := s.engine.SubscribeGlobal()
+	defer gunsub()
+	// A nil channel blocks forever in a select, which is exactly the
+	// no-chat-subscribed case (home view).
+	var cch <-chan engine.WireEvent
+	if id := q.Get("chat"); id != "" {
+		var cunsub func()
+		cch, cunsub = s.engine.Subscribe(id, after, q.Get("epoch"))
+		defer cunsub()
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	emit := func(ev engine.WireEvent) bool {
+		data, err := json.Marshal(ev)
+		if err != nil {
+			return true // unencodable payload: skip the event, keep the stream
+		}
+		if _, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", data); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		// A CLOSED channel means this subscriber was detached (its buffer
+		// filled up): end the stream, the client reconnects and the
+		// snapshot + replay cover the gap.
+		case ev, ok := <-gch:
+			if !ok || !emit(ev) {
+				return
+			}
+		case ev, ok := <-cch:
+			if !ok || !emit(ev) {
+				return
+			}
+		case <-ticker.C:
+			// A real event, not an SSE comment: EventSource never surfaces
+			// comments, so the client could not tell a quiet stream from a
+			// half-open socket. Clients reconnect after ~3 missed pings.
+			if !emit(engine.WireEvent{Type: "ping"}) {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// ---- attachments ----
+
+// convertTimeout bounds one file's ffmpeg run: the server carries no
+// WriteTimeout (it would kill SSE), so nothing else stops a wedged conversion.
+// Per file — a full maxUploadFiles upload gets one of these each.
+const convertTimeout = 2 * time.Minute
+
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.chatExists(w, r.Context(), id) {
+		return
+	}
+	// Every file is read whole before it is converted, so the raw per-file
+	// ceiling is what bounds the body (the stored cap is measured against the
+	// conversion's output, which nobody has seen yet). This only guards the
+	// whole multipart read against pathological sizes.
+	maxTotal := int64(attach.MaxRawUploadBytes)*maxUploadFiles + 64*1024
+	r.Body = http.MaxBytesReader(w, r.Body, maxTotal)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "multipart parse: "+err.Error())
+		return
+	}
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		writeError(w, http.StatusBadRequest, `no files in form field "files"`)
+		return
+	}
+	if len(files) > maxUploadFiles {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("too many files (max %d)", maxUploadFiles))
+		return
+	}
+	cfg := s.cfg.Get()
+	maxFileBytes := cfg.Limits.UploadMaxFileBytes
+	out := make([]*store.AttachmentMeta, 0, len(files))
+	// rollback deletes the attachments stored so far when a later file
+	// fails: orphans are only swept at startup, so a rejected file must not
+	// leave its predecessors behind in the database. They are unlinked, so
+	// DeleteAttachment with an empty message id hits. Detached from the
+	// request: the usual trigger is a client disconnect, whose canceled
+	// context would make every delete fail and strand exactly the rows this
+	// exists to clean up.
+	rollbackCtx := context.WithoutCancel(r.Context())
+	rollback := func() {
+		for _, m := range out {
+			if err := s.store.DeleteAttachment(rollbackCtx, m.ID, ""); err != nil {
+				slog.Warn("rollback attachment", "id", m.ID, "error", err)
+			}
+		}
+	}
+	// reject rolls back and answers with the status the failure's sentinel
+	// implies: a file that is not what its name claimed, or that could not be
+	// converted to what the database stores, is a 415.
+	reject := func(name string, err error) {
+		rollback()
+		switch {
+		case errors.Is(err, attach.ErrUnsupported):
+			writeError(w, http.StatusUnsupportedMediaType, name+": "+err.Error())
+		case errors.Is(err, attach.ErrTooLarge):
+			writeError(w, http.StatusRequestEntityTooLarge, name+": "+err.Error())
+		case errors.Is(err, context.DeadlineExceeded):
+			writeError(w, http.StatusGatewayTimeout, name+": the conversion timed out")
+		default:
+			writeError(w, http.StatusBadRequest, name+": "+err.Error())
+		}
+	}
+	for _, fh := range files {
+		name, err := attach.CleanFilename(fh.Filename)
+		if err != nil {
+			rollback()
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// The multipart header already carries the size, so a file over the raw
+		// ceiling is refused before its bytes are read into memory.
+		if fh.Size > attach.MaxRawUploadBytes {
+			reject(name, attach.ErrTooLarge)
+			return
+		}
+		f, err := fh.Open()
+		if err != nil {
+			rollback()
+			internalError(w, "open upload", err)
+			return
+		}
+		// Per-file read cap (MaxBytesReader above only bounds the whole body):
+		// keep one pathological file from filling RAM before the size check can
+		// reject it.
+		// ponytail: the whole file is held in RAM (64 MiB worst case, one file at
+		// a time) because Classify needs bytes for the text check; hand media
+		// straight to media as an io.Reader if a big upload ever hurts.
+		data, err := io.ReadAll(io.LimitReader(f, attach.MaxRawUploadBytes+1))
+		_ = f.Close()
+		if err != nil {
+			rollback()
+			writeError(w, http.StatusBadRequest, "read upload: "+err.Error())
+			return
+		}
+		res, err := attach.Classify(name, data, maxFileBytes)
+		if err == nil {
+			// Media is stored as its conversion, never as it arrived: the temp
+			// files media runs ffmpeg over are gone by the time this returns,
+			// whatever it returned.
+			convCtx, cancelConv := context.WithTimeout(r.Context(), convertTimeout)
+			data, err = media.Prepare(convCtx, res, data, maxFileBytes)
+			cancelConv()
+		}
+		if err != nil {
+			reject(name, err)
+			return
+		}
+		meta, err := s.store.CreateAttachment(r.Context(), id, res.Name, res.Kind, res.Mime, int64(len(data)), data)
+		if err != nil {
+			rollback()
+			internalError(w, "store attachment", err)
+			return
+		}
+		out = append(out, meta)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"attachments": out})
+}
+
+func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
+	att, ok := s.attachmentByID(w, r.Context(), r.PathValue("id"))
+	if !ok {
+		return
+	}
+	// Images are served inline under their stored mime — the closed set in
+	// attach's media tables (png, webp, jpeg, gif, bmp), none of which can
+	// carry script; an SVG never reaches this branch because it classifies as
+	// text. Text attachments are served as
+	// text/plain regardless of their stored mime so an HTML/SVG upload can
+	// never execute in the app's origin, and binary ones as octet-stream for
+	// the same reason — which also makes the browser download rather than
+	// preview. Non-image downloads get the real filename via
+	// Content-Disposition.
+	ctype := "text/plain; charset=utf-8"
+	switch att.Kind {
+	case attach.KindImage:
+		ctype = att.Mime
+	case attach.KindFile:
+		// Audio is the one binary that keeps its stored mime: it cannot
+		// execute, and the chat's inline <audio> player needs the real type
+		// (Safari refuses to play octet-stream, and the URL carries no
+		// extension for the browser to fall back on).
+		ctype = "application/octet-stream"
+		if strings.HasPrefix(att.Mime, "audio/") {
+			ctype = att.Mime
+		}
+	}
+	if att.Kind != attach.KindImage {
+		if cd := mime.FormatMediaType("attachment", map[string]string{"filename": att.Filename}); cd != "" {
+			// FormatMediaType emits an RFC 5987 filename* for non-ASCII names and
+			// returns "" for names it cannot encode, which we omit.
+			w.Header().Set("Content-Disposition", cd)
+		}
+	}
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	// ServeContent sets Content-Length and handles Range requests.
+	http.ServeContent(w, r, "", time.UnixMilli(att.CreatedAt), bytes.NewReader(att.Data))
+}
+
+// ---- speech ----
+
+// speechTimeout bounds one synthesis. It is a full provider round trip over a
+// whole message, and nothing else caps it: the server carries no WriteTimeout
+// (it would kill SSE).
+const speechTimeout = 2 * time.Minute
+
+// handleSpeech reads one stored message aloud and streams the mp3 back. The
+// audio is deliberately NOT stored: it is a rendering of text the database
+// already holds, so keeping it would grow the file for something a click can
+// produce again — unlike the speak tool's recording, which is part of the
+// conversation the model produced.
+//
+// ponytail: the message content is spoken as stored, markdown and all. Strip it
+// to plain text here if providers start reading the syntax aloud.
+func (s *Server) handleSpeech(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		MessageID string `json:"message_id"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeBodyError(w, err)
+		return
+	}
+	msg, err := s.store.GetMessage(r.Context(), strings.TrimSpace(body.MessageID))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "no such message")
+			return
+		}
+		internalError(w, "load message", err)
+		return
+	}
+	text := strings.TrimSpace(msg.Content)
+	if text == "" {
+		writeError(w, http.StatusBadRequest, "the message has no text to speak")
+		return
+	}
+	models := s.cfg.Get().Models
+	cli := s.speech.Get(r.Context(), models.DefaultSpeechModel)
+	if cli == nil {
+		// Covers both "no speech model designated" and "provider not
+		// configured": either way the route cannot do its job.
+		writeError(w, http.StatusServiceUnavailable, "no speech model is configured")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), speechTimeout)
+	defer cancel()
+	audio, err := cli.Speak(ctx, text, models.SpeechVoice)
+	if err != nil {
+		// The provider's own diagnostics are the useful part: an unknown voice
+		// or an unsupported model only ever shows up in them.
+		writeError(w, http.StatusBadGateway, "speech model: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", attach.MimeMP3)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(audio)
+}

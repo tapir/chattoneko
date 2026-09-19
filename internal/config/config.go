@@ -1,0 +1,346 @@
+// Package config stores the server configuration in SQLite; there is no config
+// file. On first start the empty config table is seeded with hardcoded
+// defaults, and everything except auth is set through the API (initial setup,
+// then admin changes) and takes effect live. Single-user auth is the one
+// exception: CHATTO_USERNAME / CHATTO_PASSWORD drive it (see authFromEnv), read
+// once at startup and never stored in the database.
+//
+// Two tables back this package (migration 001_init.sql):
+//
+//   - config(key, value)   — global settings; structured values are JSON
+//   - models(model_id, …)  — per-model metadata (modalities, context length,
+//     reasoning-effort levels)
+//
+// Store is the live handle: Get() returns the current immutable snapshot,
+// Update() applies a partial patch (transactional write, snapshot swap,
+// subscriber notification) and Subscribe() lets components react to changes
+// without restarts.
+package config
+
+import (
+	"fmt"
+	"log/slog"
+	"os"
+	"reflect"
+	"strings"
+
+	_ "embed"
+
+	"golang.org/x/net/http/httpguts"
+)
+
+// Hardcoded seed values, written to the config table on the very first run
+// (empty table) and used as per-value fallbacks for empty/invalid rows.
+const (
+	// DefaultListen is the default of the -listen CLI flag (fixed at startup;
+	// it is NOT stored in the config table).
+	DefaultListen                      = ":8080"
+	DefaultUploadMaxFileBytes          = 5 * 1024 * 1024 // 5 MiB
+	DefaultMaxToolIterations           = 10
+	DefaultMCPCallTimeoutSeconds       = 60
+	DefaultContextLength         int64 = 131072 // 128K tokens
+)
+
+// Environment variables that drive single-user auth. Login is required exactly
+// when BOTH are set (non-empty after trimming); when either is missing, auth is
+// disabled entirely. The password is used as plaintext. Env-driven auth is read
+// once at startup, is NOT editable through the API and is NOT stored in the
+// database.
+const (
+	EnvUsername = "CHATTO_USERNAME"
+	EnvPassword = "CHATTO_PASSWORD"
+)
+
+// DefaultReasoningEfforts is the default set of selectable reasoning-effort
+// levels, highest first. DefaultReasoningEffort is the preselected one.
+var DefaultReasoningEfforts = []string{"max", "xhigh", "high", "medium", "low", "minimal", "none"}
+
+// EndpointChat is the only provider route a whitelisted model is called
+// through: POST /chat/completions. The audio models are not whitelisted at all
+// (see ModelsConfig) — each role holds exactly one id, called through its own
+// route, so there is nothing to disambiguate and no metadata to describe.
+//
+// ponytail: "transcription", "image" and "speech" rows can still sit in the
+// models table from before audio left the whitelist. They read back verbatim
+// (scanModelMeta does not coerce), so chatModels and the settings card list
+// skip them and the next save drops them from the whitelist. Listing the values
+// here again would resurrect them as chat models instead.
+const EndpointChat = "chat"
+
+const DefaultReasoningEffort = "medium"
+
+// defaultSystemPrompt is the seed system prompt.
+//
+//go:embed default_system.md
+var defaultSystemPrompt string
+
+// ProviderConfig holds the OpenAI-compatible provider settings. Requests
+// always go to POST /chat/completions under BaseURL.
+type ProviderConfig struct {
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+}
+
+// ModelsConfig holds the model whitelist and designated model ids.
+type ModelsConfig struct {
+	Whitelist        []string `json:"whitelist"`
+	DefaultChatModel string   `json:"default_chat_model"`
+	// DefaultTaskModel is the model id used by background tasks (title
+	// generation). It talks to the same provider as chat.
+	DefaultTaskModel string `json:"default_task_model"`
+	// The remaining chat designations are the specialist models the vision and
+	// document tools hand files to when the chat model cannot read them itself
+	// (vision needs image input, the document model needs "file" input).
+	// Complete() requires none of them: a missing one leaves that file type
+	// unreadable, which the tool reports in-band.
+	DefaultVisionModel   string `json:"default_vision_model"`
+	DefaultDocumentModel string `json:"default_document_model"`
+	// The audio models are NOT whitelist members: each role is exactly one
+	// model called through its own route (/audio/transcriptions and
+	// /audio/speech), so there is nothing to choose between, no chat metadata
+	// to store and no endpoint to validate. Empty = that feature is off, which
+	// the transcription and speak tools report in-band.
+	DefaultTranscriptionModel string `json:"default_transcription_model"`
+	DefaultSpeechModel        string `json:"default_speech_model"`
+	// SpeechVoice is the voice handed to /audio/speech. Required whenever a
+	// speech model is set: the route demands a voice and voice names are
+	// provider-specific, so nothing here can pick a sensible one.
+	SpeechVoice string `json:"speech_voice"`
+}
+
+// MCPServerConfig declares one MCP server. Only streamable HTTP is
+// supported: the app never spawns child processes.
+type MCPServerConfig struct {
+	Name           string            `json:"name"`
+	Transport      string            `json:"transport"` // http
+	URL            string            `json:"url"`
+	Headers        map[string]string `json:"headers"` // extra request headers
+	DefaultEnabled bool              `json:"default_enabled"`
+}
+
+// LimitsConfig holds resource limits.
+type LimitsConfig struct {
+	UploadMaxFileBytes int64 `json:"upload_max_file_bytes"`
+	// MaxToolIterations is one response's budget of MCP tool calls. Integrated
+	// tools are unlimited; every MCP call is charged whether it succeeded or
+	// failed, so a broken MCP server cannot buy itself an endless retry loop.
+	// Calls past the budget are refused with an error result and the model
+	// finishes in text — this limit never cuts a generation short.
+	//
+	// ponytail: it counts calls, not rounds; renaming the key to match would
+	// orphan stored settings.
+	MaxToolIterations int `json:"max_tool_iterations"`
+	// MCPCallTimeoutSeconds bounds a single MCP tool call (a hung MCP server
+	// must not block the turn loop forever).
+	MCPCallTimeoutSeconds int `json:"mcp_call_timeout_seconds"`
+}
+
+// AuthConfig holds single-user auth settings, derived from CHATTO_USERNAME /
+// CHATTO_PASSWORD at startup (authFromEnv) and never persisted to the database
+// or exposed through the setup API. Password is the PLAINTEXT password from the
+// environment.
+type AuthConfig struct {
+	Enabled  bool   `json:"enabled"`
+	Username string `json:"username"`
+	Password string `json:"-"` // never serialized to API responses
+}
+
+func authFromEnv() AuthConfig {
+	user := strings.TrimSpace(os.Getenv(EnvUsername))
+	pass := strings.TrimSpace(os.Getenv(EnvPassword))
+	if user == "" || pass == "" {
+		return AuthConfig{} // login disabled
+	}
+	return AuthConfig{Enabled: true, Username: user, Password: pass}
+}
+
+// Config is one immutable configuration snapshot. Read it via Store.Get();
+// never mutate a shared snapshot in place.
+type Config struct {
+	SystemPrompt string            `json:"system_prompt"`
+	Provider     ProviderConfig    `json:"provider"`
+	Models       ModelsConfig      `json:"models"`
+	MCPServers   []MCPServerConfig `json:"mcp_servers"`
+	Limits       LimitsConfig      `json:"limits"`
+	Auth         AuthConfig        `json:"auth"`
+	// ToolDefaults is the global per-tool default toggle (settings UI): tool
+	// display name → enabled. It overrides the catalog default (integrated
+	// tools' hardcoded DefaultEnabled, MCP tools' server default_enabled) for
+	// chats that carry no override of their own; a tool absent from the map
+	// keeps the catalog default.
+	ToolDefaults map[string]bool `json:"tool_defaults"`
+	// ToolTitles is the global per-tool USER-facing label (settings UI): tool
+	// display name → title shown in the chat instead of the raw name. It
+	// overrides the catalog title (integrated tools' hardcoded one, MCP tools'
+	// server-declared one). Sparse: a tool absent from the map — or mapped to
+	// "" — keeps its catalog title.
+	ToolTitles map[string]string `json:"tool_titles"`
+}
+
+// clone returns a deep copy so patches never mutate a published snapshot.
+func (c *Config) clone() *Config {
+	cp := *c
+	cp.Models.Whitelist = append([]string(nil), c.Models.Whitelist...)
+	cp.MCPServers = make([]MCPServerConfig, len(c.MCPServers))
+	for i, s := range c.MCPServers {
+		if s.Headers != nil {
+			s.Headers = make(map[string]string, len(s.Headers))
+			for k, v := range c.MCPServers[i].Headers {
+				s.Headers[k] = v
+			}
+		}
+		cp.MCPServers[i] = s
+	}
+	if c.ToolDefaults != nil {
+		cp.ToolDefaults = make(map[string]bool, len(c.ToolDefaults))
+		for k, v := range c.ToolDefaults {
+			cp.ToolDefaults[k] = v
+		}
+	}
+	if c.ToolTitles != nil {
+		cp.ToolTitles = make(map[string]string, len(c.ToolTitles))
+		for k, v := range c.ToolTitles {
+			cp.ToolTitles[k] = v
+		}
+	}
+	return &cp
+}
+
+// Complete reports whether the minimum settings needed to run chats are present
+// (provider endpoint/key + both designated models). An incomplete config means
+// "setup still needed" — the server still runs and serves the API/UI.
+func (c *Config) Complete() bool {
+	return c.Provider.BaseURL != "" && c.Provider.APIKey != "" &&
+		c.Models.DefaultChatModel != "" && c.Models.DefaultTaskModel != ""
+}
+
+// finalize fills every empty/zero/invalid value with its fallback and drops
+// structurally broken entries. It runs on load AND before every update is
+// persisted, so both paths end in the same shape.
+func (c *Config) finalize() {
+	if strings.TrimSpace(c.SystemPrompt) == "" {
+		c.SystemPrompt = strings.TrimSpace(defaultSystemPrompt)
+	}
+	if c.Limits.UploadMaxFileBytes <= 0 {
+		c.Limits.UploadMaxFileBytes = DefaultUploadMaxFileBytes
+	}
+	if c.Limits.MaxToolIterations <= 0 {
+		c.Limits.MaxToolIterations = DefaultMaxToolIterations
+	}
+	if c.Limits.MCPCallTimeoutSeconds <= 0 {
+		c.Limits.MCPCallTimeoutSeconds = DefaultMCPCallTimeoutSeconds
+	}
+	c.Models.SpeechVoice = strings.TrimSpace(c.Models.SpeechVoice)
+	c.sanitizeWhitelist()
+	c.sanitizeMCPServers()
+	c.sanitizeToolTitles()
+}
+
+// sanitizeToolTitles trims the configured user-facing tool titles and drops the
+// blank ones, so an emptied settings box hands the label back to the catalog
+// (integrated tools' hardcoded title, MCP tools' server-declared one) instead
+// of storing a whitespace title.
+func (c *Config) sanitizeToolTitles() {
+	for name, title := range c.ToolTitles {
+		if t := strings.TrimSpace(title); t == "" {
+			delete(c.ToolTitles, name)
+		} else {
+			c.ToolTitles[name] = t
+		}
+	}
+}
+
+// sanitizeWhitelist drops empty and duplicate model ids and clears a designated
+// model (any of the role defaults) that is not whitelisted. Designated models
+// must be members of the whitelist (the settings UI flags them from whitelisted
+// cards), so auto-adding one would paper over a stale id.
+func (c *Config) sanitizeWhitelist() {
+	c.Models.Whitelist = filterEmpty(c.Models.Whitelist)
+	seen := make(map[string]bool, len(c.Models.Whitelist))
+	for _, m := range c.Models.Whitelist {
+		seen[m] = true
+	}
+	// The audio models are not in this list: they are free-standing ids, not
+	// whitelist pointers, so membership says nothing about them.
+	for _, d := range []*string{
+		&c.Models.DefaultChatModel, &c.Models.DefaultTaskModel, &c.Models.DefaultVisionModel,
+		&c.Models.DefaultDocumentModel,
+	} {
+		if !seen[strings.TrimSpace(*d)] {
+			*d = ""
+		}
+	}
+}
+
+// sanitizeMCPServers drops MCP server entries that cannot work — a broken
+// entry must not keep the server from serving.
+func (c *Config) sanitizeMCPServers() {
+	seen := map[string]bool{}
+	clean := make([]MCPServerConfig, 0, len(c.MCPServers))
+	for _, s := range c.MCPServers {
+		s.Name = strings.TrimSpace(s.Name)
+		s.URL = strings.TrimSpace(s.URL)
+		switch {
+		case s.Name == "":
+			slog.Warn("mcp_servers: dropping entry without a name")
+			continue
+		case seen[s.Name]:
+			slog.Warn("mcp_servers: dropping duplicate entry", "name", s.Name)
+			continue
+		case s.Transport != "http":
+			slog.Warn("mcp_servers: dropping entry with invalid transport", "name", s.Name, "transport", s.Transport)
+			continue
+		case s.URL == "":
+			slog.Warn("mcp_servers: dropping entry without url", "name", s.Name)
+			continue
+		}
+		// Copy the entry's map so the published snapshot never aliases the
+		// patch it came from.
+		if len(s.Headers) > 0 {
+			// Header names/values go straight into HTTP requests: trim them
+			// and drop empty values and invalid header names (a broken name
+			// would fail the MCP call at request time with a confusing
+			// error). Header values round-trip through the setup API, so an
+			// empty value clears the header.
+			cleaned := make(map[string]string, len(s.Headers))
+			for k, v := range s.Headers {
+				k = strings.TrimSpace(k)
+				v = strings.TrimSpace(v)
+				if k == "" || v == "" || !httpguts.ValidHeaderFieldName(k) {
+					continue
+				}
+				cleaned[k] = v
+			}
+			s.Headers = cleaned
+		}
+		seen[s.Name] = true
+		clean = append(clean, s)
+	}
+	c.MCPServers = clean
+}
+
+// validate enforces the invariants that no fallback can fix. Called before an
+// update is persisted, never at load time: stored config must not keep the
+// server from starting, and broken values fall back via finalize.
+func (c *Config) validate() error {
+	if c.Auth.Enabled {
+		if strings.TrimSpace(c.Auth.Username) == "" {
+			return fmt.Errorf("auth.username is required when auth is enabled")
+		}
+		if strings.TrimSpace(c.Auth.Password) == "" {
+			return fmt.Errorf("a password must be set before auth can be enabled")
+		}
+	}
+	if c.Models.DefaultSpeechModel != "" && strings.TrimSpace(c.Models.SpeechVoice) == "" {
+		return fmt.Errorf("a speech voice is required when a speech model is set")
+	}
+	return nil
+}
+
+// MCPServerEqual reports whether two MCP server configs are identical (used by
+// the MCP hub to decide if a server needs reconnecting). Both sides are
+// normalized by sanitizeMCPServers before comparison, so nil-vs-empty maps are
+// consistent.
+func MCPServerEqual(a, b MCPServerConfig) bool {
+	return reflect.DeepEqual(a, b)
+}

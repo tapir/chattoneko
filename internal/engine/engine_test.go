@@ -1,0 +1,1348 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"chattoneko/internal/attach"
+	"chattoneko/internal/config"
+	"chattoneko/internal/db"
+	"chattoneko/internal/mcphub"
+	"chattoneko/internal/provider"
+	"chattoneko/internal/store"
+	"chattoneko/internal/tools"
+)
+
+// ---- fakes ----
+
+type scriptedProvider struct {
+	scripts   [][]provider.StreamEvent // one script per StreamChat call
+	callIndex int
+}
+
+func (f *scriptedProvider) StreamChat(_ context.Context, _ []provider.Message, _ []provider.Tool, _ provider.GenParams) (*provider.EventStream, error) {
+	script := f.scripts[f.callIndex]
+	f.callIndex++
+	es := provider.NewEventStream(64, nil)
+	go func() {
+		for _, ev := range script {
+			if !es.Publish(ev) {
+				return
+			}
+		}
+		es.Finish(nil)
+	}()
+	return es, nil
+}
+
+type fakeMCP struct {
+	tools   []mcphub.Entry
+	results map[string]string
+	fail    map[string]bool // names whose Call reports a tool error
+	calls   []string
+}
+
+func (f *fakeMCP) Tools() []mcphub.Entry { return f.tools }
+
+func (f *fakeMCP) Call(_ context.Context, name, _ string, _ mcphub.CallMeta) (string, bool, error) {
+	f.calls = append(f.calls, name)
+	if f.fail[name] {
+		return "boom", true, nil
+	}
+	return f.results[name], false, nil
+}
+
+// ---- harness ----
+
+func testEngine(t *testing.T, prov provider.Provider, m ToolCatalog, limits ...config.LimitsConfig) (*Engine, *store.Store, context.CancelFunc) {
+	t.Helper()
+	lim := config.LimitsConfig{MaxToolIterations: 10}
+	if len(limits) > 0 {
+		lim = limits[0]
+	}
+	// A temp FILE per test keeps each test's database fully isolated.
+	sqlDB, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.Migrate(sqlDB); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	st := store.NewStore(sqlDB)
+	cfgs, err := config.TestStore(context.Background(), sqlDB, config.Config{
+		Models: config.ModelsConfig{DefaultChatModel: "m"},
+		Limits: lim,
+	})
+	if err != nil {
+		t.Fatalf("config store: %v", err)
+	}
+	serverCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); _ = sqlDB.Close() })
+	return New(serverCtx, st, prov, m, cfgs), st, cancel
+}
+
+func newTestChat(t *testing.T, st *store.Store) string {
+	t.Helper()
+	chat, err := st.CreateChat(context.Background(), "m", store.GenParams{}, map[string]bool{})
+	if err != nil {
+		t.Fatalf("create chat: %v", err)
+	}
+	return chat.ID
+}
+
+func waitFor(t *testing.T, what string, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for %s", what)
+}
+
+// ---- tests ----
+
+func TestBasicGenerationPersistsAndStreams(t *testing.T) {
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{{
+		{Kind: provider.EventTextDelta, Text: "Hello "},
+		{Kind: provider.EventTextDelta, Text: "world"},
+		{Kind: provider.EventDone, Finish: "stop"},
+	}}}
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "hi",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, unsub := eng.Subscribe(chatID, 0, "")
+	defer unsub()
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	waitFor(t, "generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Content != "Hello world" {
+		t.Fatalf("content = %q", m.Content)
+	}
+
+	// Drain remaining events; we must see status+done.
+	sawDone := false
+	timeout := time.After(2 * time.Second)
+	for !sawDone {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before done")
+			}
+			if ev.Type == "done" {
+				sawDone = true
+			}
+		case <-timeout:
+			t.Fatal("no done event")
+		}
+	}
+}
+
+func TestTruncationFinishMarksFailed(t *testing.T) {
+	for _, reason := range []string{"length", "max_tokens", "max_output_tokens"} {
+		t.Run(reason, func(t *testing.T) {
+			prov := &scriptedProvider{scripts: [][]provider.StreamEvent{{
+				{Kind: provider.EventTextDelta, Text: "partial answer"},
+				{Kind: provider.EventDone, Finish: reason},
+			}}}
+			eng, st, _ := testEngine(t, prov, &fakeMCP{})
+			chatID := newTestChat(t, st)
+			if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+				ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "hi",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			am, err := eng.startGeneration(context.Background(), chatID)
+			if err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			waitFor(t, "generation terminal", 5*time.Second, func() bool {
+				m, err := st.GetMessage(context.Background(), am.ID)
+				return err == nil && m.Status == store.StatusFailed
+			})
+			m, _ := st.GetMessage(context.Background(), am.ID)
+			if m.Content != "partial answer" {
+				t.Fatalf("partial content lost: %q", m.Content)
+			}
+			if m.Error == "" {
+				t.Fatal("truncated message should carry an error explaining the cut-off")
+			}
+		})
+	}
+}
+
+// toolRound scripts one provider round in which the model calls "echo".
+func toolRound(callID string) []provider.StreamEvent {
+	return []provider.StreamEvent{
+		{Kind: provider.EventToolCallDone, CallID: callID, Name: "echo", Args: `{"text":"x"}`},
+		{Kind: provider.EventDone, Finish: "tool_calls"},
+	}
+}
+
+func TestToolLoopExecutesAndReplaysHistory(t *testing.T) {
+	prov := &scriptedProvider{
+		scripts: [][]provider.StreamEvent{
+			{ // iteration 1: model calls a tool
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "echo", Args: `{"text":"x"}`},
+				{Kind: provider.EventDone, Finish: "tool_calls"},
+			},
+			{ // iteration 2: model answers
+				{Kind: provider.EventTextDelta, Text: "done"},
+				{Kind: provider.EventDone, Finish: "stop"},
+			},
+		},
+	}
+	mcpFake := &fakeMCP{
+		tools:   []mcphub.Entry{{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, prov, mcpFake)
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "call it",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "tool-loop complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	// user, assistant(tool_calls), tool result
+	if len(msgs) != 3 {
+		t.Fatalf("want 3 messages, got %d", len(msgs))
+	}
+	if len(msgs[1].ToolCalls) != 1 || msgs[1].ToolCalls[0].ProviderCallID != "call_1" {
+		t.Fatalf("assistant tool calls wrong: %+v", msgs[1].ToolCalls)
+	}
+	if msgs[2].Role != store.RoleTool || msgs[2].ToolCallID != "call_1" || msgs[2].Content != "echo-result" {
+		t.Fatalf("tool result wrong: %+v", msgs[2])
+	}
+	if len(mcpFake.calls) != 1 || mcpFake.calls[0] != "echo" {
+		t.Fatalf("mcp calls: %v", mcpFake.calls)
+	}
+}
+
+// The budget counts individual tool calls in one response. Running out does
+// NOT stop the generation: the over-budget call is refused with an error
+// result and the model still gets a round to answer in text.
+func TestToolCallBudgetRefusesOverBudgetCalls(t *testing.T) {
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{
+		toolRound("c1"), toolRound("c2"), toolRound("c3"),
+		{{Kind: provider.EventTextDelta, Text: "final"}, {Kind: provider.EventDone, Finish: "stop"}},
+	}}
+	mcpFake := &fakeMCP{
+		tools:   []mcphub.Entry{{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, prov, mcpFake, config.LimitsConfig{MaxToolIterations: 2})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "budgeted generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	if len(mcpFake.calls) != 2 {
+		t.Fatalf("want exactly 2 executed calls, got %v", mcpFake.calls)
+	}
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	// user, assistant(all 3 calls + final text), one result per call
+	if len(msgs) != 5 {
+		t.Fatalf("want 5 messages, got %d", len(msgs))
+	}
+	if msgs[2].Content != "echo-result" || msgs[3].Content != "echo-result" {
+		t.Fatalf("first two calls should have run: %q %q", msgs[2].Content, msgs[3].Content)
+	}
+	if msgs[4].Content != overBudgetText {
+		t.Fatalf("third call should be refused: %q", msgs[4].Content)
+	}
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Content != "final" {
+		t.Fatalf("model never got its final round: %q", m.Content)
+	}
+}
+
+// A model that keeps calling tools after being refused cannot spin forever:
+// the backstop ends the generation cleanly, with a result for every call.
+func TestToolCallBudgetBackstopEndsStubbornLoop(t *testing.T) {
+	scripts := make([][]provider.StreamEvent, maxPostCapRounds+2)
+	for i := range scripts {
+		scripts[i] = toolRound("c" + string(rune('a'+i)))
+	}
+	prov := &scriptedProvider{scripts: scripts}
+	mcpFake := &fakeMCP{
+		tools:   []mcphub.Entry{{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, prov, mcpFake, config.LimitsConfig{MaxToolIterations: 1})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "backstop finalize", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status != store.StatusGenerating
+	})
+
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Status != store.StatusComplete {
+		t.Fatalf("backstop should finish cleanly, got %q (%s)", m.Status, m.Error)
+	}
+	if len(mcpFake.calls) != 1 {
+		t.Fatalf("want 1 executed call, got %v", mcpFake.calls)
+	}
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	// user, assistant, 1 real result + maxPostCapRounds refusals
+	if want := 3 + maxPostCapRounds; len(msgs) != want {
+		t.Fatalf("want %d messages, got %d", want, len(msgs))
+	}
+}
+
+// A model that keeps calling a tool this chat does not have cannot spin
+// forever either. Nothing budgets these — integrated tools are unbudgeted and
+// a name in no catalog never reaches one — so counting refusals is the only
+// thing that ends the round. This is the shape a toggled-off tool, an MCP
+// server that went away, or a hallucinated name takes.
+func TestUnavailableToolBackstopEndsStubbornLoop(t *testing.T) {
+	scripts := make([][]provider.StreamEvent, maxPostCapRounds+2)
+	for i := range scripts {
+		scripts[i] = toolRound("c" + string(rune('a'+i)))
+	}
+	prov := &scriptedProvider{scripts: scripts}
+	// No MCP server at all, so "echo" is in nobody's catalog.
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "backstop finalize", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status != store.StatusGenerating
+	})
+
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Status != store.StatusComplete {
+		t.Fatalf("backstop should finish cleanly, got %q (%s)", m.Status, m.Error)
+	}
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	// user, assistant, maxPostCapRounds refusals — nothing ever ran.
+	if want := 2 + maxPostCapRounds; len(msgs) != want {
+		t.Fatalf("want %d messages, got %d", want, len(msgs))
+	}
+	for _, msg := range msgs[2:] {
+		if !strings.Contains(msg.Content, "not available") || !strings.Contains(msg.Content, "Do not call it again") {
+			t.Fatalf("refusal should name the problem and stop the model: %q", msg.Content)
+		}
+	}
+}
+
+// A tool referenced only by history is still declared, so the provider accepts
+// the call ids already in history — but as a placeholder, never with its real
+// definition: a disabled tool that still looks callable is an invitation the
+// model takes.
+func TestHistoryOnlyToolIsPlaceholder(t *testing.T) {
+	ctx := context.Background()
+	mcpFake := &fakeMCP{
+		tools: []mcphub.Entry{{
+			Display: "echo", Description: "echoes text back", Server: "s",
+			Schema:         json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}}}`),
+			DefaultEnabled: true,
+		}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, &scriptedProvider{}, mcpFake)
+	chatID := newTestChat(t, st)
+
+	// A call in the history, then the tool turned off for this chat.
+	am, err := st.CreateMessage(ctx, store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleAssistant, Status: store.StatusComplete, Content: "earlier",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateToolCall(ctx, am.ID, "call_1", "echo", `{"text":"x"}`, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateChatSettings(ctx, chatID, "m", store.GenParams{}, map[string]bool{"echo": false}); err != nil {
+		t.Fatal(err)
+	}
+
+	chat, err := st.GetChat(ctx, chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defs, err := eng.effectiveTools(ctx, chat, nil)
+	if err != nil {
+		t.Fatalf("effectiveTools: %v", err)
+	}
+	var got *provider.Tool
+	for i := range defs {
+		if defs[i].Name == "echo" {
+			got = &defs[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("history-referenced tool must still be declared, or the provider rejects the old call ids")
+	}
+	if got.Description != "(tool unavailable)" {
+		t.Fatalf("disabled tool re-advertised with its real description: %q", got.Description)
+	}
+	if string(got.Schema) != `{"type":"object"}` {
+		t.Fatalf("schema = %s, want the empty placeholder", got.Schema)
+	}
+}
+
+// The budget charges every MCP call, success or failure, and never touches
+// integrated tools: a server that always errors still drains the allowance,
+// while local tools stay unlimited.
+func TestToolCallBudgetChargesEveryMCPCall(t *testing.T) {
+	id := 0
+	round := func(names ...string) []provider.StreamEvent {
+		evs := make([]provider.StreamEvent, 0, len(names)+1)
+		for _, name := range names {
+			id++
+			evs = append(evs, provider.StreamEvent{
+				Kind: provider.EventToolCallDone, CallID: "call-" + strconv.Itoa(id), Name: name, Args: `{}`,
+			})
+		}
+		return append(evs, provider.StreamEvent{Kind: provider.EventDone, Finish: "tool_calls"})
+	}
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{
+		round("calc", "flaky"), // integrated is free; the failing MCP call is not
+		round("echo"),          // budget already spent: refused
+		round("calc"),          // integrated still runs with an empty budget
+		{{Kind: provider.EventTextDelta, Text: "final"}, {Kind: provider.EventDone, Finish: "stop"}},
+	}}
+	catalog := &fakeMCP{
+		tools: []mcphub.Entry{
+			{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true},
+			{Display: "flaky", Description: "d", Server: "s", DefaultEnabled: true},
+			{Display: "calc", Description: "d", Server: mcphub.BuiltinServer, DefaultEnabled: true},
+		},
+		results: map[string]string{"echo": "echo-result", "calc": "calc-ok"},
+		fail:    map[string]bool{"flaky": true},
+	}
+	eng, st, _ := testEngine(t, prov, catalog, config.LimitsConfig{MaxToolIterations: 1})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	// The refused echo is absent: a call the budget turns away never runs.
+	want := []string{"calc", "flaky", "calc"}
+	if !slices.Equal(catalog.calls, want) {
+		t.Fatalf("executed calls = %v, want %v (the refused echo must not run)", catalog.calls, want)
+	}
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	// user, assistant, one result per call (4)
+	if len(msgs) != 6 {
+		t.Fatalf("want 6 messages, got %d", len(msgs))
+	}
+	// Results land in call order: calc, flaky, echo(refused), calc.
+	if msgs[3].Content != "boom" {
+		t.Fatalf("the failing MCP call should have run: %q", msgs[3].Content)
+	}
+	if msgs[4].Content != overBudgetText {
+		t.Fatalf("echo should be refused once flaky spent the budget: %q", msgs[4].Content)
+	}
+	if msgs[5].Content != "calc-ok" {
+		t.Fatalf("integrated tool should ignore the empty budget: %q", msgs[5].Content)
+	}
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Content != "final" {
+		t.Fatalf("model never got its final round: %q", m.Content)
+	}
+}
+
+// Each provider round trip of the tool loop is its own thinking block: the
+// reasoning parts stay separated per turn (instead of merging into one blob),
+// the calls carry the turn that produced them, and turn_complete tells the
+// client when a turn's thinking ended so its spinner can stop.
+func TestReasoningIsSplitPerTurn(t *testing.T) {
+	prov := &scriptedProvider{
+		scripts: [][]provider.StreamEvent{
+			{ // turn 0: think, then call a tool
+				{Kind: provider.EventReasoningDelta, Text: "first "},
+				{Kind: provider.EventReasoningDelta, Text: "thought"},
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "echo", Args: `{}`},
+				{Kind: provider.EventDone, Finish: "tool_calls"},
+			},
+			{ // turn 1: think again (no calls) and answer
+				{Kind: provider.EventReasoningDelta, Text: "second thought"},
+				{Kind: provider.EventTextDelta, Text: "answer"},
+				{Kind: provider.EventDone, Finish: "stop"},
+			},
+		},
+	}
+	mcpFake := &fakeMCP{
+		tools:   []mcphub.Entry{{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, prov, mcpFake)
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ch, unsub := eng.Subscribe(chatID, 0, "")
+	defer unsub()
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "multi-turn complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	// ListMessages (not GetMessage) is what attaches the tool calls.
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	m := msgs[len(msgs)-2] // user, assistant, tool result
+	if m.ID != am.ID {
+		t.Fatalf("assistant message not found: %+v", msgs)
+	}
+	if want := []string{"first thought", "second thought"}; !slices.Equal(m.Reasoning, want) {
+		t.Fatalf("reasoning parts = %#v, want %#v", m.Reasoning, want)
+	}
+	if len(m.ToolCalls) != 1 || m.ToolCalls[0].Turn != 0 || m.ToolCalls[0].Position != 0 {
+		t.Fatalf("tool call turn/position wrong: %+v", m.ToolCalls)
+	}
+
+	// Wire: reasoning deltas name their turn and every turn reports complete.
+	var deltaTurns, completedTurns []int
+	sawDone := false
+	timeout := time.After(2 * time.Second)
+	for !sawDone {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before done")
+			}
+			switch ev.Type {
+			case "reasoning_delta":
+				deltaTurns = append(deltaTurns, ev.Turn)
+			case "turn_complete":
+				completedTurns = append(completedTurns, ev.Turn)
+			case "done":
+				sawDone = true
+			}
+		case <-timeout:
+			t.Fatal("no done event")
+		}
+	}
+	if want := []int{0, 0, 1}; !slices.Equal(deltaTurns, want) {
+		t.Fatalf("reasoning_delta turns = %v, want %v", deltaTurns, want)
+	}
+	if want := []int{0, 1}; !slices.Equal(completedTurns, want) {
+		t.Fatalf("turn_complete turns = %v, want %v", completedTurns, want)
+	}
+}
+
+// blockingTool is a catalog whose only tool signals when it starts and does
+// not complete until released — letting a test stop the generation exactly
+// while the tool is "running".
+type blockingTool struct {
+	entry    mcphub.Entry
+	started  chan string
+	released chan struct{}
+}
+
+func (b *blockingTool) Tools() []mcphub.Entry { return []mcphub.Entry{b.entry} }
+
+func (b *blockingTool) Call(_ context.Context, name, _ string, _ mcphub.CallMeta) (string, bool, error) {
+	b.started <- name
+	<-b.released
+	return "TOOL_RAN", false, nil
+}
+
+// A tool that finished executing must keep its result even when a user stop
+// lands before the result is persisted: the write happens on a detached
+// context, so the finalize synthesis never marks an executed call as
+// interrupted and the model can never re-run the tool's side effects on the
+// next generation.
+func TestStopAfterToolStillPersistsResult(t *testing.T) {
+	prov := &scriptedProvider{
+		scripts: [][]provider.StreamEvent{
+			{ // turn 1: model calls the blocking tool
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "slow_tool", Args: "{}"},
+				{Kind: provider.EventDone, Finish: "tool_calls"},
+			},
+			{ // turn 2: never reached (the stop wins at the loop top)
+				{Kind: provider.EventDone, Finish: "stop"},
+			},
+		},
+	}
+	tool := &blockingTool{
+		entry:    mcphub.Entry{Display: "slow_tool", Description: "d", Server: "s", DefaultEnabled: true},
+		started:  make(chan string, 1),
+		released: make(chan struct{}),
+	}
+	eng, st, _ := testEngine(t, prov, tool)
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "run it",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// Stop exactly while the tool is "running": its result is not back yet,
+	// so persisting it races the cancel.
+	<-tool.started
+	if !eng.StopGeneration(chatID) {
+		t.Fatal("stop: no active generation")
+	}
+	close(tool.released)
+
+	waitFor(t, "generation stopped", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusStopped
+	})
+	// The executed tool's real result is persisted — not a synthesized
+	// "interrupted" placeholder.
+	msgs, err := st.ListMessages(context.Background(), chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var toolMsg *store.Message
+	for _, m := range msgs {
+		if m.Role == store.RoleTool && m.ToolCallID == "call_1" {
+			toolMsg = m
+		}
+	}
+	if toolMsg == nil {
+		t.Fatal("tool result message missing")
+	}
+	if toolMsg.Content != "TOOL_RAN" {
+		t.Fatalf("tool result = %q, want the real TOOL_RAN (not a synthesized interrupt)", toolMsg.Content)
+	}
+}
+
+// Tool-call argument fragments stream to SSE subscribers between the start
+// and done events (UI renders the arguments filling in live).
+func TestToolCallDeltasStreamToSubscribers(t *testing.T) {
+	prov := &scriptedProvider{
+		scripts: [][]provider.StreamEvent{
+			{ // iteration 1: tool call with streamed arguments
+				{Kind: provider.EventToolCallStart, CallID: "call_1", Name: "echo"},
+				{Kind: provider.EventToolCallDelta, CallID: "call_1", Args: `{"text"`},
+				{Kind: provider.EventToolCallDelta, CallID: "call_1", Args: `:"x"}`},
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "echo", Args: `{"text":"x"}`},
+				{Kind: provider.EventDone, Finish: "tool_calls"},
+			},
+			{ // iteration 2: model answers
+				{Kind: provider.EventTextDelta, Text: "done"},
+				{Kind: provider.EventDone, Finish: "stop"},
+			},
+		},
+	}
+	mcpFake := &fakeMCP{
+		tools:   []mcphub.Entry{{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, prov, mcpFake)
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "call it",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, unsub := eng.Subscribe(chatID, 0, "")
+	defer unsub()
+
+	if _, err := eng.startGeneration(context.Background(), chatID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Collect tool-call wire events in order until done.
+	var got []WireEvent
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before done")
+			}
+			switch ev.Type {
+			case "tool_call_started", "tool_call_delta", "tool_call_done":
+				got = append(got, ev)
+			case "done":
+				goto check
+			}
+		case <-timeout:
+			t.Fatal("no done event")
+		}
+	}
+check:
+	if len(got) != 4 {
+		t.Fatalf("tool-call events = %+v", got)
+	}
+	if got[0].Type != "tool_call_started" || got[0].CallID != "call_1" || got[0].Name != "echo" {
+		t.Fatalf("started = %+v", got[0])
+	}
+	if got[1].Type != "tool_call_delta" || got[1].CallID != "call_1" || got[1].Arguments != `{"text"` {
+		t.Fatalf("delta 1 = %+v", got[1])
+	}
+	if got[2].Type != "tool_call_delta" || got[2].Arguments != `:"x"}` {
+		t.Fatalf("delta 2 = %+v", got[2])
+	}
+	if got[3].Type != "tool_call_done" || got[3].Arguments != `{"text":"x"}` {
+		t.Fatalf("done = %+v", got[3])
+	}
+}
+
+func TestStopKeepsPartialAndMarksStopped(t *testing.T) {
+	// The provider streams a prefix then blocks forever (until ctx cancel).
+	prov := &blockingProvider{prefix: "partial text"}
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "partial content", 5*time.Second, func() bool {
+		m, _ := st.GetMessage(context.Background(), am.ID)
+		return m != nil && m.Content == "partial text"
+	})
+	if !eng.StopGeneration(chatID) {
+		t.Fatal("stop reported no active generation")
+	}
+	waitFor(t, "stopped status", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusStopped
+	})
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Content != "partial text" {
+		t.Fatalf("partial content lost: %q", m.Content)
+	}
+}
+
+// blockingProvider streams a prefix then waits for ctx cancellation.
+type blockingProvider struct{ prefix string }
+
+func (b *blockingProvider) StreamChat(ctx context.Context, _ []provider.Message, _ []provider.Tool, _ provider.GenParams) (*provider.EventStream, error) {
+	es := provider.NewEventStream(64, nil)
+	go func() {
+		es.Publish(provider.StreamEvent{Kind: provider.EventTextDelta, Text: b.prefix})
+		<-ctx.Done()
+		es.Finish(ctx.Err())
+	}()
+	return es, nil
+}
+
+func TestInvariantFinalizeSynthesizesToolResults(t *testing.T) {
+	// An assistant message left with dangling tool calls must get synthetic
+	// results: build that state directly, then run crash recovery over it.
+	eng, st, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
+	chatID := newTestChat(t, st)
+	am, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleAssistant, Status: store.StatusGenerating,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateToolCall(context.Background(), am.ID, "call_dangling", "echo", `{"a":1}`, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Crash recovery path: generating → failed + synthetic tool result.
+	if err := eng.RecoverCrashed(context.Background()); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	if len(msgs) != 2 {
+		t.Fatalf("want assistant+synthetic tool, got %d", len(msgs))
+	}
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Status != store.StatusFailed || m.Error == "" {
+		t.Fatalf("assistant not failed: %+v", m)
+	}
+	tool := msgs[1]
+	if tool.Role != store.RoleTool || tool.ToolCallID != "call_dangling" {
+		t.Fatalf("synthetic tool result wrong: %+v", tool)
+	}
+}
+
+func TestSubscribeReplayBuffer(t *testing.T) {
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{{
+		{Kind: provider.EventTextDelta, Text: "abc"},
+		{Kind: provider.EventTextDelta, Text: "def"},
+		{Kind: provider.EventDone, Finish: "stop"},
+	}}}
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "hi",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.startGeneration(context.Background(), chatID); err != nil {
+		t.Fatal(err)
+	}
+	// Late subscriber joining after completion (within the ~5s grace period) must
+	// receive the FULL replay of the finished generation, not idle. Idle is
+	// emitted only once the buffer has been dropped after the grace period.
+	waitFor(t, "completion", 5*time.Second, func() bool {
+		return !eng.HasActiveGeneration(chatID)
+	})
+	ch, unsub := eng.Subscribe(chatID, 0, "")
+	defer unsub()
+	var deltas int
+	sawDone := false
+	timeout := time.After(2 * time.Second)
+	for !sawDone {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before replay completed")
+			}
+			if ev.Type == "delta" {
+				deltas++
+			}
+			if ev.Type == "done" {
+				sawDone = true
+			}
+		case <-timeout:
+			t.Fatal("no done event in replay")
+		}
+	}
+	if deltas != 2 {
+		t.Fatalf("replay delivered %d deltas, want 2", deltas)
+	}
+}
+
+// TestClaimGenerationIsAtomic verifies claim atomicity: only one claimant can
+// hold the generation slot at a time, and ReleaseClaim frees it.
+func TestClaimGenerationIsAtomic(t *testing.T) {
+	eng, st, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
+	chatID := newTestChat(t, st)
+
+	if err := eng.ClaimGeneration(chatID); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if err := eng.ClaimGeneration(chatID); !errors.Is(err, ErrGenerationActive) {
+		t.Fatalf("second claim should conflict, got %v", err)
+	}
+	eng.ReleaseClaim(chatID)
+	if err := eng.ClaimGeneration(chatID); err != nil {
+		t.Fatalf("claim after release: %v", err)
+	}
+	eng.ReleaseClaim(chatID)
+}
+
+// TestConcurrentStartGenerationOnlyOneWins hammers startGeneration from
+// several goroutines against a provider that blocks: exactly one may win.
+func TestConcurrentStartGenerationOnlyOneWins(t *testing.T) {
+	prov := &blockingProvider{prefix: "x"}
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 8
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			_, err := eng.startGeneration(context.Background(), chatID)
+			errs <- err
+		}()
+	}
+	successes, conflicts := 0, 0
+	for i := 0; i < n; i++ {
+		err := <-errs
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrGenerationActive):
+			conflicts++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != n-1 {
+		t.Fatalf("successes=%d conflicts=%d, want 1/%d", successes, conflicts, n-1)
+	}
+	eng.StopGeneration(chatID)
+}
+
+// TestFlushNeverOverwritesFinalContent guards the flush-vs-finalize race:
+// with a tiny flush interval the flusher races the finalize; the persisted
+// content must always end up exactly the final text.
+func TestFlushNeverOverwritesFinalContent(t *testing.T) {
+	var script []provider.StreamEvent
+	full := ""
+	for i := 0; i < 40; i++ {
+		tok := "token "
+		script = append(script, provider.StreamEvent{Kind: provider.EventTextDelta, Text: tok})
+		full += tok
+	}
+	script = append(script, provider.StreamEvent{Kind: provider.EventDone, Finish: "stop"})
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{script}}
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	eng.flushInterval = time.Millisecond // race the flusher against finalize
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "hi",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "completion", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+	// Let several (would-be stale) flush intervals pass; content must stay final.
+	time.Sleep(20 * time.Millisecond)
+	m, err := st.GetMessage(context.Background(), am.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Content != full {
+		t.Fatalf("content = %q (len %d), want len %d", m.Content, len(m.Content), len(full))
+	}
+}
+
+// TestStartSurvivesCanceledRequestContext guards the start boundary: the
+// caller ctx is typically the HTTP request context, and a client disconnect
+// between claim and assistant-message creation must not leave the user message
+// unanswered.
+func TestStartSurvivesCanceledRequestContext(t *testing.T) {
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{{
+		{Kind: provider.EventTextDelta, Text: "ok"},
+		{Kind: provider.EventDone, Finish: "stop"},
+	}}}
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "hi",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // client already gone
+	am, err := eng.startGeneration(ctx, chatID)
+	if err != nil {
+		t.Fatalf("start with canceled request ctx: %v", err)
+	}
+	waitFor(t, "generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Content != "ok" {
+		t.Fatalf("content = %q", m.Content)
+	}
+}
+
+// TestHubEpochChangesAcrossRecreation verifies the seq-reset signal: when a
+// hub is pruned and recreated, the new incarnation carries a fresh epoch so
+// clients reset their dedupe baseline (a stale lastSeq would otherwise
+// silently drop every event of the next generation).
+func TestHubEpochChangesAcrossRecreation(t *testing.T) {
+	eng, st, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
+	chatID := newTestChat(t, st)
+
+	ch, unsub := eng.Subscribe(chatID, 0, "")
+	ev := <-ch // idle: no generation on this chat
+	if ev.Type != "idle" || ev.Epoch == "" {
+		t.Fatalf("want idle with epoch, got %+v", ev)
+	}
+	first := ev.Epoch
+	unsub() // last subscriber gone + no generation -> hub pruned
+
+	ch2, unsub2 := eng.Subscribe(chatID, 0, "")
+	defer unsub2()
+	ev2 := <-ch2
+	if ev2.Type != "idle" {
+		t.Fatalf("want idle, got %+v", ev2)
+	}
+	if ev2.Epoch == first {
+		t.Fatalf("epoch unchanged across hub recreation: %q", first)
+	}
+}
+
+// TestToolCreatedAttachment runs the tool loop against the REAL integrated
+// catalog and the real store: attach stores the file AND links it to the
+// assistant message in the same call, publishing attachment_created into the
+// replay buffer — a successful call always means the user can see the file.
+func TestToolCreatedAttachment(t *testing.T) {
+	prov := &scriptedProvider{
+		scripts: [][]provider.StreamEvent{
+			{
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "attach",
+					Args: `{"filename":"lorem.txt","content":"lorem ipsum"}`},
+				{Kind: provider.EventDone, Finish: "tool_calls"},
+			},
+			{
+				{Kind: provider.EventTextDelta, Text: "Here is your file."},
+				{Kind: provider.EventDone, Finish: "stop"},
+			},
+		},
+	}
+	eng, st, _ := testEngine(t, prov, &fakeMCP{})
+	eng.catalog = tools.Builtin(st, nil)
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "make lorem.txt",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ch, unsub := eng.Subscribe(chatID, -1, "")
+	defer unsub()
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	// Stored in the chat AND on the assistant message that created it.
+	metas, err := st.ListAttachmentsByMessage(context.Background(), am.ID)
+	if err != nil || len(metas) != 1 || metas[0].Filename != "lorem.txt" {
+		t.Fatalf("want lorem.txt on the assistant message, got %+v (err=%v)", metas, err)
+	}
+	att, err := st.GetAttachment(context.Background(), metas[0].ID)
+	if err != nil || att.Kind != "text" || att.ChatID != chatID {
+		t.Fatalf("attachment meta wrong: %+v err=%v", att, err)
+	}
+	if string(att.Data) != "lorem ipsum" {
+		t.Fatalf("attachment blob wrong: %q", att.Data)
+	}
+
+	// The result says the file is on screen and names no other tool: nothing
+	// is left for the model to do, so nothing can point at a tool this chat
+	// might have turned off.
+	var toolResult string
+	msgs, _ := st.ListMessages(context.Background(), chatID)
+	for _, m := range msgs {
+		if m.Role == store.RoleTool {
+			toolResult = m.Content
+		}
+	}
+	if !strings.Contains(toolResult, "shown on your reply") {
+		t.Fatalf("tool result should say the file is visible: %q", toolResult)
+	}
+	if strings.Contains(toolResult, "attach_file") {
+		t.Fatalf("tool result must not name another tool: %q", toolResult)
+	}
+	if !sawAttachmentEvent(ch) {
+		t.Fatal("attachment_created never published")
+	}
+}
+
+// sawAttachmentEvent drains a subscribed chat stream (the replay buffer holds
+// everything) looking for attachment_created, stopping at the generation's
+// done event or once the stream goes quiet.
+func sawAttachmentEvent(ch <-chan WireEvent) bool {
+	saw := false
+	deadline := time.After(500 * time.Millisecond)
+drain:
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				break drain
+			}
+			if ev.Type == "attachment_created" {
+				saw = true
+			}
+			if ev.Type == "done" && saw {
+				break drain
+			}
+		case <-deadline:
+			break drain
+		}
+	}
+	return saw
+}
+
+// TestBroadcastChatUpdatedReachesGlobalWithoutHub: a title broadcast for a
+// chat with no hub (idle, no subscribers) must still fan out to global
+// subscribers — other tabs' sidebars rely on it.
+func TestBroadcastChatUpdatedReachesGlobalWithoutHub(t *testing.T) {
+	eng, st, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
+	ch, unsub := eng.SubscribeGlobal()
+	defer unsub()
+	ev := <-ch // generating_snapshot on subscribe
+	if ev.Type != "generating_snapshot" {
+		t.Fatalf("want generating_snapshot first, got %+v", ev)
+	}
+	chat, err := st.CreateChat(context.Background(), "m", store.GenParams{}, map[string]bool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.hubIfExists(chat.ID) != nil {
+		t.Fatal("precondition broken: chat should have no hub")
+	}
+	eng.BroadcastChat(chat.ID, WireEvent{Type: "chat_updated", Title: "Renamed While Idle"})
+	select {
+	case ev := <-ch:
+		if ev.Type != "chat_updated" || ev.Title != "Renamed While Idle" || ev.ChatID != chat.ID {
+			t.Fatalf("unexpected global event: %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("chat_updated for hub-less chat never reached the global stream")
+	}
+}
+
+// TestPublishConfigChangedReachesGlobal: the MCP catalog is rebuilt
+// asynchronously after a config save; clients rely on the config_changed
+// global event to refetch /api/config (tools menu) without a page reload.
+func TestPublishConfigChangedReachesGlobal(t *testing.T) {
+	eng, _, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
+	ch, unsub := eng.SubscribeGlobal()
+	defer unsub()
+	ev := <-ch // generating_snapshot on subscribe
+	if ev.Type != "generating_snapshot" {
+		t.Fatalf("want generating_snapshot first, got %+v", ev)
+	}
+	eng.PublishConfigChanged()
+	select {
+	case ev := <-ch:
+		if ev.Type != "config_changed" {
+			t.Fatalf("unexpected global event: %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("config_changed never reached the global stream")
+	}
+}
+
+// TestBuildMessagesUnreadableAttachments: an attachment the model cannot
+// consume — a binary file always, an image on a model without image input —
+// still has to reach the prompt, as a reference naming its stored id rather
+// than vanishing from the conversation.
+func TestBuildMessagesUnreadableAttachments(t *testing.T) {
+	eng, st, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
+	ctx := context.Background()
+	chatID := newTestChat(t, st)
+	msg, err := st.CreateMessage(ctx, store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "here",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := st.CreateAttachment(ctx, chatID, "pic.jpg", attach.KindImage, attach.MimeJPEG, 3, []byte("JPG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdf, err := st.CreateAttachment(ctx, chatID, "doc.pdf", attach.KindFile, "application/pdf", 3, []byte{1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{img.ID, pdf.ID} {
+		if err := st.LinkAttachmentToMessage(ctx, id, msg.ID, chatID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chat, err := st.GetChat(ctx, chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.ListMessages(ctx, chatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := func(vision bool) provider.Message {
+		t.Helper()
+		out, err := eng.buildProviderMessages(ctx, chat, msgs, nil, vision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out) == 0 || out[len(out)-1].Role != "user" {
+			t.Fatalf("want the user message last, got %+v", out)
+		}
+		return out[len(out)-1]
+	}
+
+	v := build(true)
+	if len(v.Images) != 1 || string(v.Images[0].Data) != "JPG" {
+		t.Fatalf("vision model should get the image bytes, got %+v", v.Images)
+	}
+	if strings.Contains(v.Content, img.ID) {
+		t.Fatalf("natively sent image should not also be referenced: %s", v.Content)
+	}
+	if !strings.Contains(v.Content, pdf.ID) || !strings.Contains(v.Content, `type="document"`) {
+		t.Fatalf("pdf reference missing: %s", v.Content)
+	}
+
+	b := build(false)
+	if len(b.Images) != 0 {
+		t.Fatalf("text-only model should get no image parts, got %+v", b.Images)
+	}
+	if !strings.Contains(b.Content, img.ID) || !strings.Contains(b.Content, `type="image"`) {
+		t.Fatalf("image reference missing: %s", b.Content)
+	}
+	if !strings.Contains(b.Content, pdf.ID) {
+		t.Fatalf("pdf reference missing: %s", b.Content)
+	}
+}
+
+// TestInputModalities: the modality lookup the vision decision and the
+// specialist tools' offer rest on. Unfetched metadata is text-only by default,
+// so a missing row must not claim image input.
+func TestInputModalities(t *testing.T) {
+	eng, _, _ := testEngine(t, &scriptedProvider{}, &fakeMCP{})
+	ctx := context.Background()
+	if mods := eng.inputModalities(ctx, "no-such-row"); slices.Contains(mods, "image") {
+		t.Fatalf("unset metadata must not claim image input: %v", mods)
+	}
+	if err := eng.cfg.UpsertModelMetas(ctx, []config.ModelMeta{
+		{ModelID: "vision", InputModality: []string{"text", "image"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if mods := eng.inputModalities(ctx, "vision"); !slices.Contains(mods, "image") {
+		t.Fatalf("stored image input not seen: %v", mods)
+	}
+}
+
+// TestEffectiveToolsGates: a specialist tool is advertised only to a chat model
+// that lacks the modality it stands in for, and stays out of the request
+// entirely once that model takes the input itself. A tool whose designated
+// model is not set stays out for every model, even though the catalog lists it,
+// and so does one whose external binary this host lacks. A tool with no gate at
+// all is always offered.
+func TestEffectiveToolsGates(t *testing.T) {
+	fake := &fakeMCP{tools: []mcphub.Entry{
+		{Display: "vision", Description: "images", DefaultEnabled: true, Modality: "image"},
+		{Display: "document", Description: "PDFs", DefaultEnabled: true, Modality: "file"},
+		{Display: "speak", Description: "audio out", DefaultEnabled: true, RequiresModel: true},
+		{Display: "jq", Description: "json", DefaultEnabled: true, RequiresBinary: true},
+		{Display: "time", Description: "clock", DefaultEnabled: true},
+	}}
+	eng, st, _ := testEngine(t, &scriptedProvider{}, fake)
+	ctx := context.Background()
+	chat, err := st.GetChat(ctx, newTestChat(t, st))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	offered := func(mods []string) map[string]string {
+		t.Helper()
+		defs, err := eng.effectiveTools(ctx, chat, mods)
+		if err != nil {
+			t.Fatalf("effectiveTools: %v", err)
+		}
+		out := map[string]string{}
+		for _, d := range defs {
+			out[d.Name] = d.Description
+		}
+		return out
+	}
+
+	// A model that hears audio still needs help with images and PDFs.
+	if got := offered([]string{"text", "audio"}); len(got) != 3 {
+		t.Errorf("text+audio model was offered %v, want all three", got)
+	}
+	// Unfetched metadata counts as text-only, so nothing is gated away.
+	if got := offered(nil); len(got) != 3 {
+		t.Errorf("a model with no metadata was offered %v, want all three", got)
+	}
+	// A model that sees pictures and reads PDFs needs neither specialist.
+	if got := offered([]string{"text", "image", "file"}); len(got) != 1 || got["time"] != "clock" {
+		t.Errorf("a model needing no specialist was offered %v, want only time", got)
+	}
+	// No model at all makes speak unofferable and a missing binary does the
+	// same for jq, whatever the chat model is — and a persisted per-chat toggle
+	// cannot bring either back, since the flag is a hard exclusion rather than
+	// a default.
+	for _, mods := range [][]string{nil, {"text"}, {"text", "audio", "image", "file"}} {
+		if got := offered(mods); got["speak"] != "" || got["jq"] != "" {
+			t.Errorf("mods=%v: a tool that could only fail was offered: %v", mods, got)
+		}
+	}
+	if err := st.UpdateChatSettings(ctx, chat.ID, chat.Model, chat.Params,
+		map[string]bool{"speak": true, "jq": true, "time": false}); err != nil {
+		t.Fatalf("update chat settings: %v", err)
+	}
+	chat, err = st.GetChat(ctx, chat.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := offered(nil); got["speak"] != "" || got["jq"] != "" || got["time"] != "" {
+		t.Errorf("speak and jq must stay out despite their on-toggles and time must honor its off-toggle: %v", got)
+	}
+}

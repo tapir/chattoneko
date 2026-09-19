@@ -1,0 +1,100 @@
+<script>
+  // Image attachments as a gallery: one picture keeps its natural aspect
+  // ratio, two or more become a grid of square thumbnails. Columns come from
+  // CONTAINER queries, not viewport breakpoints, because the chat column width
+  // is user-resizable (sidebar drag handle) and collapses on mobile.
+  //
+  // Beyond CAP images the last cell darkens into a "+N" tile, keeping a
+  // message scannable when a tool gathers a dozen pictures; tapping the tile
+  // opens the lightbox AT that image, where the rest are one swipe / arrow-key
+  // away (viewer.open(att, items) hands the whole set over).
+  import { viewer } from '../lib/viewer.svelte.js';
+  import { attachMenu } from '../lib/attachmenu.svelte.js';
+  import { longPress } from '../lib/longpress.js';
+  import { cn } from '../lib/utils.js';
+  import AttachmentImage from './AttachmentImage.svelte';
+
+  // Long press (touch only) opens the Share / Copy sheet instead of the
+  // browser's own image menu. `select-none` + the iOS callout kill keep the
+  // native long-press affordances off the cell; message text keeps them.
+  const PRESS = 'select-none [-webkit-touch-callout:none]';
+  const press = (att) => longPress(() => attachMenu.open(att));
+  // 6 fills whole rows (3x2 or 2x3) before the "+N" tile takes over.
+  const CAP = 6;
+
+  let {
+    items, // image attachments ({id, filename, kind, ...}); see AttachmentImage for local previews
+    singleClass = 'max-h-60', // max-height for the lone-image case
+    // Explicit width for the grid when the parent is shrink-to-fit (the
+    // right-aligned user bubble): a fr-track grid inside a fit-content
+    // block collapses to min-content otherwise. Ignored for a lone image.
+    widthClass = '',
+    class: cls = '',
+  } = $props();
+
+  let count = $derived(items?.length ?? 0);
+  let visible = $derived(items?.slice(0, CAP) ?? []);
+  let hidden = $derived(count - visible.length);
+
+  // Exactly 2 or 3 images get one cell each, so a phone never ends up with
+  // a single orphaned cell on the last row; their thumbnails are still big
+  // enough to recognize, and the lightbox has the full-size picture. 4+
+  // fills whole rows (6 = 3x2 or 2x3) and reflows to 3-up when wide.
+  let gridClass = $derived(
+    count === 2
+      ? 'grid-cols-2'
+      : count === 3
+        ? 'grid-cols-3'
+        : 'grid-cols-2 @lg:grid-cols-3',
+  );
+</script>
+
+{#if count > 0}
+  <div class={cn('@container', count > 1 && widthClass, cls)}>
+    {#if count === 1}
+      <!-- Shrink-wrapped around the picture, not a grid cell. -->
+      <div class="inline-block">
+        <button
+          type="button"
+          class="block cursor-zoom-in {PRESS}"
+          title={`View ${items[0].filename}`}
+          aria-label={`View ${items[0].filename}`}
+          onclick={() => viewer.open(items[0], items)}
+          {...press(items[0])}
+        >
+          <AttachmentImage
+            att={items[0]}
+            class={cn('max-w-full rounded-lg border', singleClass)}
+            loading="lazy"
+          />
+        </button>
+      </div>
+    {:else}
+      <div class={cn('grid gap-1.5', gridClass)}>
+        {#each visible as att, i (att.id)}
+          <div class="relative">
+            <button
+              type="button"
+              class="relative block aspect-square w-full cursor-zoom-in overflow-hidden rounded-lg border bg-muted {PRESS}"
+              title={`View ${att.filename}`}
+              aria-label={
+                i === visible.length - 1 && hidden > 0
+                  ? `View ${att.filename} and ${hidden} more image${hidden === 1 ? '' : 's'}`
+                  : `View ${att.filename}`
+              }
+              onclick={() => viewer.open(att, items)}
+              {...press(att)}
+            >
+              <AttachmentImage {att} class="size-full object-cover" loading="lazy" />
+              {#if i === visible.length - 1 && hidden > 0}
+                <span class="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/55 text-sm font-medium tabular-nums text-white">
+                  +{hidden}
+                </span>
+              {/if}
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
+{/if}

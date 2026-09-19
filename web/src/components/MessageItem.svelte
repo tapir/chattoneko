@@ -1,0 +1,562 @@
+<script>
+  import { app } from '../lib/state.svelte.js';
+  import {
+    createRenderer,
+    escapeHtml,
+    isMarkdownReady,
+    normalizeSource,
+    onMarkdownReady,
+    splitHeadingHold,
+  } from '../lib/markdown.js';
+  import { formatDuration, formatTokensOrDash } from '../lib/format.js';
+  import { copyText } from '../lib/clipboard.js';
+  import { finishedTurns, boxCount } from '../lib/turns.js';
+  import { api } from '../lib/api.js';
+  import { viewer } from '../lib/viewer.svelte.js';
+  import { attachMenu } from '../lib/attachmenu.svelte.js';
+  import { longPress } from '../lib/longpress.js';
+  import { downloadAttachment } from '../lib/attach-actions.js';
+  import { isPdf } from '../lib/pdf.js';
+  import { isAudio, canPlayAudio } from '../lib/media.js';
+  import { FileText, Info, Paperclip, Pencil, RotateCcw, Square, Volume2, Workflow, X } from '@lucide/svelte';
+  import { onDestroy } from 'svelte';
+  import { speech, stopSpeech, toggleSpeech } from '../lib/speech.svelte.js';
+  import CollapsibleStatus from './CollapsibleStatus.svelte';
+  import ThinkingBlock from './ThinkingBlock.svelte';
+  import Scramble from './Scramble.svelte';
+  import ImageGallery from './ImageGallery.svelte';
+  import PdfPreview from './PdfPreview.svelte';
+  import AudioPreview from './AudioPreview.svelte';
+  import ToolCallItem from './ToolCallItem.svelte';
+  import GenerationError from './GenerationError.svelte';
+  import IconButton from './IconButton.svelte';
+  import CopyButton from './CopyButton.svelte';
+  import { Button } from '$lib/components/ui/button';
+  import * as Popover from '$lib/components/ui/popover';
+
+  // revealed/onreveal: touch action-row affordance (same contract as
+  // SidebarItem). The parent MessageList owns WHICH message is revealed, so
+  // only one shows its actions and tapping another moves the reveal.
+  let {
+    item,
+    isLive = false,
+    isLastAssistant = false,
+    track = null,
+    revealed = false,
+    onreveal = null,
+  } = $props();
+
+  let msg = $derived(item.msg);
+  let live = $derived(isLive ? app.live : null);
+  // Model that produced this message; falls back to the chat's model when absent.
+  let msgModel = $derived(msg.model || app.chat?.model || '');
+
+  // Live messages render from stream events; terminal ones from REST-persisted fields.
+  let content = $derived(live ? live.display : msg.content);
+  // Reasoning is one entry per tool-loop turn (index = turn); `turns` below
+  // interleaves them with the tool calls of the same turn.
+  let reasoning = $derived((live ? live.reasoningDisplay : msg.reasoning) ?? []);
+  let toolCalls = $derived(live ? live.toolCalls : item.toolCalls);
+  let status = $derived(live ? live.status : msg.status);
+  let errorText = $derived(live ? live.error : msg.error);
+  // Tool-created attachments (attach, which stores and shows in one call) on
+  // this assistant message. Deliberately NOT rendered while the message is
+  // live: they appear only once the reply is fully rendered (`done` merges
+  // live.attachments into the message, which ends `live`), instead of
+  // popping in mid-stream above text that is still typing.
+  let attachments = $derived(live ? [] : (msg.attachments ?? []));
+  // Image attachments render inline; everything else keeps the download-chip
+  // treatment (text opens a preview, a binary file downloads on click). User
+  // rows are never live, so the same two lists feed both sides.
+  let imageFiles = $derived(attachments.filter((a) => a.kind === 'image'));
+  // A PDF shows its first page inline (a card, like a picture) and opens the
+  // lightbox on a click; audio gets a player row (AudioPreview — the app's own
+  // chrome, since a native control is browser-drawn and eats the long press);
+  // the rest keep the download-chip treatment. Both are picked out by mime,
+  // since the binary kind is shared with every other file, and a staged one
+  // carries no mime yet — so it stays a chip until the send round-trips.
+  let pdfFiles = $derived(attachments.filter(isPdf));
+  // A player this browser cannot decode is a dead button, so an unsupported
+  // recording falls through to the download chip like any other binary.
+  const playable = (att) => isAudio(att) && canPlayAudio(att);
+  let audioFiles = $derived(attachments.filter(playable));
+  let files = $derived(
+    attachments.filter((a) => a.kind !== 'image' && !isPdf(a) && !playable(a)),
+  );
+
+  // ---- streaming markdown ----
+  // incremark-renderer patches blocks straight into `contentEl`: stabilized
+  // blocks stay mounted and only the mutable tail is re-lexed, so the
+  // typewriter's per-frame growth costs one small parse instead of a whole
+  // document re-render. `seen` is the raw prefix already fed to the renderer,
+  // `carry` the heading-normalization holdback (see splitHeadingHold).
+  let contentEl = $state(null);
+  let renderer = null;
+  let rendererEl = null; // the element `renderer` is bound to
+  let seen = '';
+  let carry = '';
+  let rendered = ''; // content already rendered in one terminal pass
+
+  // The pipeline is a lazily-loaded chunk, so it may not have arrived when this
+  // first renders. Until it does the message shows escaped plain text, and
+  // flipping mdReady re-runs the effect below to upgrade in place. Without the
+  // subscription a terminal message would stay on the fallback forever:
+  // nothing else about it changes after mount.
+  let mdReady = $state(isMarkdownReady());
+  $effect(() => onMarkdownReady(() => (mdReady = true)));
+
+  // Per-code-block copy icon, top-right corner. Lucide copy/check inlined as
+  // strings — the button is created imperatively here, where a Svelte
+  // component cannot be mounted. Runs after every patch, since the renderer
+  // replaces the streaming block node and takes its button with it.
+  const ICON_COPY =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+  const ICON_CHECK =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
+  function decorateCodeblocks(el) {
+    for (const pre of el.querySelectorAll('pre.codeblock')) {
+      if (pre.querySelector(':scope > .codeblock-copy')) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'codeblock-copy';
+      btn.title = 'Copy code';
+      btn.setAttribute('aria-label', 'Copy code');
+      btn.innerHTML = ICON_COPY;
+      btn.onclick = () => {
+        const code = pre.querySelector('code');
+        copyText(code ? code.innerText : pre.innerText).then((ok) => {
+          btn.innerHTML = ok ? ICON_CHECK : ICON_COPY;
+          setTimeout(() => (btn.innerHTML = ICON_COPY), 1200);
+        });
+      };
+      pre.append(btn);
+    }
+  }
+
+  // One feed per content change. Reads content / contentEl / mdReady / isLive,
+  // so Svelte tracks all four as dependencies of this effect.
+  $effect(() => {
+    const el = contentEl;
+    const c = content ?? '';
+    if (!el) return; // {#if content} tore the div down
+    if (!mdReady) {
+      el.innerHTML = `<span class="whitespace-pre-wrap">${escapeHtml(c)}</span>`;
+      return;
+    }
+    // Bound by identity, not by nullness: Svelte can swap the div on a remount
+    // or chat switch without the effect ever observing contentEl === null,
+    // which would leave the renderer patching a detached node. A fresh
+    // renderer also clears the plain-text fallback and forgets what was fed.
+    if (rendererEl !== el) {
+      renderer = createRenderer(el);
+      rendererEl = el;
+      seen = '';
+      carry = '';
+      rendered = '';
+    }
+    let touched = false;
+    if (!isLive) {
+      if (rendered === c) return;
+      // Terminal message — and every finished stream — renders the whole
+      // document in one pass. The complete source is the only place a `$…$`
+      // currency pair can be recognised (see normalizeSource), so a stream
+      // that ends comes through here too rather than freezing the tail it was
+      // fed.
+      renderer.setMarkdown(normalizeSource(c));
+      seen = c;
+      carry = '';
+      rendered = c;
+      touched = true;
+    } else {
+      rendered = '';
+      // stream was reset (regenerate/edit): start the renderer over
+      if (!c.startsWith(seen)) {
+        renderer.reset();
+        seen = '';
+        carry = '';
+      }
+      const delta = c.slice(seen.length);
+      seen = c;
+      if (delta) {
+        const step = splitHeadingHold(carry, delta);
+        carry = step.carry;
+        if (step.emit) renderer.append(step.emit);
+        touched = true;
+      }
+    }
+    if (touched) decorateCodeblocks(el);
+  });
+
+  // Notify parent (MessageList) whenever the rendered content changes,
+  // so it can follow the stream to the bottom. `turns` is rebuilt on every
+  // thinking/argument delta, so reading it tracks all of them.
+  $effect(() => {
+    track?.(content, turns);
+  });
+
+  // Switching chats (or regenerating this message away) unmounts the row while
+  // its recording is still playing: stop it, or the audio keeps going with no
+  // control left on screen to stop it.
+  onDestroy(() => {
+    if (speech.id === msg.id) stopSpeech();
+  });
+
+  // ---- tap to reveal actions (touch) ----
+  // Hover reveals the row on pointer devices; touch has no hover, so a tap on
+  // the message toggles it. Clicks that belong to something inside (links,
+  // code-copy, gallery cells, the actions themselves, the edit form) are left
+  // alone, and a live text selection means the "tap" was a long-press.
+  const INTERACTIVE = 'a, button, input, textarea, select, summary, label';
+  function onBubbleClick(e) {
+    if (e.target.closest(INTERACTIVE)) return;
+    if (window.getSelection()?.toString()) return;
+    onreveal?.(revealed ? null : msg.id);
+  }
+
+  // Resting state is invisible everywhere; `[@media(hover:hover)]` keeps the
+  // desktop hover and keyboard-focus reveal (a tap focuses a link on touch and
+  // an ungated focus-within would pin the row open), `[@media(hover:none)]`
+  // makes the tap reveal apply only where there is no pointer to hover with (a
+  // stray `revealed` on a desktop click is then a no-op instead of a row pinned
+  // open forever).
+  const ACTIONS =
+    'transition-opacity opacity-0 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100';
+  let actionsClass = $derived(revealed ? `${ACTIONS} [@media(hover:none)]:opacity-100` : ACTIONS);
+
+  // ---- inline edit (user messages) ----
+  let editing = $state(false);
+  let editValue = $state('');
+  let editArea = $state(null);
+  // Attachments kept by the edit; initialized from the message and pruned
+  // via the remove buttons. Only sent to the API when it differs.
+  let editAttachments = $state([]);
+
+  function startEdit() {
+    editValue = msg.content;
+    editAttachments = [...(msg.attachments ?? [])];
+    editing = true;
+    queueMicrotask(() => editArea?.focus());
+  }
+
+  function removeEditAttachment(id) {
+    editAttachments = editAttachments.filter((a) => a.id !== id);
+  }
+
+  let editDirty = $derived(
+    editValue.trim() !== msg.content ||
+      editAttachments.length !== (msg.attachments?.length ?? 0),
+  );
+  let editValid = $derived(editValue.trim().length > 0 || editAttachments.length > 0);
+
+  async function commitEdit() {
+    const content = editValue.trim();
+    if (!editValid) return;
+    const ids = editAttachments.map((a) => a.id);
+    editing = false;
+    if (!editDirty) return;
+    await app.editMessage(msg.id, content, ids);
+  }
+
+  function onEditKeydown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      commitEdit();
+    } else if (e.key === 'Escape') {
+      editing = false;
+    }
+  }
+
+  // ---- turn timeline ----
+  // One response is a sequence of provider turns: each thinks, maybe calls
+  // tools, and the last writes the answer. Rendering them in that order keeps
+  // a thinking block next to the calls it produced instead of merging every
+  // turn's thinking into one block above them all.
+  let turnCount = $derived.by(() => {
+    let n = reasoning.length;
+    for (const c of toolCalls ?? []) n = Math.max(n, (c.turn ?? 0) + 1);
+    // A live reply with nothing yet still shows the empty "Thinking" pill.
+    return live && n === 0 ? 1 : n;
+  });
+
+  // How many leading turns finished thinking: live from the server's
+  // turn_complete events, reloaded from the persisted shape (lib/turns.js).
+  let doneTurns = $derived(
+    live ? live.doneTurns : finishedTurns(status, turnCount, toolCalls)
+  );
+
+  let turns = $derived.by(() =>
+    Array.from({ length: turnCount }, (_, i) => ({
+      turn: i,
+      text: reasoning[i] ?? "",
+      calls: (toolCalls ?? []).filter((c) => (c.turn ?? 0) === i),
+      done: i < doneTurns,
+    })),
+  );
+
+  // Nothing at all yet — no thinking, no calls, no answer: show the empty pill
+  // so the reply is visibly on its way.
+  let waiting = $derived(
+    isLive && !content && !turns.some((t) => t.text || t.calls.length)
+  );
+
+  // A long tool loop stacks a lot of boxes above the answer, so the timeline
+  // folds into one collapsed "Processing…" row the moment a SECOND box exists
+  // (lib/turns.js). Both states are one box tall, so the switch is a label swap
+  // in a single render pass — two bare boxes are never on screen together.
+  let boxes = $derived(boxCount(turns));
+
+  // Any terminal problem that ended or cut off the response renders through
+  // the single GenerationError component (same style for every cause).
+  let generationError = $derived(status === 'failed' || status === 'stopped');
+</script>
+
+{#snippet pdfCard(att, width)}
+  <!-- The page IS the thumbnail — the same cursor + long-press sheet as a
+       picture, and no filename under it (the page shows what it is). -->
+  <button
+    type="button"
+    class="block cursor-zoom-in select-none [-webkit-touch-callout:none]"
+    title={`View ${att.filename}`}
+    aria-label={`View ${att.filename}`}
+    onclick={() => viewer.open(att)}
+    {...longPress(() => attachMenu.open(att))}
+  >
+    <PdfPreview {att} scale={1} class="{width} rounded-lg border" />
+  </button>
+{/snippet}
+
+{#snippet timeline()}
+  {#each turns as t (t.turn)}
+    {#if t.text || (waiting && t.turn === 0)}
+      <ThinkingBlock
+        text={t.text}
+        streaming={!t.done && status === 'generating'}
+        error={!t.done && generationError && !content}
+      />
+    {/if}
+
+    {#each t.calls as call (call.call_id)}
+      <ToolCallItem {call} {status} />
+    {/each}
+  {/each}
+{/snippet}
+
+{#if msg.role === 'user'}
+  <!-- Tap-to-reveal is a touch convenience (no hover); keyboard gets the row
+       via group-focus-within, and this is a message container, not a control. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="group mt-5 flex justify-end" onclick={onBubbleClick}>
+    <div class="max-w-[85%] sm:max-w-[75%]">
+      <div class="rounded-2xl rounded-br-sm bg-accent px-4 py-2.5">
+        {#if (editing ? editAttachments : (msg.attachments ?? [])).length}
+          {#if editing}
+            <div class="mb-2 flex flex-wrap gap-1.5">
+              {#each editAttachments as att (att.id)}
+                <span class="relative inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
+                  {#if att.kind === 'image'}
+                    <img src={api.attachmentUrl(att.id)} alt={att.filename} class="size-5 rounded object-cover" />
+                  {:else}
+                    <Paperclip class="size-3" strokeWidth={1.75} aria-hidden="true" />
+                  {/if}
+                  <span class="max-w-32 truncate">{att.filename}</span>
+                  <button
+                    class="flex size-4 items-center justify-center rounded-full transition-colors hover:bg-foreground/10 hover:text-foreground"
+                    title="Remove attachment"
+                    onclick={() => removeEditAttachment(att.id)}
+                  >
+                    <X class="size-3" strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                </span>
+              {/each}
+            </div>
+          {:else}
+            <div class="mb-2 flex flex-col gap-1.5">
+              <ImageGallery
+                items={imageFiles}
+                singleClass="max-h-40"
+                widthClass="w-64 sm:w-80"
+              />
+              {#if pdfFiles.length}
+                <div class="flex flex-wrap gap-1.5">
+                  {#each pdfFiles as att (att.id)}
+                    {@render pdfCard(att, 'w-32 sm:w-40')}
+                  {/each}
+                </div>
+              {/if}
+              {#each audioFiles as att (att.id)}
+                <AudioPreview {att} />
+              {/each}
+              {#if files.length}
+                <div class="flex flex-wrap gap-1.5">
+                  {#each files as att (att.id)}
+                    <!-- Text opens the lightbox rather than a new tab: the URL
+                         still exists (and the viewer's download button exposes
+                         it), but the click stays inside the app. Anything else
+                         has no preview to open, so it downloads. -->
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors select-none [-webkit-touch-callout:none] hover:text-foreground"
+                      title={att.kind === 'text' ? `View ${att.filename}` : `Download ${att.filename}`}
+                      onclick={() => (att.kind === 'text' ? viewer.open(att) : downloadAttachment(att))}
+                      {...longPress(() => attachMenu.open(att))}
+                    >
+                      <Paperclip class="size-3" strokeWidth={1.75} aria-hidden="true" />
+                      {att.filename}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+        {/if}
+        {#if editing}
+          <textarea
+            bind:this={editArea}
+            bind:value={editValue}
+            class="min-h-16 w-full resize-none rounded-md border bg-background p-2 text-sm outline-none transition-colors focus:border-ring/50"
+            onkeydown={onEditKeydown}
+          ></textarea>
+          <div class="mt-1.5 flex justify-end gap-1.5">
+            <Button variant="ghost" size="sm" class="h-7 text-xs" onclick={() => (editing = false)}>Cancel</Button>
+            <Button size="sm" class="h-7 text-xs" onclick={commitEdit} disabled={!editValid || !editDirty}>Save & resend</Button>
+          </div>
+        {:else if msg.content}
+          <div class="whitespace-pre-wrap break-words text-[0.9375rem] leading-relaxed">{msg.content}</div>
+        {/if}
+      </div>
+      <!-- No actions on a message that hasn't reached the server yet (app.outgoing). -->
+      {#if !editing && msg.status !== 'outgoing'}
+        <div class="mt-0.5 flex justify-end gap-0.5 {actionsClass}">
+          <CopyButton text={() => msg.content} label="Copy message" size="sm" />
+          <IconButton icon={Pencil} label="Edit & resend" size="sm" onclick={startEdit} />
+        </div>
+      {/if}
+    </div>
+  </div>
+{:else}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="group mt-6" onclick={onBubbleClick}>
+    {#if boxes > 1}
+      <CollapsibleStatus icon={Workflow} title="Processing…" running={status === 'generating'} class="mb-2">
+        {@render timeline()}
+      </CollapsibleStatus>
+    {:else}
+      {@render timeline()}
+    {/if}
+
+    {#if content}
+      <!-- Children are patched in imperatively by the incremental renderer;
+           Svelte owns the div, the renderer owns what's inside it. -->
+      <div bind:this={contentEl} class="md-body break-words"></div>
+    {/if}
+
+    <!-- Continuous from the moment of sending: MessageList shows the same
+         cursor under app.outgoing, this one takes over once the reply is
+         live, and it stays until `done` (also under the empty Thinking pill,
+         so it doesn't blink out while the first token is on its way). -->
+    {#if status === 'generating' && isLive}
+      <Scramble />
+    {/if}
+
+    {#if imageFiles.length}
+      <!-- Pictures the model gathered (fetch) as a gallery: tapping any cell
+           opens the same lightbox as a single image, with prev/next over the
+           whole set. -->
+      <ImageGallery items={imageFiles} class="mt-2" />
+    {/if}
+
+    {#if pdfFiles.length}
+      <div class="mt-2 flex flex-wrap gap-1.5">
+        {#each pdfFiles as att (att.id)}
+          {@render pdfCard(att, 'w-40 sm:w-48')}
+        {/each}
+      </div>
+    {/if}
+
+    {#if audioFiles.length}
+      <div class="mt-2 flex flex-col gap-1.5">
+        {#each audioFiles as att (att.id)}
+          <AudioPreview {att} />
+        {/each}
+      </div>
+    {/if}
+
+    {#if files.length}
+      <div class="mt-2 flex flex-wrap gap-1.5">
+        {#each files as att (att.id)}
+          <!-- Text opens the viewer overlay (the download lives inside it);
+               a binary file has no preview, so its click downloads instead. -->
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-lg border bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors select-none [-webkit-touch-callout:none] hover:bg-muted hover:text-foreground"
+            title={att.kind === 'text' ? `View ${att.filename}` : `Download ${att.filename}`}
+            onclick={() => (att.kind === 'text' ? viewer.open(att) : downloadAttachment(att))}
+            {...longPress(() => attachMenu.open(att))}
+          >
+            <FileText class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+            <span class="max-w-48 truncate">{att.filename}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+
+    {#if generationError}
+      <GenerationError {status} error={errorText} />
+    {/if}
+
+    {#if !app.generating && !generationError && status !== 'generating'}
+      <div class="mt-1.5 flex items-center gap-1 {actionsClass}">
+        {#if isLastAssistant}
+          <IconButton icon={RotateCcw} label="Regenerate" onclick={() => app.regenerate()} />
+        {/if}
+
+        <CopyButton text={() => content} label="Copy message" />
+
+        <!-- Read aloud: server-side speech synthesis, offered only when a
+             speech model is designated (POST /api/speech). The square is both
+             "fetching" (pulsing) and "playing", so the button stays a stop
+             control for the whole time it is busy. -->
+        {#if app.config?.speech_enabled}
+          <IconButton
+            icon={speech.id === msg.id ? Square : Volume2}
+            label={speech.id === msg.id ? 'Stop reading aloud' : 'Read aloud'}
+            class={speech.loading && speech.id === msg.id ? 'animate-pulse' : ''}
+            onclick={() => toggleSpeech(msg.id)}
+          />
+        {/if}
+
+        <Popover.Root>
+          <Popover.Trigger
+            class="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            title="Generation info"
+            aria-label="Generation info"
+          >
+            <Info class="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+          </Popover.Trigger>
+          <Popover.Content align="start" class="w-64 p-3">
+            <h4 class="mb-2 text-sm font-semibold">This response</h4>
+            <dl class="space-y-1 text-xs">
+              <div class="flex justify-between gap-2">
+                <dt class="shrink-0 text-muted-foreground">Model</dt>
+                <dd class="truncate font-mono font-medium" title={msgModel}>{msgModel || '—'}</dd>
+              </div>
+              <div class="flex justify-between gap-2">
+                <dt class="text-muted-foreground">Duration</dt>
+                <dd class="font-medium tabular-nums">{formatDuration(msg.duration_ms)}</dd>
+              </div>
+              <div class="flex justify-between gap-2">
+                <dt class="text-muted-foreground">Input tokens</dt>
+                <dd class="font-medium tabular-nums">{formatTokensOrDash(msg.prompt_tokens)}</dd>
+              </div>
+              <div class="flex justify-between gap-2">
+                <dt class="text-muted-foreground">Output tokens</dt>
+                <dd class="font-medium tabular-nums">{formatTokensOrDash(msg.completion_tokens)}</dd>
+              </div>
+            </dl>
+          </Popover.Content>
+        </Popover.Root>
+      </div>
+    {/if}
+  </div>
+{/if}

@@ -135,3 +135,42 @@ func TestSpeakWithoutModel(t *testing.T) {
 		t.Fatalf("refusal = %q, want it to name the missing setting", out)
 	}
 }
+
+// TestSpeakReadsStoredFile: the `id` source reads a text file already in the
+// chat, so the model pays no output tokens retyping it, and refuses everything
+// that is not this chat's text.
+func TestSpeakReadsStoredFile(t *testing.T) {
+	srv, recorded := speechServer(t, providerAudio())
+	const words = "Read me aloud."
+	fs := &fakeFileStore{}
+	seedAttachment(fs, "mine", agentChat, "notes.md", "text", "text/markdown", []byte(words))
+	seedAttachment(fs, "take", agentChat, "take.mp3", "file", "audio/mpeg", []byte("ID3"))
+	seedAttachment(fs, "theirs", "chat-2", "notes.md", "text", "text/markdown", []byte(words))
+	seedAttachment(fs, "blank", agentChat, "blank.txt", "text", "text/plain", []byte("  \n"))
+	cfgs := agentConfig(t, srv.URL, config.ModelsConfig{DefaultSpeechModel: "tts", SpeechVoice: "alloy"})
+	meta := mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg}
+
+	out, isErr := callSpecialist(t, fs, cfgs, "speak", `{"id":"mine"}`, meta)
+	if isErr {
+		t.Fatalf("call failed: %s", out)
+	}
+	if got := recorded().input; got != words {
+		t.Errorf("input = %q, want the stored file's words", got)
+	}
+	if len(fs.links) != 1 || fs.links[0][1] != agentMsg {
+		t.Errorf("links = %v, want the recording shown on %s", fs.links, agentMsg)
+	}
+
+	for _, args := range []string{
+		`{"id":"take"}`, `{"id":"theirs"}`, `{"id":"nope"}`, `{"id":"  "}`, `{"id":"blank"}`,
+		`{"text":"hi","id":"mine"}`, `{}`,
+	} {
+		out, isErr := callSpecialist(t, fs, cfgs, "speak", args, meta)
+		if !isErr {
+			t.Errorf("%s: want an in-band refusal, got %q", args, out)
+		}
+	}
+	if len(fs.links) != 1 {
+		t.Errorf("a refused call stored a recording: %v", fs.links)
+	}
+}

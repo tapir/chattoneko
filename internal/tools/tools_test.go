@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"chattoneko/internal/config"
+	"chattoneko/internal/db"
 	"chattoneko/internal/mcphub"
 )
 
@@ -180,4 +182,59 @@ type stubSource struct {
 func (s *stubSource) Tools() []mcphub.Entry { return s.entries }
 func (s *stubSource) Call(context.Context, string, string, mcphub.CallMeta) (string, bool, error) {
 	return s.out, false, nil
+}
+
+// A tool that needs a designated model is not in the catalog at all until one
+// exists: the model is never offered a call that could only fail, and neither
+// tool list shows a switch for it. Designating one brings its tool back live.
+func TestCatalogHidesToolsWithoutAModel(t *testing.T) {
+	sqlDB, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.Migrate(sqlDB); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ctx := context.Background()
+	cfgs, err := config.TestStore(ctx, sqlDB, config.Config{})
+	if err != nil {
+		t.Fatalf("config store: %v", err)
+	}
+	listed := func() map[string]bool {
+		have := map[string]bool{}
+		for _, e := range Builtin(&fakeFileStore{}, cfgs).Tools() {
+			have[e.Display] = true
+		}
+		return have
+	}
+
+	have := listed()
+	for _, name := range []string{"vision", "document", "transcription", "speak"} {
+		if have[name] {
+			t.Errorf("%s is listed with no model designated for it", name)
+		}
+	}
+	for _, name := range []string{"time", "code", "create_file", "fetch"} {
+		if !have[name] {
+			t.Errorf("%s needs no designated model and went missing", name)
+		}
+	}
+
+	// The audio ids are free-standing, so a save designates them with no
+	// whitelist or metadata to satisfy.
+	transcribe, speak := "whisper-1", "tts-1"
+	if _, err := cfgs.Update(ctx, config.Patch{Models: &config.ModelsPatch{
+		DefaultTranscriptionModel: &transcribe,
+		DefaultSpeechModel:        &speak,
+	}}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	have = listed()
+	if !have["transcription"] || !have["speak"] {
+		t.Errorf("the audio designations did not bring their tools back: %v", have)
+	}
+	if have["vision"] || have["document"] {
+		t.Errorf("a tool whose own role is still undesignated came back: %v", have)
+	}
 }

@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"time"
 
+	"chattoneko/internal/config"
 	"chattoneko/internal/mcphub"
 )
 
@@ -39,6 +40,10 @@ type tool struct {
 	// every other tool, which is always offered. The engine leaves such a tool
 	// out of the request and the chat UI greys it out.
 	Modality string
+	// Model returns the designated model the tool needs, read live on every
+	// catalog listing: "" means none is designated, so the tool could only fail
+	// and is left out entirely. Nil for a tool that needs no specialist model.
+	Model func(config.ModelsConfig) string
 	// Timeout bounds one call, overriding callTimeout. Only a handler doing
 	// remote I/O needs it (the specialists wait on another model); 0 keeps the
 	// default.
@@ -59,6 +64,9 @@ type handler func(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (s
 type registry struct {
 	tools  []tool
 	byName map[string]int // name → index into tools
+	// cfgs gates the tools that need a designated model. Nil — a registry built
+	// by a test that lists the definitions themselves — gates nothing.
+	cfgs *config.Store
 }
 
 // newRegistry builds a registry from the given tool definitions. A missing
@@ -82,11 +90,21 @@ func newRegistry(ts ...tool) *registry {
 	return r
 }
 
-// Tools returns the catalog entries for all integrated tools, in declaration
-// order.
+// Tools returns the catalog entries for the integrated tools, in declaration
+// order, minus a tool whose designated model is not set: the engine never
+// offers one that could only fail, and neither tool list shows a switch for it.
+// Live, so designating a model in settings brings its tool back with no rebuild.
 func (r *registry) Tools() []mcphub.Entry {
+	gate := r.cfgs != nil
+	var models config.ModelsConfig
+	if gate {
+		models = r.cfgs.Get().Models
+	}
 	out := make([]mcphub.Entry, 0, len(r.tools))
 	for _, t := range r.tools {
+		if gate && t.Model != nil && t.Model(models) == "" {
+			continue
+		}
 		out = append(out, mcphub.Entry{
 			Display:        t.Name,
 			Description:    t.Description,

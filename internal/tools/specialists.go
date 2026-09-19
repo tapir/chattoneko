@@ -169,6 +169,7 @@ func Specialists(files fileStore, cfgs *config.Store) []tool {
 			DefaultEnabled: true,
 			Title:          sp.title,
 			Modality:       sp.modality,
+			Model:          sp.model,
 			Timeout:        specialistTimeout,
 			Handler:        s.call,
 		})

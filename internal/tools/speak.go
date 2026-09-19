@@ -41,6 +41,7 @@ func Speak(files fileStore, cfgs *config.Store) tool {
 }`),
 		DefaultEnabled: true,
 		Title:          "Speaking…",
+		Model:          func(m config.ModelsConfig) string { return m.DefaultSpeechModel },
 		// A full provider round trip over the whole text, not local work, so
 		// the integrated tools' 30s default is far too tight (as for the
 		// specialists).

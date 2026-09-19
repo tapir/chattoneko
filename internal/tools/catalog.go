@@ -26,7 +26,9 @@ type fileStore interface {
 // specialists their designated models.
 func Builtin(files fileStore, cfgs *config.Store) *registry {
 	ts := []tool{Time, Code, CreateFile(files, cfgs), Fetch, Speak(files, cfgs)}
-	return newRegistry(append(ts, Specialists(files, cfgs)...)...)
+	r := newRegistry(append(ts, Specialists(files, cfgs)...)...)
+	r.cfgs = cfgs
+	return r
 }
 
 // humanSize renders a byte count for the model/user ("342 B", "1.2 KB", "3.4 MB").

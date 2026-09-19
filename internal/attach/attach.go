@@ -30,13 +30,13 @@ const (
 	KindFile = "file"
 )
 
-// The mimes a file can be stored under. Every picture becomes a PNG and every
+// The mimes a file can be stored under. Every picture becomes a JPEG and every
 // recording a mono MP3 (internal/media), so those two plus PDF are the whole set
 // of recognized content; anything else a tool hands over is a download.
 const (
-	MimePNG = "image/png"
-	MimeMP3 = "audio/mpeg"
-	MimePDF = "application/pdf"
+	MimeJPEG = "image/jpeg"
+	MimeMP3  = "audio/mpeg"
+	MimePDF  = "application/pdf"
 	// MimeBinary is what an unrecognized download is stored as. The attachment
 	// handler serves every non-audio binary as this anyway, so naming a format
 	// nothing sniffs any more would only decorate the <file> block.
@@ -161,7 +161,7 @@ type File struct {
 // Classify decides what one file is and what has to happen to its bytes before
 // they may be stored. Media is recognised by EXTENSION alone, and the mime and
 // name it returns are the ones the conversion produces, so an image is always
-// stored as a PNG under a .png name and a recording as an MP3 under .mp3.
+// stored as a JPEG under a .jpg name and a recording as an MP3 under .mp3.
 // Everything else has to be text; anything left is refused with ErrUnsupported.
 func Classify(filename string, data []byte, maxBytes int64) (*File, error) {
 	if len(data) == 0 {
@@ -174,8 +174,8 @@ func Classify(filename string, data []byte, maxBytes int64) (*File, error) {
 	u := &File{Name: filename}
 	switch {
 	case imageExts[ext]:
-		u.Kind, u.Mime, u.Convert = KindImage, MimePNG, ConvertImage
-		u.Name = ensureExt(filename, ".png")
+		u.Kind, u.Mime, u.Convert = KindImage, MimeJPEG, ConvertImage
+		u.Name = ensureExt(filename, ".jpg")
 	case audioExts[ext]:
 		u.Kind, u.Mime, u.Convert = KindFile, MimeMP3, ConvertAudio
 		u.Name = ensureExt(filename, ".mp3")
@@ -296,13 +296,13 @@ func IsText(data []byte) bool {
 }
 
 // SendsAsImage reports whether a stored image mime may go to a model as an
-// image part: PNG only, the one image mime the conversion every picture goes
+// image part: JPEG only, the one image mime the conversion every picture goes
 // through produces (internal/media). A row stored before that was true previews
 // in the browser but goes out through the <file> reference path, and the vision
 // tool refuses it in-band. History is rebuilt every turn, so a mime the provider
 // rejects would break that chat permanently.
 func SendsAsImage(mime string) bool {
-	return mime == MimePNG
+	return mime == MimeJPEG
 }
 
 // Type names an attachment for the <file> block the model reads. The kind is

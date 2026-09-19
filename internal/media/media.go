@@ -1,5 +1,5 @@
 // Package media turns an uploaded picture or recording into the bytes the
-// database stores: a PNG for every image, a mono MP3 for every audio file. It
+// database stores: a JPEG for every image, a mono MP3 for every audio file. It
 // runs ffmpeg — the static build ffmpeg/ produces — over two temp files, because
 // conversion needs a named input (TGA has no magic bytes, and an MP4 whose moov
 // box sits at the end demuxes to nothing from a pipe) and a named output (an MP3
@@ -75,7 +75,7 @@ func Prepare(ctx context.Context, f *attach.File, data []byte, maxBytes int64) (
 	var err error
 	switch f.Convert {
 	case attach.ConvertImage:
-		data, err = toPNG(ctx, f.Ext, data)
+		data, err = toJPEG(ctx, f.Ext, data)
 	case attach.ConvertAudio:
 		data, err = toMP3(ctx, f.Ext, data)
 	}
@@ -90,13 +90,25 @@ func Prepare(ctx context.Context, f *attach.File, data []byte, maxBytes int64) (
 	return data, nil
 }
 
-// toPNG converts one picture to a PNG. inExt is the input's own suffix, dot
+// toJPEG converts one picture to a JPEG. inExt is the input's own suffix, dot
 // included, and must survive onto the temp file's name: ffmpeg has no TGA
 // parser at all, so ".tga" is the only thing that reaches that decoder. An
-// animated GIF, WebP or APNG keeps its first frame.
-func toPNG(ctx context.Context, inExt string, data []byte) ([]byte, error) {
-	return run(ctx, inExt, ".png", data, append(common, maxPixels...),
-		[]string{"-map", "0:V:0", "-vf", scale, "-frames:v", "1"})
+// animated GIF, WebP or APNG keeps its first frame, and JPEG has no alpha, so a
+// transparent picture keeps the RGB underneath its transparency.
+//
+// -q:v 3 is quality 90 on the scale every other JPEG encoder uses: ffmpeg's
+// mjpeg takes an inverted 2-31 qscale and writes flatter quantization tables
+// than libjpeg, so this is measured, not guessed — 46.97 dB against
+// cjpeg -quality 90's 46.21 dB over photographic, noise and gradient sources.
+//
+// yuvj420p has to be forced: mjpeg picks its quantization table per pixel
+// format, and left to choose its own 4:4:4 it writes one three times coarser at
+// the same -q:v (7 dB worse on luma here), so the number would quietly stop
+// meaning quality 90.
+func toJPEG(ctx context.Context, inExt string, data []byte) ([]byte, error) {
+	return run(ctx, inExt, ".jpg", data, append(common, maxPixels...),
+		[]string{"-map", "0:V:0", "-vf", scale,
+			"-pix_fmt", "yuvj420p", "-q:v", "3", "-frames:v", "1"})
 }
 
 // toMP3 converts one recording — or a video container's soundtrack, the picture

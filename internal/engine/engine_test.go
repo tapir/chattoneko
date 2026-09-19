@@ -1204,7 +1204,7 @@ func TestBuildMessagesUnreadableAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	img, err := st.CreateAttachment(ctx, chatID, "pic.png", attach.KindImage, "image/png", 3, []byte("PNG"))
+	img, err := st.CreateAttachment(ctx, chatID, "pic.jpg", attach.KindImage, attach.MimeJPEG, 3, []byte("JPG"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1238,7 +1238,7 @@ func TestBuildMessagesUnreadableAttachments(t *testing.T) {
 	}
 
 	v := build(true)
-	if len(v.Images) != 1 || string(v.Images[0].Data) != "PNG" {
+	if len(v.Images) != 1 || string(v.Images[0].Data) != "JPG" {
 		t.Fatalf("vision model should get the image bytes, got %+v", v.Images)
 	}
 	if strings.Contains(v.Content, img.ID) {

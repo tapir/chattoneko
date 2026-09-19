@@ -183,7 +183,7 @@ func TestFetchTextTruncated(t *testing.T) {
 // ---- fetch: anything else is stored, and its id comes back ----
 
 // A body the model cannot read is a file, not an error: stored in the chat
-// through the same pipeline an upload goes through, so a JPEG lands as the PNG
+// through the same pipeline an upload goes through, so a PNG lands as the JPEG
 // a vision model is sent and a file nothing can read still reaches the user as
 // a download. Shown on no message — that is attach's call, which the result
 // says out loud.
@@ -198,8 +198,8 @@ func TestFetchStoresBinary(t *testing.T) {
 		wantMime          string
 		verbatim          bool
 	}{
-		{"png", "/pics/cat.png", "image/png", testPNG(t, 40, 30), "cat.png", "image", "image/png", false},
-		{"jpeg becomes a png", "/pics/cat.jpg", "image/jpeg", testJPEG(t, 40, 30), "cat.png", "image", "image/png", false},
+		{"png becomes a jpg", "/pics/cat.png", "image/png", testPNG(t, 40, 30), "cat.jpg", "image", "image/jpeg", false},
+		{"jpeg", "/pics/cat.jpg", "image/jpeg", testJPEG(t, 40, 30), "cat.jpg", "image", "image/jpeg", false},
 		{"pdf", "/docs/doc.pdf", "application/pdf", pdf, "doc.pdf", "file", "application/pdf", true},
 		{"nobody decodes it", "/pics/cat", "image/avif", avifBody(), "cat", "file", "application/octet-stream", true},
 	}
@@ -239,10 +239,10 @@ func TestFetchStoresBinary(t *testing.T) {
 // while one served as a type nobody knows is a bare download.
 func TestFetchStoredName(t *testing.T) {
 	allowWebFetchLoopback(t)
-	jpeg, pdf, pic := testJPEG(t, 8, 8), []byte("%PDF-1.4\n\x00\xfe\xff binary"), testPNG(t, 8, 8)
+	jpeg, pdf := testJPEG(t, 8, 8), []byte("%PDF-1.4\n\x00\xfe\xff binary")
 	ts := serveRoutes(t, map[string]route{
 		"/pics/cat.jpg": {"image/jpeg", jpeg},
-		"/pics/img.PNG": {"image/png", pic},
+		"/pics/img.JPG": {"image/jpeg", jpeg},
 		"/pics/noext":   {"image/jpeg", jpeg},
 		"/docs/report":  {"application/pdf", pdf},
 		"/api/data":     {"application/json", pdf},
@@ -251,13 +251,13 @@ func TestFetchStoredName(t *testing.T) {
 	})
 
 	cases := []struct{ path, wantFile, wantMime string }{
-		{"/pics/cat.jpg", "cat.png", "image/png"}, // media carry the converted suffix
-		{"/pics/img.PNG", "img.PNG", "image/png"}, // a suffix that already agrees is kept
-		{"/pics/noext", "noext.png", "image/png"}, // the served type supplies the one that decides
+		{"/pics/cat.jpg", "cat.jpg", "image/jpeg"}, // media carry the converted suffix
+		{"/pics/img.JPG", "img.JPG", "image/jpeg"}, // a suffix that already agrees is kept
+		{"/pics/noext", "noext.jpg", "image/jpeg"}, // the served type supplies the one that decides
 		{"/docs/report", "report.pdf", "application/pdf"},
 		{"/api/data", "data.json", "application/octet-stream"},
 		{"/api/odd", "odd", "application/octet-stream"},
-		{"/", "file.png", "image/png"},
+		{"/", "file.jpg", "image/jpeg"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -283,8 +283,8 @@ func TestFetchStoredNameCap(t *testing.T) {
 		t.Fatalf("unexpected error: %q", out)
 	}
 	got := staged(t, fs).filename
-	if len(got) > 200 || !utf8.ValidString(got) || !strings.HasSuffix(got, ".png") {
-		t.Fatalf("filename = %q (%d bytes, valid UTF-8 %v), want <=200 bytes ending in .png",
+	if len(got) > 200 || !utf8.ValidString(got) || !strings.HasSuffix(got, ".jpg") {
+		t.Fatalf("filename = %q (%d bytes, valid UTF-8 %v), want <=200 bytes ending in .jpg",
 			got, len(got), utf8.ValidString(got))
 	}
 }

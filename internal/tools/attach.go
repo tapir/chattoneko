@@ -29,7 +29,7 @@ func Attach(files fileStore, limits *config.Store) tool {
 			"call succeeds: an image shows inline, a text file opens as a preview, anything else " +
 			"downloads when clicked. Pass exactly ONE source: `content` for UTF-8 text (.txt, " +
 			".md, .csv, .json, source code, ...), `content_base64` for binary bytes you produced " +
-			"(a PNG you drew, a PDF, a zip), or `ids` — attachment ids already stored in this " +
+			"(an image you drew, a PDF, a zip), or `ids` — attachment ids already stored in this " +
 			"chat, the ones a <file> block in an earlier tool result gave you, which this call " +
 			"puts on your reply. A file you write must be COMPLETE in this one call — partial " +
 			"writes and appends are not possible. Describe the file in your reply instead of " +
@@ -152,7 +152,7 @@ func attachStored(ctx context.Context, files fileStore, meta mcphub.CallMeta, id
 
 // storeFile classifies, converts and stores one file: the same rules as an
 // upload — the extension decides the kind, ffmpeg produces the stored bytes, so
-// a JPEG lands as a 1920px-capped PNG and an ogg as a mono MP3 — plus the
+// a PNG lands as a 1920px-capped JPEG and an ogg as a mono MP3 — plus the
 // download kind an upload refuses, which is what keeps an unrecognized file
 // reachable. Both caps are the live ones: a file no model wrote gets no larger
 // a budget than a user's upload.

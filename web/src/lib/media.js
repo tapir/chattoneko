@@ -1,6 +1,6 @@
 // What an attachment IS, by the extension on its name. Nothing here reads
 // bytes: the server runs the same extension check and converts every picture
-// to a PNG and every recording to a mono MP3 before it stores anything
+// to a JPEG and every recording to a mono MP3 before it stores anything
 // (internal/attach + internal/media), so a file that lies about its suffix is
 // rejected there and reported as a toast here.
 //
@@ -31,7 +31,7 @@ export function kindOfExt(name) {
 
 // previewsLocally: whether a staged file can be painted from its own bytes.
 // TGA is the one accepted picture no browser decodes, so its chip shows the
-// filename instead and the message paints the server's PNG once it exists.
+// filename instead and the message paints the server's JPEG once it exists.
 export const previewsLocally = (name) => extOf(name) !== "tga";
 
 // isAudio picks the attachments that want a player; canPlayAudio is the gate on

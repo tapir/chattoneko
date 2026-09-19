@@ -210,7 +210,7 @@ func TestSpecialistTools(t *testing.T) {
 		mentions []string
 		required string
 	}{
-		{"vision", "image", []string{"images (PNG only)"}, `"id", "question"`},
+		{"vision", "image", []string{"images (JPEG only)"}, `"id", "question"`},
 		{"document", "file", []string{"PDF documents"}, `"id", "question"`},
 		// A transcription model takes no prompt, so the question is optional and
 		// the description says it goes nowhere.
@@ -246,7 +246,7 @@ func TestSpecialistTools(t *testing.T) {
 // transcribed, not asked (TestTranscriptionSendsRecording).
 func TestSpecialistSendsFileToItsModel(t *testing.T) {
 	const answer = "The invoice totals 42 EUR."
-	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+	jpg := []byte{0xff, 0xd8, 0xff, 0xe0}
 	pdf := []byte("%PDF-1.7 fake")
 
 	for _, tc := range []struct {
@@ -263,12 +263,12 @@ func TestSpecialistSendsFileToItsModel(t *testing.T) {
 		check      func(t *testing.T, payload map[string]any, data []byte)
 	}{
 		{
-			name: "image", tool: "vision", filename: "photo.png", kind: "image", mime: "image/png", data: png,
+			name: "image", tool: "vision", filename: "photo.jpg", kind: "image", mime: "image/jpeg", data: jpg,
 			model:     "vision-model",
 			designate: func(m *config.ModelsConfig) { m.DefaultVisionModel = "vision-model" },
 			prompt:    "vision specialist", partType: "image_url", partKey: "image_url",
 			check: func(t *testing.T, p map[string]any, data []byte) {
-				if got := p["url"]; got != "data:image/png;base64,"+base64.StdEncoding.EncodeToString(data) {
+				if got := p["url"]; got != "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(data) {
 					t.Fatalf("image_url = %v", got)
 				}
 			},
@@ -401,13 +401,13 @@ func TestSpecialistRefusals(t *testing.T) {
 	visionOnly := config.ModelsConfig{DefaultVisionModel: "v"}
 
 	fs := &fakeFileStore{}
-	seedAttachment(fs, "img", agentChat, "photo.png", "image", "image/png", []byte("png"))
+	seedAttachment(fs, "img", agentChat, "photo.jpg", "image", "image/jpeg", []byte("jpg"))
 	seedAttachment(fs, "pdf", agentChat, "invoice.pdf", "file", "application/pdf", []byte("pdf"))
 	seedAttachment(fs, "zip", agentChat, "box.zip", "file", "application/zip", []byte("zip"))
 	seedAttachment(fs, "notes", agentChat, "notes.md", "text", "text/markdown", []byte("hello"))
-	seedAttachment(fs, "jpg", agentChat, "photo.jpg", "image", "image/jpeg", []byte("jpg")) // previews, but outside the wire contract
-	seedAttachment(fs, "wav", agentChat, "memo.wav", "file", "audio/wav", []byte("wav"))    // a tool's fetch: previews, but no transcription model reads it
-	seedAttachment(fs, "foreign", "other-chat", "photo.png", "image", "image/png", []byte("png"))
+	seedAttachment(fs, "png", agentChat, "photo.png", "image", "image/png", []byte("png")) // previews, but outside the wire contract
+	seedAttachment(fs, "wav", agentChat, "memo.wav", "file", "audio/wav", []byte("wav"))   // a tool's fetch: previews, but no transcription model reads it
+	seedAttachment(fs, "foreign", "other-chat", "photo.jpg", "image", "image/jpeg", []byte("jpg"))
 
 	for _, tc := range []struct {
 		name string
@@ -425,11 +425,11 @@ func TestSpecialistRefusals(t *testing.T) {
 		// tool instead of failing mute.
 		{"another specialist's file", "vision", `{"id":"pdf","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "the document tool can"},
 		{"nobody's file", "document", `{"id":"zip","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no specialist can read"},
-		{"unroutable image", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "only a PNG"},
+		{"unroutable image", "vision", `{"id":"png","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "only a JPEG"},
 		{"untranscribable audio", "transcribe", `{"id":"wav"}`, mcphub.CallMeta{ChatID: agentChat}, all, "only an MP3"},
 		// The format is checked first: an unsupported file must not be reported
 		// as a missing server setting.
-		{"format beats missing model", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "only a PNG"},
+		{"format beats missing model", "vision", `{"id":"png","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "only a JPEG"},
 		{"no model designated", "vision", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "no model is designated for images"},
 		{"only some designated", "vision", `{"id":"img","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, visionOnly, ""},
 	} {
@@ -457,7 +457,7 @@ func TestSpecialistRefusals(t *testing.T) {
 func TestSpecialistReportsEmptyAnswer(t *testing.T) {
 	srv, _ := completionServer(t, "   ")
 	fs := &fakeFileStore{}
-	seedAttachment(fs, "img", agentChat, "photo.png", "image", "image/png", []byte("png"))
+	seedAttachment(fs, "img", agentChat, "photo.jpg", "image", "image/jpeg", []byte("jpg"))
 
 	out, isErr := callSpecialist(t, fs,
 		agentConfig(t, srv.URL, config.ModelsConfig{DefaultVisionModel: "v"}),

@@ -13,7 +13,7 @@ It is extremely small. Everything is one static Go binary with the web UI embedd
 - Chat with any model through an OpenAI-compatible API (chat completions, transcriptions, speech). Keep a list of favorite models and switch per chat.
 - Replies stream in as they are written and can be stopped at any time.
 - Models that reason out loud show their thinking in collapsible blocks, one per step of a tool-using reply, each next to the tool calls it produced.
-- Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted on the server as they are uploaded (images to PNGs at most 1920px on the long side; audio to 22050 Hz mono MP3), so what lands in the chat is always the same shape whatever you picked. Accepted: `png bmp tga jpg gif webp` images, `wav mp3 ogg oga opus flac alac m4a m4b aac` audio (a video container — `webm mkv mov mp4` — keeps its soundtrack), `pdf`, and any text file. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcribe` tools), once you flag one in settings.
+- Send images, text files, audio, and PDFs as attachments. Pictures and recordings are converted on the server as they are uploaded (images to quality-90 JPEGs at most 1920px on the long side; audio to 22050 Hz mono MP3), so what lands in the chat is always the same shape whatever you picked. Accepted: `png bmp tga jpg gif webp` images, `wav mp3 ogg oga opus flac alac m4a m4b aac` audio (a video container — `webm mkv mov mp4` — keeps its soundtrack), `pdf`, and any text file. A file the selected model can't read is still kept and mentioned in the message by its stored id, so switching models never loses it and the model can hand that id to a specialist model that *can* read it (the `vision`, `document`, and `transcribe` tools), once you flag one in settings.
 - The model can call tools, plus any MCP server (HTTP-only) you add.
 - The model can hand files back to you as download links, or show images, PDFs, and audio inline.
 - Chats are saved and titled automatically; search, rename, and delete.
@@ -124,7 +124,7 @@ No. Providers share no shape for either. OpenAI's `/images/generations` is text-
 
 **Why is an attachment rejected?**
 
-Two reasons, both reported in the toast. The extension is not on the accepted list (and the file is not text), or it is on the list but the server's ffmpeg could not make sense of the bytes — a corrupt file, or a codec inside an accepted container that the slim build does not carry (HEVC video, for instance). The list is in the attachments bullet above; the conversion always produces a PNG or a mono MP3, so a file too exotic to convert is never stored half-read.
+Two reasons, both reported in the toast. The extension is not on the accepted list (and the file is not text), or it is on the list but the server's ffmpeg could not make sense of the bytes — a corrupt file, or a codec inside an accepted container that the slim build does not carry (HEVC video, for instance). The list is in the attachments bullet above; the conversion always produces a JPEG or a mono MP3, so a file too exotic to convert is never stored half-read.
 
 **iOS?**
 

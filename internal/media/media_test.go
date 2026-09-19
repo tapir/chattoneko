@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"math"
 	"os"
@@ -83,19 +84,36 @@ func makeWAV(t *testing.T) []byte {
 	return data
 }
 
-func TestImageToPNG(t *testing.T) {
+func TestImageToJPEG(t *testing.T) {
 	requireFFmpeg(t)
-	out, err := toPNG(context.Background(), ".png", makePNG(t, 60, 40))
+	out, err := toJPEG(context.Background(), ".png", makePNG(t, 60, 40))
 	if err != nil {
 		t.Fatalf("Image: %v", err)
 	}
-	cfg, err := png.DecodeConfig(bytes.NewReader(out))
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(out))
 	if err != nil {
-		t.Fatalf("output is not a PNG: %v", err)
+		t.Fatalf("output is not a JPEG: %v", err)
 	}
 	if cfg.Width != 60 || cfg.Height != 40 {
 		t.Errorf("output is %dx%d, want 60x40 (a small picture is never upscaled)", cfg.Width, cfg.Height)
 	}
+	// mjpeg picks its quantization table per pixel format, which is what makes
+	// the forced yuvj420p worth a check: left to pick 4:4:4 it writes a table
+	// three times coarser at the same -q:v.
+	if sf := sof0Sampling(out); sf != 0x22 {
+		t.Errorf("luma sampling factor is %#x, want 0x22 (4:2:0)", sf)
+	}
+}
+
+// sof0Sampling is the first component's sampling byte from a baseline JPEG's
+// SOF0 segment.
+func sof0Sampling(b []byte) byte {
+	for i := 0; i+12 < len(b); i++ {
+		if b[i] == 0xff && b[i+1] == 0xc0 {
+			return b[i+11]
+		}
+	}
+	return 0
 }
 
 // The cap is on the long side, which for a portrait picture is its height:
@@ -106,13 +124,13 @@ func TestScaleCapsLongSide(t *testing.T) {
 		{40, 2000, 1080, 1080},
 		{20, 30, 20, 30}, // a small portrait is never upscaled
 	} {
-		out, err := toPNG(context.Background(), ".png", makePNG(t, tc.w, tc.h))
+		out, err := toJPEG(context.Background(), ".png", makePNG(t, tc.w, tc.h))
 		if err != nil {
-			t.Fatalf("toPNG(%dx%d): %v", tc.w, tc.h, err)
+			t.Fatalf("toJPEG(%dx%d): %v", tc.w, tc.h, err)
 		}
-		cfg, err := png.DecodeConfig(bytes.NewReader(out))
+		cfg, err := jpeg.DecodeConfig(bytes.NewReader(out))
 		if err != nil {
-			t.Fatalf("output is not a PNG: %v", err)
+			t.Fatalf("output is not a JPEG: %v", err)
 		}
 		if cfg.Width > tc.maxW || cfg.Height > tc.maxH {
 			t.Errorf("a %dx%d picture came out %dx%d, want at most %dx%d",
@@ -125,13 +143,13 @@ func TestScaleCapsLongSide(t *testing.T) {
 // it at all.
 func TestTGAByExtension(t *testing.T) {
 	requireFFmpeg(t)
-	out, err := toPNG(context.Background(), ".tga", makeTGA(t, 12, 9))
+	out, err := toJPEG(context.Background(), ".tga", makeTGA(t, 12, 9))
 	if err != nil {
-		t.Fatalf("toPNG(.tga): %v", err)
+		t.Fatalf("toJPEG(.tga): %v", err)
 	}
-	cfg, err := png.DecodeConfig(bytes.NewReader(out))
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(out))
 	if err != nil {
-		t.Fatalf("output is not a PNG: %v", err)
+		t.Fatalf("output is not a JPEG: %v", err)
 	}
 	if cfg.Width != 12 || cfg.Height != 9 {
 		t.Errorf("output is %dx%d, want 12x9", cfg.Width, cfg.Height)
@@ -155,7 +173,7 @@ func TestAudioToMP3(t *testing.T) {
 func TestRejectsUndecodable(t *testing.T) {
 	requireFFmpeg(t)
 	zip := []byte("PK\x03\x04 not a picture at all")
-	if _, err := toPNG(context.Background(), ".png", zip); err == nil {
+	if _, err := toJPEG(context.Background(), ".png", zip); err == nil {
 		t.Fatal("a zip named .png converted")
 	}
 	if _, err := toMP3(context.Background(), ".mp3", zip); err == nil {
@@ -170,10 +188,10 @@ func TestTempFilesAreGone(t *testing.T) {
 	requireFFmpeg(t)
 	t.Setenv("TMPDIR", t.TempDir())
 	ctx := context.Background()
-	if _, err := toPNG(ctx, ".png", makePNG(t, 8, 8)); err != nil {
+	if _, err := toJPEG(ctx, ".png", makePNG(t, 8, 8)); err != nil {
 		t.Fatalf("Image: %v", err)
 	}
-	if _, err := toPNG(ctx, ".png", []byte("PK\x03\x04 junk")); err == nil {
+	if _, err := toJPEG(ctx, ".png", []byte("PK\x03\x04 junk")); err == nil {
 		t.Fatal("junk converted")
 	}
 	entries, err := os.ReadDir(workDir())

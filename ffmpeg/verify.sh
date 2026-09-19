@@ -26,7 +26,7 @@ expect() { # <type> <names...>
 echo "== components =="
 expect decoders mjpeg png webp webp_anim gif targa bmp \
                 aac alac flac mp3 opus vorbis pcm_s16le pcm_s24le pcm_f32le pcm_u8 pcm_mulaw
-expect encoders png libmp3lame
+expect encoders mjpeg libmp3lame
 expect demuxers wav aac mp3 flac ogg matroska mov image2 \
                 png_pipe jpeg_pipe webp_pipe webp_anim gif_pipe bmp_pipe
 expect muxers image2 mp3
@@ -43,7 +43,7 @@ absent() { # <type> <names...> - guard against components creeping back in
 echo "== removed (must be absent) =="
 absent decoders qoa qoi av1 libdav1d jpeg2000 tiff
 absent demuxers qoa qoi_pipe tiff_pipe j2k_pipe
-absent encoders libwebp libwebp_anim
+absent encoders libwebp libwebp_anim png
 absent filters palettegen paletteuse
 
 # ---------------------------------------------------------------- fixtures
@@ -68,11 +68,11 @@ sys -i "$T/a.wav" -c:a libvorbis -q:a 3 "$T/a.ogg"
 sys -i "$T/a.wav" -c:a libopus -b:a 64k "$T/a.webm"
 sys -i "$T/a.wav" -c:a aac -f adts "$T/a.aac"
 
-echo "== convert (images -> png, audio -> mp3, result read back by the system ffmpeg) =="
+echo "== convert (images -> jpg, audio -> mp3, result read back by the system ffmpeg) =="
 convert() { # <fixture>
   local f=$T/$1 out=$T/out-$1 opts=
   if [ ! -f "$f" ]; then printf '  %-16s SKIP (no fixture)\n' "$1"; return; fi
-  case $1 in img*) out=$out.png opts='-frames:v 1' ;; *) out=$out.mp3 ;; esac   # first frame of animations, see README
+  case $1 in img*) out=$out.jpg opts='-frames:v 1 -pix_fmt yuvj420p -q:v 3' ;; *) out=$out.mp3 ;; esac   # first frame of animations, see README
   if "$FF" -nostdin -v error -y -i "$f" $opts "$out" 2>"$T/e" && sys -i "$out" -f null -; then
     printf '  %-16s ok  -> %s\n' "$1" "${out##*.}"
   else printf '  %-16s FAIL %s\n' "$1" "$(head -1 "$T/e")"; fail=1; fi
@@ -84,10 +84,10 @@ echo "== other paths =="
 enc() { local label=$1; shift
   if "$FF" -nostdin -v error -y "$@" 2>"$T/e"; then printf '  %-16s ok\n' "$label"
   else printf '  %-16s FAIL %s\n' "$label" "$(head -1 "$T/e")"; fail=1; fi; }
-enc "png scaled"    -i "$T/img.png" -vf "$SCALE" -frames:v 1 "$T/os.png"
-enc print_graphs   -i "$T/img.jpg" -print_graphs_file "$T/g.json" -print_graphs_format json "$T/o3.png"   # aborts in unpatched --enable-small builds
-enc "png from pipe" -i pipe:0 -f image2 -c:v png "$T/o4.png" <"$T/img.jpg"   # needs the image parsers
-sys -i "$T/os.png" -f null - || { echo "  scaled png unreadable"; fail=1; }
+enc "jpg scaled"    -i "$T/img.png" -vf "$SCALE" -pix_fmt yuvj420p -q:v 3 -frames:v 1 "$T/os.jpg"
+enc print_graphs   -i "$T/img.jpg" -print_graphs_file "$T/g.json" -print_graphs_format json "$T/o3.jpg"   # aborts in unpatched --enable-small builds
+enc "jpg from pipe" -i pipe:0 -f image2 -c:v mjpeg "$T/o4.jpg" <"$T/img.jpg"   # needs the image parsers
+sys -i "$T/os.jpg" -f null - || { echo "  scaled jpg unreadable"; fail=1; }
 
 echo
 echo "== everything this build has =="

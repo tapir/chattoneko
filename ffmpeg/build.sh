@@ -56,7 +56,7 @@ fi
 
 # ------------------------------------------------------------------- components
 # ffmpeg has no native MP3 encoder: libmp3lame is the only one that exists.
-# PNG needs zlib for its deflate/inflate wrapper.
+# Decoding a PNG needs zlib for its inflate wrapper.
 DECODERS='
   mjpeg,png,webp,webp_anim,gif,targa,bmp,
   aac,alac,flac,mp3,opus,vorbis,
@@ -72,7 +72,7 @@ DEMUXERS='
   wav,aac,mp3,flac,ogg,matroska,mov'
 
 MUXERS='image2,mp3'
-ENCODERS='png,libmp3lame'
+ENCODERS='mjpeg,libmp3lame'
 FILTERS='aresample,scale'   # the rest come from ffmpeg_select
 PARSERS='aac,mpegaudio,opus,vorbis,flac,png,mjpeg,webp,gif,bmp'   # image parsers: only needed when the input is a pipe
 PROTOCOLS='file,pipe'

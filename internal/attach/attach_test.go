@@ -23,8 +23,8 @@ func TestClassifyMediaConverts(t *testing.T) {
 		wantExt     string
 		wantConvert string
 	}{
-		{"png", "diagram.png", KindImage, MimePNG, "diagram.png", ".png", ConvertImage},
-		{"tga", "sprite.tga", KindImage, MimePNG, "sprite.png", ".tga", ConvertImage},
+		{"png", "diagram.png", KindImage, MimeJPEG, "diagram.jpg", ".png", ConvertImage},
+		{"tga", "sprite.tga", KindImage, MimeJPEG, "sprite.jpg", ".tga", ConvertImage},
 		{"mp3", "memo.mp3", KindFile, MimeMP3, "memo.mp3", ".mp3", ConvertAudio},
 		{"video", "clip.mp4", KindFile, MimeMP3, "clip.mp3", ".mp4", ConvertAudio},
 		{"pdf", "invoice.pdf", KindFile, MimePDF, "invoice.pdf", "", ConvertNone},
@@ -47,7 +47,7 @@ func TestClassifyMediaConverts(t *testing.T) {
 }
 
 // The stored name is the conversion's, not the upload's: whatever a picture or a
-// recording arrived as, it lands as a .png or an .mp3. Text and PDF keep theirs.
+// recording arrived as, it lands as a .jpg or an .mp3. Text and PDF keep theirs.
 // The payload is irrelevant — that is the whole point of classifying by name —
 // so every case uses text bytes.
 func TestClassifyNameFollowsConversion(t *testing.T) {
@@ -55,8 +55,8 @@ func TestClassifyNameFollowsConversion(t *testing.T) {
 		filename string
 		want     string
 	}{
-		{"photo.jpeg", "photo.png"},
-		{"a.b.c.WEBP", "a.b.c.png"},
+		{"photo.jpeg", "photo.jpg"},
+		{"a.b.c.WEBP", "a.b.c.jpg"},
 		{"memo.webm", "memo.mp3"},
 		{"invoice.pdf", "invoice.pdf"},
 		{"notes.md", "notes.md"},
@@ -105,7 +105,7 @@ func TestClassifyAnyKeepsUnknownAsDownload(t *testing.T) {
 		}
 	}
 	if res, err := ClassifyAny("photo.jpg", junk, 1<<20); err != nil ||
-		res.Convert != ConvertImage || res.Mime != MimePNG || res.Name != "photo.png" {
+		res.Convert != ConvertImage || res.Mime != MimeJPEG || res.Name != "photo.jpg" {
 		t.Errorf("ClassifyAny(photo.jpg) = %+v, %v", res, err)
 	}
 	if res, err := ClassifyAny("notes.md", []byte("# hi\n"), 1<<20); err != nil || res.Kind != KindText {
@@ -153,7 +153,7 @@ func TestClassifyTooLarge(t *testing.T) {
 		t.Fatalf("want ErrTooLarge, got %v", err)
 	}
 	// Media is measured after its conversion, so the stored cap does not apply
-	// to the bytes that arrive: a 40 MB shot that converts to a 2 MB PNG is the
+	// to the bytes that arrive: a 40 MB shot that converts to a 2 MB JPEG is the
 	// caller's to accept, and the raw ceiling is what bounds the upload.
 	if _, err := Classify("pic.png", payload, 4); err != nil {
 		t.Fatalf("image rejected before its conversion: %v", err)
@@ -173,15 +173,15 @@ func TestClassifyRejectsEmpty(t *testing.T) {
 	}
 }
 
-// Only PNG may go to a model as an image. Everything else previews in the
+// Only JPEG may go to a model as an image. Everything else previews in the
 // browser but takes the <file> reference path. History is rebuilt every
 // turn, so a mime the provider rejects would break that chat permanently.
 func TestSendsAsImage(t *testing.T) {
 	for mime, want := range map[string]bool{
-		MimePNG: true,
-		// A row stored before every picture became a PNG, and anything a
+		MimeJPEG: true,
+		// A row stored before every picture became a JPEG, and anything a
 		// browser can render but a provider may not.
-		"image/webp": false, "image/jpeg": false, "image/gif": false,
+		"image/png": false, "image/webp": false, "image/gif": false,
 		"image/bmp": false, "image/x-icon": false,
 		MimePDF: false, MimeMP3: false, MimeBinary: false, "": false,
 	} {
@@ -193,8 +193,8 @@ func TestSendsAsImage(t *testing.T) {
 
 func TestType(t *testing.T) {
 	cases := []struct{ kind, mime, want string }{
-		{KindImage, MimePNG, "image"},
-		{KindImage, "image/webp", "image"}, // a row from before every picture was a PNG
+		{KindImage, MimeJPEG, "image"},
+		{KindImage, "image/png", "image"}, // a row from before every picture was a JPEG
 		{KindText, "text/markdown", "text"},
 		{KindText, "application/json", "text"}, // the kind decides, not the mime
 		{KindFile, MimeMP3, "audio"},
@@ -277,8 +277,8 @@ func TestExtForMime(t *testing.T) {
 		{" TEXT/HTML ", ".html"},
 		{"text/markdown", ".md"},
 		{"text/yaml", ".yaml"},
-		{MimePNG, ".png"},
-		{"image/jpeg", ".jpg"},
+		{"image/png", ".png"},
+		{MimeJPEG, ".jpg"},
 		{"image/webp", ".webp"},
 		{"image/x-tga", ".tga"},
 		{"audio/mpeg", ".mp3"},

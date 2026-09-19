@@ -45,7 +45,7 @@ func (e *Engine) chatParams(ctx context.Context, chatID string) (*store.Chat, pr
 // iteration.
 //
 // vision says whether the current model's metadata lists image input: an
-// image goes out as a PNG data URL when it does, and as a stored-file
+// image goes out as a JPEG data URL when it does, and as a stored-file
 // reference when it doesn't. Binary attachments (audio, PDF, tool files) have
 // no wire representation at all and always take the reference path, so the
 // model at least learns the file exists and what its id is.
@@ -74,7 +74,7 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 				if att.Kind == attach.KindText {
 					content += "\n\n" + attach.SerializeText(att.Filename, att.ID, string(att.Data))
 				} else if att.Kind == attach.KindImage && vision && attach.SendsAsImage(att.Mime) {
-					// Only PNG goes out as an image: a JPEG, WebP, GIF or BMP
+					// Only JPEG goes out as an image: a PNG, WebP, GIF or BMP
 					// attachment previews in the browser but takes the reference
 					// path, since a provider 400 here would repeat on every turn of
 					// the chat.

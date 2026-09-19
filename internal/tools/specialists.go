@@ -71,7 +71,7 @@ type specialist struct {
 var specialists = []specialist{
 	{
 		name: "vision", title: "Asking a vision model…",
-		kind: "image", modality: "image", what: "images (PNG only)",
+		kind: "image", modality: "image", what: "images (JPEG only)",
 		model:  func(m config.ModelsConfig) string { return m.DefaultVisionModel },
 		prompt: promptVision,
 	},
@@ -306,7 +306,7 @@ func specialistFor(kind string) *specialist {
 }
 
 // wireSupported refuses, in-band, a file whose stored mime cannot go to its
-// specialist: an image that is not PNG, a recording that is not MP3. Nothing
+// specialist: an image that is not JPEG, a recording that is not MP3. Nothing
 // re-encodes a file on its way out, so what is stored is what would be sent.
 // Both are the mimes the conversion every file goes through produces
 // (internal/media); a row stored before that was true previews for the user and
@@ -315,7 +315,7 @@ func specialistFor(kind string) *specialist {
 func wireSupported(kind string, att *store.Attachment) error {
 	switch {
 	case kind == "image" && !attach.SendsAsImage(att.Mime):
-		return fmt.Errorf("%q is stored as %s, and only a PNG reaches an image input",
+		return fmt.Errorf("%q is stored as %s, and only a JPEG reaches an image input",
 			att.Filename, att.Mime)
 	case kind == "audio" && att.Mime != attach.MimeMP3:
 		return fmt.Errorf("%q is stored as %s, and only an MP3 reaches a transcription model",
@@ -325,7 +325,7 @@ func wireSupported(kind string, att *store.Attachment) error {
 }
 
 // contentPart builds the wire part carrying a non-audio file to its
-// specialist. wireSupported has already run, so this only ever sees a PNG or a
+// specialist. wireSupported has already run, so this only ever sees a JPEG or a
 // PDF.
 func contentPart(att *store.Attachment, kind string) openai.ChatCompletionContentPartUnionParam {
 	dataURL := "data:" + att.Mime + ";base64," + base64.StdEncoding.EncodeToString(att.Data)

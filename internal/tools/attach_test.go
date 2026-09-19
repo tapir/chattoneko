@@ -126,7 +126,7 @@ func TestAttachText(t *testing.T) {
 }
 
 // Binary goes in as base64 and lands as a download-only file — except real
-// image bytes, which the shared pipeline re-encodes to PNG like every upload.
+// image bytes, which the shared pipeline re-encodes to JPEG like every upload.
 func TestAttachBinary(t *testing.T) {
 	meta := mcphub.CallMeta{ChatID: "c1", MessageID: "m1"}
 	pdf := []byte("%PDF-1.4\n\x00\xfe\xff binary")

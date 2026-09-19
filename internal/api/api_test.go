@@ -944,7 +944,7 @@ func testJPEG(t *testing.T, w, h int) []byte {
 }
 
 // An upload is stored as its conversion, never as it arrived: every picture
-// lands as a PNG under a .png name and every recording as a mono MP3 under
+// lands as a JPEG under a .jpg name and every recording as a mono MP3 under
 // .mp3. Both need the ffmpeg the image ships.
 func TestUploadConversion(t *testing.T) {
 	if _, err := exec.LookPath(media.Binary()); err != nil {
@@ -965,14 +965,14 @@ func TestUploadConversion(t *testing.T) {
 	}
 
 	jpg := stored(t, "photo.jpeg", testJPEG(t, 40, 30))
-	if jpg.Kind != "image" || jpg.Mime != "image/png" || jpg.Filename != "photo.png" {
-		t.Fatalf("jpeg stored as %q %s/%s, want photo.png image/image/png",
+	if jpg.Kind != "image" || jpg.Mime != "image/jpeg" || jpg.Filename != "photo.jpg" {
+		t.Fatalf("jpeg stored as %q %s/%s, want photo.jpg image/image/jpeg",
 			jpg.Filename, jpg.Kind, jpg.Mime)
 	}
 	if got, err := ts.store.GetAttachment(context.Background(), jpg.ID); err != nil {
 		t.Fatal(err)
-	} else if !bytes.HasPrefix(got.Data, []byte("\x89PNG")) {
-		t.Fatalf("stored bytes are %x, want a PNG", got.Data[:4])
+	} else if !bytes.HasPrefix(got.Data, []byte{0xff, 0xd8}) {
+		t.Fatalf("stored bytes are %x, want a JPEG", got.Data[:2])
 	}
 
 	wav := stored(t, "memo.wav", silenceWAV())

@@ -54,6 +54,13 @@ type Entry struct {
 	// modality, and /api/config passes it on so the chat UI can grey the row out
 	// for the model the user picked.
 	Modality string `json:"requires_modality,omitempty"`
+	// RequiresModel marks a tool whose designated model is not set in the server
+	// settings, so a call could only fail. It is listed anyway — settings is
+	// where its default toggle gets set, which a user may want to do before
+	// designating the model — but the engine neither offers nor runs it, and the
+	// chat UI greys its row out like a modality-gated one. Only integrated tools
+	// set it.
+	RequiresModel bool `json:"requires_model,omitempty"`
 }
 
 // connectTimeout bounds dialing + tool listing for one MCP server so a dead

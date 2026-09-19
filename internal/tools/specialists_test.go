@@ -214,7 +214,7 @@ func TestSpecialistTools(t *testing.T) {
 		{"document", "file", []string{"PDF documents"}, `"id", "question"`},
 		// A transcription model takes no prompt, so the question is optional and
 		// the description says it goes nowhere.
-		{"transcription", "audio", []string{"audio recordings (MP3 only)", "ignored"}, `"id"`},
+		{"transcribe", "audio", []string{"audio recordings (MP3 only)", "ignored"}, `"id"`},
 	} {
 		tl, ok := byName[tc.name]
 		if !ok {
@@ -234,7 +234,7 @@ func TestSpecialistTools(t *testing.T) {
 		}
 		// A question the tool throws away has to say so in the shape the model
 		// reads, not only in the prose above it.
-		if strings.Contains(got, "ignored") != (tc.name == "transcription") {
+		if strings.Contains(got, "ignored") != (tc.name == "transcribe") {
 			t.Errorf("%s schema question property: %s", tc.name, got)
 		}
 	}
@@ -334,7 +334,7 @@ func TestSpecialistSendsFileToItsModel(t *testing.T) {
 	}
 }
 
-// TestTranscriptionSendsRecording: the transcription tool posts the recording to
+// TestTranscriptionSendsRecording: the transcribe tool posts the recording to
 // /audio/transcriptions under its own filename and mime — the endpoint
 // identifies the container from them — and the transcript IS the tool result,
 // whatever the chat model asked. An ogg a TOOL attached goes as readily as an
@@ -349,7 +349,7 @@ func TestTranscriptionSendsRecording(t *testing.T) {
 	// require one.
 	out, isErr := callSpecialist(t, fs,
 		agentConfig(t, srv.URL, config.ModelsConfig{DefaultTranscriptionModel: "whisper"}),
-		"transcription", `{"id":"att-1"}`,
+		"transcribe", `{"id":"att-1"}`,
 		mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg})
 	if isErr {
 		t.Fatalf("call failed: %s", out)
@@ -381,7 +381,7 @@ func TestTranscriptionReportsSilence(t *testing.T) {
 
 	out, isErr := callSpecialist(t, fs,
 		agentConfig(t, srv.URL, config.ModelsConfig{DefaultTranscriptionModel: "whisper"}),
-		"transcription", `{"id":"att-1"}`,
+		"transcribe", `{"id":"att-1"}`,
 		mcphub.CallMeta{ChatID: agentChat, MessageID: agentMsg})
 	if isErr {
 		t.Fatalf("an empty transcript is not an error: %s", out)
@@ -426,7 +426,7 @@ func TestSpecialistRefusals(t *testing.T) {
 		{"another specialist's file", "vision", `{"id":"pdf","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "the document tool can"},
 		{"nobody's file", "document", `{"id":"zip","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "no specialist can read"},
 		{"unroutable image", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, all, "only a PNG"},
-		{"untranscribable audio", "transcription", `{"id":"wav"}`, mcphub.CallMeta{ChatID: agentChat}, all, "only an MP3"},
+		{"untranscribable audio", "transcribe", `{"id":"wav"}`, mcphub.CallMeta{ChatID: agentChat}, all, "only an MP3"},
 		// The format is checked first: an unsupported file must not be reported
 		// as a missing server setting.
 		{"format beats missing model", "vision", `{"id":"jpg","question":"?"}`, mcphub.CallMeta{ChatID: agentChat}, config.ModelsConfig{}, "only a PNG"},

@@ -184,10 +184,13 @@ func (s *stubSource) Call(context.Context, string, string, mcphub.CallMeta) (str
 	return s.out, false, nil
 }
 
-// A tool that needs a designated model is not in the catalog at all until one
-// exists: the model is never offered a call that could only fail, and neither
-// tool list shows a switch for it. Designating one brings its tool back live.
-func TestCatalogHidesToolsWithoutAModel(t *testing.T) {
+// Every integrated tool is listed whatever the state of the settings: the
+// settings UI renders its rows from the catalog, and the default toggle for a
+// tool nobody has wired up yet is exactly what someone setting the server up
+// wants to see. What a missing designation sets is the flag that keeps the
+// engine from offering a call that could only fail — and designating a model
+// clears it live.
+func TestCatalogFlagsToolsWithoutAModel(t *testing.T) {
 	sqlDB, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -201,25 +204,31 @@ func TestCatalogHidesToolsWithoutAModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config store: %v", err)
 	}
-	listed := func() map[string]bool {
+	checkFlags := func(want map[string]bool) {
+		t.Helper()
 		have := map[string]bool{}
 		for _, e := range Builtin(&fakeFileStore{}, cfgs).Tools() {
-			have[e.Display] = true
+			have[e.Display] = e.RequiresModel
 		}
-		return have
+		if len(have) != len(want) {
+			t.Errorf("catalog lists %d tools, want %d: %v", len(have), len(want), have)
+		}
+		for name, flagged := range want {
+			got, ok := have[name]
+			switch {
+			case !ok:
+				t.Errorf("%s went missing from the catalog", name)
+			case got != flagged:
+				t.Errorf("%s requires_model = %v, want %v", name, got, flagged)
+			}
+		}
 	}
 
-	have := listed()
-	for _, name := range []string{"vision", "document", "transcription", "speak"} {
-		if have[name] {
-			t.Errorf("%s is listed with no model designated for it", name)
-		}
+	want := map[string]bool{
+		"time": false, "code": false, "attach": false, "fetch": false,
+		"vision": true, "document": true, "transcribe": true, "speak": true,
 	}
-	for _, name := range []string{"time", "code", "create_file", "fetch"} {
-		if !have[name] {
-			t.Errorf("%s needs no designated model and went missing", name)
-		}
-	}
+	checkFlags(want)
 
 	// The audio ids are free-standing, so a save designates them with no
 	// whitelist or metadata to satisfy.
@@ -231,11 +240,6 @@ func TestCatalogHidesToolsWithoutAModel(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	have = listed()
-	if !have["transcription"] || !have["speak"] {
-		t.Errorf("the audio designations did not bring their tools back: %v", have)
-	}
-	if have["vision"] || have["document"] {
-		t.Errorf("a tool whose own role is still undesignated came back: %v", have)
-	}
+	want["transcribe"], want["speak"] = false, false
+	checkFlags(want)
 }

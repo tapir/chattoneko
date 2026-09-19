@@ -655,8 +655,9 @@ func (s *Store) DistinctToolNamesInChat(ctx context.Context, chatID string) ([]s
 // ---- attachments ----
 
 // CreateAttachment stores an attachment. It shows on no message until
-// LinkAttachmentToMessage says so — uploads are linked when the user sends,
-// tool-created files by the same create_file call that stored them.
+// LinkAttachmentToMessage says so — uploads are linked when the user sends, a
+// file the model wrote by the same attach call that stored it, and a file fetch
+// downloaded by whichever later attach call hands it over.
 func (s *Store) CreateAttachment(ctx context.Context, chatID, filename, kind, mime string, size int64, data []byte) (*AttachmentMeta, error) {
 	meta := AttachmentMeta{
 		ID:        uuid.NewString(),

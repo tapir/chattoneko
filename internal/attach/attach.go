@@ -126,8 +126,8 @@ var mimeExts = map[string]string{
 
 // ExtForMime returns the display extension (".json", dot included) for a
 // Content-Type, parameters ignored, or "" when the type is not one this knows.
-// create_file uses it to give an extension-less download a name whose suffix
-// says what the server served.
+// fetch uses it to give an extension-less download a name whose suffix says
+// what the server served.
 func ExtForMime(ctype string) string {
 	if i := strings.IndexByte(ctype, ';'); i >= 0 {
 		ctype = ctype[:i]
@@ -243,7 +243,7 @@ func extOf(filename string) string {
 // CleanFilename validates and normalizes an uploaded or tool-provided
 // filename: a plain name of bounded length, no directories, no control
 // characters. Names end up in the DB, in LLM prompts and in download
-// headers, so every call site (user uploads, create_file, fetch) shares this
+// headers, so every call site (user uploads, attach, fetch) shares this
 // one check.
 func CleanFilename(name string) (string, error) {
 	name = strings.TrimSpace(name)

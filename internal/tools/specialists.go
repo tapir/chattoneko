@@ -82,7 +82,7 @@ var specialists = []specialist{
 		prompt: promptDocument,
 	},
 	{
-		name: "transcription", title: "Transcribing audio…",
+		name: "transcribe", title: "Transcribing audio…",
 		kind: "audio", modality: "audio", what: "audio recordings (MP3 only)",
 		model: func(m config.ModelsConfig) string { return m.DefaultTranscriptionModel },
 	},

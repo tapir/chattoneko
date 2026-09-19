@@ -68,9 +68,9 @@ var (
 
 // Prepare returns the bytes to store for one classified file: the conversion its
 // verdict asks for, refused when the result outruns maxBytes. Every path into
-// the database — an upload, create_file, speak — goes through this, so one set of
-// invocations produces every attachment the app holds and a file stored under a
-// media mime is always the shape that mime says.
+// the database — an upload, attach, fetch, speak — goes through this, so one
+// set of invocations produces every attachment the app holds and a file stored
+// under a media mime is always the shape that mime says.
 func Prepare(ctx context.Context, f *attach.File, data []byte, quantize bool, maxBytes int64) ([]byte, error) {
 	var err error
 	switch f.Convert {

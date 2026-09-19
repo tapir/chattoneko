@@ -12,13 +12,18 @@
   let chat = $derived(app.chat);
   let config = $derived(app.config);
 
-  let enabledTools = $derived((config?.tools ?? []).filter((t) => app.toolEnabled(t)));
-
   // Tracks live system theme changes until an explicit choice is stored.
   let theme = $derived(themeState.current);
 
   // Context-window stats need the model; the picker lives in the Composer.
   let currentModel = $derived(chat ? (chat.model ?? '') : app.newChatModel);
+
+  // The badge on the Tools button counts what this chat can actually use, so a
+  // row the panel shows greyed out — no model designated for it, or the picked
+  // model takes that input itself — does not count.
+  let enabledTools = $derived(
+    (config?.tools ?? []).filter((t) => app.toolEnabled(t) && !app.toolUnavailable(t, currentModel)),
+  );
 
   let promptTotal = $derived(app.chatUsage?.prompt_tokens ?? 0);
   let completionTotal = $derived(app.chatUsage?.completion_tokens ?? 0);

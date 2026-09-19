@@ -15,7 +15,7 @@ import (
 )
 
 // Speak returns the "speak" tool: the model hands the user a recording of text
-// read aloud. It is create_file for one fixed kind of content — the words go to
+// read aloud. It is attach for one fixed kind of content — the words go to
 // /audio/speech, and the mp3 that comes back is stored and linked to the
 // assistant message being generated, so a successful call always means the user
 // can hear it and no tool result has to name another tool.
@@ -87,7 +87,7 @@ func (s *speakTool) call(ctx context.Context, argsJSON string, meta mcphub.CallM
 		return "", fmt.Errorf("speech model: %v", err)
 	}
 
-	// The same classification, conversion and size cap as create_file and an
+	// The same classification, conversion and size cap as attach and an
 	// upload, so the recording lands in the one shape every other one is stored
 	// in: a mono MP3. mp3 is what we ask the provider for, but ffmpeg probes
 	// audio by content rather than by the name, so whatever container it

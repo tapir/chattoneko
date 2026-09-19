@@ -165,8 +165,8 @@ type Config struct {
 	Limits       LimitsConfig      `json:"limits"`
 	Auth         AuthConfig        `json:"auth"`
 	// ImageQuantization is the 256-colour palette every stored picture can end
-	// in: the conversion in internal/media, which an upload, a file create_file
-	// is handed and a recording's soundtrack all pass through. Off — the
+	// in: the conversion in internal/media, which an upload, a file the tools
+	// are handed and a recording's soundtrack all pass through. Off — the
 	// default — stores lossless PNGs, several times the bytes for a photograph.
 	ImageQuantization bool `json:"image_quantization"`
 	// ToolDefaults is the global per-tool default toggle (settings UI): tool

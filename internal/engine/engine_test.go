@@ -1042,14 +1042,14 @@ func TestHubEpochChangesAcrossRecreation(t *testing.T) {
 }
 
 // TestToolCreatedAttachment runs the tool loop against the REAL integrated
-// catalog and the real store: create_file stores the file AND links it to the
+// catalog and the real store: attach stores the file AND links it to the
 // assistant message in the same call, publishing attachment_created into the
 // replay buffer — a successful call always means the user can see the file.
 func TestToolCreatedAttachment(t *testing.T) {
 	prov := &scriptedProvider{
 		scripts: [][]provider.StreamEvent{
 			{
-				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "create_file",
+				{Kind: provider.EventToolCallDone, CallID: "call_1", Name: "attach",
 					Args: `{"filename":"lorem.txt","content":"lorem ipsum"}`},
 				{Kind: provider.EventDone, Finish: "tool_calls"},
 			},
@@ -1279,14 +1279,16 @@ func TestInputModalities(t *testing.T) {
 	}
 }
 
-// TestEffectiveToolsGatesSpecialists: a specialist tool is advertised only to a
-// chat model that lacks the modality it stands in for, and stays out of the
-// request entirely once that model takes the input itself. A tool with no
-// modality is always offered.
-func TestEffectiveToolsGatesSpecialists(t *testing.T) {
+// TestEffectiveToolsGates: a specialist tool is advertised only to a chat model
+// that lacks the modality it stands in for, and stays out of the request
+// entirely once that model takes the input itself. A tool whose designated
+// model is not set stays out for every model, even though the catalog lists it.
+// A tool with neither gate is always offered.
+func TestEffectiveToolsGates(t *testing.T) {
 	fake := &fakeMCP{tools: []mcphub.Entry{
 		{Display: "vision", Description: "images", DefaultEnabled: true, Modality: "image"},
 		{Display: "document", Description: "PDFs", DefaultEnabled: true, Modality: "file"},
+		{Display: "speak", Description: "audio out", DefaultEnabled: true, RequiresModel: true},
 		{Display: "time", Description: "clock", DefaultEnabled: true},
 	}}
 	eng, st, _ := testEngine(t, &scriptedProvider{}, fake)
@@ -1320,5 +1322,24 @@ func TestEffectiveToolsGatesSpecialists(t *testing.T) {
 	// A model that sees pictures and reads PDFs needs neither specialist.
 	if got := offered([]string{"text", "image", "file"}); len(got) != 1 || got["time"] != "clock" {
 		t.Errorf("a model needing no specialist was offered %v, want only time", got)
+	}
+	// No model at all makes speak unofferable, whatever the chat model is — and
+	// a persisted per-chat toggle cannot bring it back, since the flag is a hard
+	// exclusion rather than a default.
+	for _, mods := range [][]string{nil, {"text"}, {"text", "audio", "image", "file"}} {
+		if got := offered(mods); got["speak"] != "" {
+			t.Errorf("mods=%v: a tool with no designated model was offered: %v", mods, got)
+		}
+	}
+	if err := st.UpdateChatSettings(ctx, chat.ID, chat.Model, chat.Params,
+		map[string]bool{"speak": true, "time": false}); err != nil {
+		t.Fatalf("update chat settings: %v", err)
+	}
+	chat, err = st.GetChat(ctx, chat.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := offered(nil); got["speak"] != "" || got["time"] != "" {
+		t.Errorf("speak must stay out despite its on-toggle and time must honor its off-toggle: %v", got)
 	}
 }

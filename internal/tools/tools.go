@@ -42,7 +42,8 @@ type tool struct {
 	Modality string
 	// Model returns the designated model the tool needs, read live on every
 	// catalog listing: "" means none is designated, so the tool could only fail
-	// and is left out entirely. Nil for a tool that needs no specialist model.
+	// and is listed with RequiresModel set instead of being offered. Nil for a
+	// tool that needs no specialist model.
 	Model func(config.ModelsConfig) string
 	// Timeout bounds one call, overriding callTimeout. Only a handler doing
 	// remote I/O needs it (the specialists wait on another model); 0 keeps the
@@ -55,7 +56,7 @@ type tool struct {
 // model produced ("" when the model sent none); handlers that take arguments
 // should json.Unmarshal and validate them themselves. meta carries the
 // chat/message coordinates of the call for handlers that persist artifacts
-// (e.g. create_file showing a file on the assistant message that asked for it).
+// (e.g. attach showing a file on the assistant message that asked for it).
 // The returned string is what the model sees as the tool result.
 type handler func(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (string, error)
 
@@ -64,8 +65,9 @@ type handler func(ctx context.Context, argsJSON string, meta mcphub.CallMeta) (s
 type registry struct {
 	tools  []tool
 	byName map[string]int // name → index into tools
-	// cfgs gates the tools that need a designated model. Nil — a registry built
-	// by a test that lists the definitions themselves — gates nothing.
+	// cfgs is the live config the designated-model flags are read from. Nil — a
+	// registry built by a test that lists the definitions themselves — flags
+	// nothing.
 	cfgs *config.Store
 }
 
@@ -91,9 +93,11 @@ func newRegistry(ts ...tool) *registry {
 }
 
 // Tools returns the catalog entries for the integrated tools, in declaration
-// order, minus a tool whose designated model is not set: the engine never
-// offers one that could only fail, and neither tool list shows a switch for it.
-// Live, so designating a model in settings brings its tool back with no rebuild.
+// order. A tool whose designated model is not set is listed like any other —
+// both tool lists render a row from this, and settings is where a default is
+// set for a tool the user has not wired up yet — but carries RequiresModel,
+// which is what keeps the engine from offering a call that could only fail.
+// Live, so designating a model in settings clears the flag with no rebuild.
 func (r *registry) Tools() []mcphub.Entry {
 	gate := r.cfgs != nil
 	var models config.ModelsConfig
@@ -102,9 +106,6 @@ func (r *registry) Tools() []mcphub.Entry {
 	}
 	out := make([]mcphub.Entry, 0, len(r.tools))
 	for _, t := range r.tools {
-		if gate && t.Model != nil && t.Model(models) == "" {
-			continue
-		}
 		out = append(out, mcphub.Entry{
 			Display:        t.Name,
 			Description:    t.Description,
@@ -113,6 +114,7 @@ func (r *registry) Tools() []mcphub.Entry {
 			DefaultEnabled: t.DefaultEnabled,
 			Title:          t.Title,
 			Modality:       t.Modality,
+			RequiresModel:  gate && t.Model != nil && t.Model(models) == "",
 		})
 	}
 	return out

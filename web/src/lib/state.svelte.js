@@ -349,10 +349,13 @@ class AppState {
     return Array.isArray(mods) ? mods : [];
   }
 
-  // A specialist tool the picked chat model makes pointless — it takes that
-  // input itself, so the backend leaves the tool out of the request too. The
-  // row is shown greyed out and dead rather than hidden.
+  // A tool this chat cannot use right now: a specialist the picked model makes
+  // pointless (it takes that input itself, so the backend leaves the tool out
+  // of the request too), or one whose model is not designated in settings at
+  // all. The row is shown greyed out and dead rather than hidden — the same
+  // row in settings stays live, since that is where its default is set.
   toolUnavailable(tool, modelId) {
+    if (tool?.requires_model) return true;
     return !!tool?.requires_modality && this.inputModalitiesFor(modelId).includes(tool.requires_modality);
   }
 
@@ -1237,7 +1240,7 @@ class AppState {
         break;
       }
       case "attachment_created": {
-        // A tool put a file on the generating assistant message (create_file,
+        // A tool put a file on the generating assistant message (attach,
         // which stores and shows in one call) — show the attachment chip once
         // the reply lands.
         const att = ev.attachment;

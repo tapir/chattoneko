@@ -547,6 +547,9 @@
       }
     } catch (e) {
       error = e?.message || 'Failed to save settings';
+      // The banner is the first thing in a long scroll body, so a rejection
+      // provoked by a field further down would go unseen without the toast.
+      app.toast('error', error);
     } finally {
       saving = false;
     }

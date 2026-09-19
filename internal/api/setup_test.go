@@ -111,6 +111,18 @@ func TestSpeechSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("audio settings = %+v, want whisper-large/tts-1/alloy", m)
 	}
 
+	// Emptying the voice while a speech model stays designated is a 400 naming
+	// the missing field, not a save that quietly keeps the old value.
+	rec = ts.do(t, "PUT", "/api/setup", map[string]any{
+		"models": map[string]any{"default_speech_model": "tts-1", "speech_voice": ""},
+	}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("blank voice: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "speech voice") {
+		t.Errorf("blank voice: body = %s, want it to name the missing voice", rec.Body)
+	}
+
 	var cfg struct {
 		SpeechEnabled bool `json:"speech_enabled"`
 	}

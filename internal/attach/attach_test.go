@@ -285,10 +285,21 @@ func TestExtForMime(t *testing.T) {
 		{"audio/x-wav", ".wav"},
 		{"audio/ogg", ".ogg"},
 		{"audio/mp4", ".m4a"},
+		// The same format under the spellings servers actually send: without
+		// these an extension-less download stays a raw file the conversion
+		// could have handled.
+		{"image/x-png", ".png"},
+		{"image/jpg", ".jpg"},
+		{"image/pjpeg", ".jpg"},
+		{"audio/x-mpeg", ".mp3"},
+		{"audio/mpeg3", ".mp3"},
+		{"audio/x-flac", ".flac"},
+		{"audio/x-m4b", ".m4b"},
 		{"video/mp4", ".mp4"}, // a fetched video is on the audio list: its soundtrack survives
 		{"video/x-matroska", ".mkv"},
 		{MimePDF, ".pdf"},
-		{"image/avif", ""},             // not on the list: no suffix is invented
+		{"image/avif", ""},             // ".avif" is not an accepted extension: a suffix would convert nothing
+		{"audio/x-aiff", ""},           // ditto for ".aiff"
 		{"application/vnd.custom", ""}, // unknown: no invented suffix
 		{"", ""},
 		{"text/plain", ""},

@@ -108,15 +108,23 @@ var textExts = map[string]string{
 // carries no suffix. The media half is the one that matters: the suffix is what
 // Classify reads, so an extension-less "image/jpeg" body only becomes a picture
 // because this hands it a ".jpg". Servers spell formats differently from
-// filenames (audio/mpeg, audio/x-wav, video/x-matroska), so the mapping is
-// written out rather than derived from the extension sets.
+// filenames (audio/mpeg, audio/x-wav, video/x-matroska) and the same format
+// under several spellings (image/jpg, audio/x-flac), so the mapping is written
+// out rather than derived from the extension sets. An entry earns its place only
+// when the suffix it hands over is one Classify accepts: ".avif" classifies
+// exactly as a bare name does — a verbatim download, ffmpeg never reached — so
+// mapping image/avif would rename the file and convert nothing.
 var mimeExts = map[string]string{
-	"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+	"image/png": "png", "image/x-png": "png", "image/jpeg": "jpg",
+	"image/jpg": "jpg", "image/pjpeg": "jpg", "image/webp": "webp",
 	"image/gif": "gif", "image/bmp": "bmp", "image/x-tga": "tga",
-	"audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav",
-	"audio/ogg": "ogg", "audio/opus": "opus", "audio/flac": "flac", "audio/aac": "aac",
-	"audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/webm": "webm",
-	"video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov",
+	"audio/mpeg": "mp3", "audio/x-mpeg": "mp3", "audio/mpeg3": "mp3",
+	"audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav",
+	"audio/ogg": "ogg", "audio/opus": "opus",
+	"audio/flac": "flac", "audio/x-flac": "flac", "audio/aac": "aac",
+	"audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/x-m4b": "m4b",
+	"audio/webm": "webm",
+	"video/mp4":  "mp4", "video/webm": "webm", "video/quicktime": "mov",
 	"video/x-matroska": "mkv",
 	"application/pdf":  "pdf",
 	"text/markdown":    "md", "text/yaml": "yaml", "application/json": "json",

@@ -181,6 +181,18 @@ func TestRejectsUndecodable(t *testing.T) {
 	}
 }
 
+// A conversion killed by the caller's deadline must come back as that deadline,
+// not as an undecodable file: every route turns ErrUnsupported into "your upload
+// is broken", which is a lie when ffmpeg was simply cut short.
+func TestDeadlineIsNotUnsupported(t *testing.T) {
+	requireFFmpeg(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := toJPEG(ctx, ".png", makePNG(t, 8, 8)); err != context.Canceled {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+}
+
 // The point of the package: nothing it touches survives the call. The work
 // directory is a private one, because `go test ./...` runs packages in parallel
 // and every package that converts writes into the same TMPDIR.

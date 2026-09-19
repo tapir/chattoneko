@@ -164,6 +164,11 @@ func run(ctx context.Context, inExt, outExt string, data []byte, pre, post []str
 	cmd := exec.CommandContext(ctx, ffmpegBin, args...)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// A deadline or a cancelled caller killed ffmpeg, not the file: report
+		// the context error as itself, not as an undecodable format.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		// ffmpeg's own one-line diagnosis is the useful half, and a file that is
 		// not what its name claimed is an unsupported media type: the name picks
 		// the conversion, the bytes decide whether it works.

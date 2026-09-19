@@ -1006,6 +1006,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 // ---- attachments ----
 
+// convertTimeout bounds one file's ffmpeg run: the server carries no
+// WriteTimeout (it would kill SSE), so nothing else stops a wedged conversion.
+// Per file — a full maxUploadFiles upload gets one of these each.
+const convertTimeout = 2 * time.Minute
+
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !s.chatExists(w, r.Context(), id) {
@@ -1054,6 +1059,8 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnsupportedMediaType, name+": "+err.Error())
 		case errors.Is(err, attach.ErrTooLarge):
 			writeError(w, http.StatusRequestEntityTooLarge, name+": "+err.Error())
+		case errors.Is(err, context.DeadlineExceeded):
+			writeError(w, http.StatusGatewayTimeout, name+": the conversion timed out")
 		default:
 			writeError(w, http.StatusBadRequest, name+": "+err.Error())
 		}
@@ -1095,7 +1102,9 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			// Media is stored as its conversion, never as it arrived: the temp
 			// files media runs ffmpeg over are gone by the time this returns,
 			// whatever it returned.
-			data, err = media.Prepare(r.Context(), res, data, maxFileBytes)
+			convCtx, cancelConv := context.WithTimeout(r.Context(), convertTimeout)
+			data, err = media.Prepare(convCtx, res, data, maxFileBytes)
+			cancelConv()
 		}
 		if err != nil {
 			reject(name, err)

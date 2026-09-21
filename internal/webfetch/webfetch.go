@@ -1,26 +1,23 @@
 // Package webfetch fetches arbitrary web URLs (images, JSON, HTML, any other
-// body) while looking like a real browser: for https it uses a uTLS
-// ClientHello whose JA3/JA4 fingerprint matches current Chrome
-// (impersonate-http, whose profiles track utls's *_Auto templates) plus
-// Chrome's own header values; for plain http there is no handshake to
-// fingerprint, so a stock net/http client carries the same headers. Bot
-// protection (Cloudflare, DataDome, hotlink guards, ...) blocks the stdlib's
-// Go TLS fingerprint on sight. Everything stays in memory — fetched bytes
-// never touch the disk.
+// body) while looking like a real browser: for https it uses
+// bogdanfinn/tls-client, whose uTLS ClientHello and HTTP/2 framing carry the
+// JA3/JA4 fingerprint of the Chrome profile it impersonates; for plain http
+// there is no handshake to fingerprint, so a stock client carries the same
+// headers. Bot protection (Cloudflare, DataDome, hotlink guards, ...) blocks
+// the stdlib's Go TLS fingerprint on sight. Everything stays in memory —
+// fetched bytes never touch the disk.
+//
+// Both clients speak bogdanfinn/fhttp, the net/http fork tls-client is built
+// on. It is not interchangeable with the stdlib here: it is the only one of
+// the two that can put request headers on the wire in a chosen order, and
+// header order is part of what gets fingerprinted.
 //
 // SSRF defense: the URLs come from the model (ultimately from chat input), so
 // every connection is vetted against a private/reserved-address blocklist in
 // two layers — once before the request (clean errors) and again in the dial
 // function (the address actually connected to, covering redirect hops and
 // shrinking the DNS-rebinding window). Redirects are validated hop by hop
-// through the client's CheckRedirect.
-//
-// ponytail: the impersonating (https) client cannot be unit-tested —
-// impersonate-http exposes no InsecureSkipVerify, so httptest's self-signed
-// server is refused, and its transport always handshakes, so it cannot serve
-// plain-http fakes either. The scheme-independent logic (SSRF vetting,
-// headers, redirect hops, size cap, gzip, thumbnail fallback) is covered by
-// the http:// tests.
+// through the client's redirect policy.
 package webfetch
 
 import (
@@ -30,15 +27,16 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/North-web-dev/impersonate-http"
+	http "github.com/bogdanfinn/fhttp"
+	"github.com/bogdanfinn/fhttp/cookiejar"
+	tlsclient "github.com/bogdanfinn/tls-client"
+	"github.com/bogdanfinn/tls-client/profiles"
 )
 
 // ErrTooLarge is returned when the response body exceeds the requested cap.
@@ -56,52 +54,87 @@ var (
 	clientOnce sync.Once
 	// tlsClient impersonates Chrome (https); plainClient is a stock client
 	// for http:// URLs, where there is no TLS handshake to fingerprint.
-	tlsClient, plainClient *http.Client
+	tlsClient   tlsclient.HttpClient
+	plainClient *http.Client
+	clientErr   error
 )
+
+// doer is the request entry point both clients share.
+type doer interface {
+	Do(*http.Request) (*http.Response, error)
+}
 
 // newClients builds both process-wide clients once. A shared client per
 // scheme keeps the cookie jar, the TLS session cache and the per-host
 // transports across fetches, which is what real browsers do (and what some
 // anti-bot clearance flows expect). Both are wired to the same SSRF dial
 // function and redirect policy.
-func newClients() (*http.Client, *http.Client) {
+func newClients() (doer, doer, error) {
 	clientOnce.Do(func() {
-		tlsClient = impersonate.New(impersonate.Chrome,
-			impersonate.WithDialer(ssrfDial),
-			impersonate.WithTimeout(fetchTimeout),
-		)
-		plainClient = &http.Client{
-			Timeout:   fetchTimeout,
-			Transport: &http.Transport{DialContext: ssrfDial},
-		}
 		// Same jar for both: clearance cookies are per-host, not per-scheme.
 		jar, err := cookiejar.New(nil)
-		if err == nil {
-			tlsClient.Jar, plainClient.Jar = jar, jar
+		if err != nil {
+			clientErr = err
+			return
 		}
-		tlsClient.CheckRedirect = ssrfCheckRedirect
-		plainClient.CheckRedirect = ssrfCheckRedirect
+		opts := []tlsclient.HttpClientOption{
+			tlsclient.WithClientProfile(profiles.Chrome_146),
+			tlsclient.WithTimeoutMilliseconds(int(fetchTimeout / time.Millisecond)),
+			tlsclient.WithDialContext(ssrfDial),
+			tlsclient.WithCustomRedirectFunc(ssrfCheckRedirect),
+			tlsclient.WithCookieJar(jar),
+			// Chrome only offers h3 in ALPN once Alt-Svc told it to, and QUIC
+			// dials over UDP, which ssrfDial never sees.
+			tlsclient.WithDisableHttp3(),
+		}
+		if testInsecureTLS {
+			opts = append(opts, tlsclient.WithInsecureSkipVerify())
+		}
+		tlsClient, clientErr = tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), opts...)
+		if clientErr != nil {
+			return
+		}
+		plainClient = &http.Client{
+			Jar:           jar,
+			Timeout:       fetchTimeout,
+			Transport:     &http.Transport{DialContext: ssrfDial},
+			CheckRedirect: ssrfCheckRedirect,
+		}
 	})
-	return tlsClient, plainClient
+	return tlsClient, plainClient, clientErr
 }
 
-// clientFor returns the client that should fetch u: the impersonating one
-// for https, the stock one for plain http (impersonate-http always performs
-// a TLS handshake, so it cannot serve an http:// URL).
-func clientFor(u *url.URL) *http.Client {
-	tls, plain := newClients()
-	if u.Scheme == "https" {
-		return tls
+// clientFor returns the client that should fetch u: the impersonating one for
+// https, the stock one for plain http. They cannot be one client even though
+// tls-client serves both schemes: it keys its per-host transport cache on
+// host:443 whatever the scheme, so a plain-http fetch would poison the https
+// entry and vice versa.
+func clientFor(u *url.URL) (doer, error) {
+	tls, plain, err := newClients()
+	if err != nil {
+		return nil, fmt.Errorf("building the fetch client failed: %w", err)
 	}
-	return plain
+	if u.Scheme == "https" {
+		return tls, nil
+	}
+	return plain, nil
 }
 
-// testAllowLoopback relaxes the blocklist for loopback addresses.
-var testAllowLoopback bool
+// testAllowLoopback relaxes the blocklist for loopback addresses and
+// testInsecureTLS accepts httptest's self-signed certificate. Both are read
+// once, when the clients are built, so flipping them means rebuilding.
+var (
+	testAllowLoopback bool
+	testInsecureTLS   bool
+)
 
 // AllowLoopbackForTesting lets tests reach their httptest servers on
-// 127.0.0.1. TEST SUPPORT ONLY — production code must never call this.
-func AllowLoopbackForTesting(on bool) { testAllowLoopback = on }
+// 127.0.0.1, over plain http and over https with the self-signed test
+// certificate. TEST SUPPORT ONLY — production code must never call this.
+func AllowLoopbackForTesting(on bool) {
+	testAllowLoopback, testInsecureTLS = on, on
+	clientOnce = sync.Once{}
+}
 
 // reservedCIDRs are the ranges beyond net.IP's own predicates that browsers
 // refuse to reach and we must never fetch from.
@@ -175,7 +208,7 @@ func checkHostPublic(ctx context.Context, host string) error {
 // hop): the host's resolved addresses must all be public before the dial.
 // The hostname itself is dialed (not a resolved IP) so TLS SNI keeps the
 // name; the window between this check and the dialer's own resolution is
-// microseconds on the same resolver cache. It serves both as the impersonate
+// microseconds on the same resolver cache. It serves both as tls-client's
 // dialer and as the stock transport's DialContext.
 func ssrfDial(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, _, err := net.SplitHostPort(addr)
@@ -204,23 +237,46 @@ func ssrfCheckRedirect(req *http.Request, via []*http.Request) error {
 
 // requestHeaders builds the headers of a Chrome navigation (the shape a
 // browser sends when a URL is opened in a tab), which is what every kind of
-// body — HTML, JSON, an image — is served to. The base is the library's
-// Chrome profile, so the User-Agent, the sec-ch-ua version strings and the
-// Sec-Fetch-* headers stay in sync with the fingerprinted ClientHello;
-// nothing here hardcodes a version. Only Accept and the encoding are
-// overridden.
+// body — HTML, JSON, an image — is served to. A tls-client profile describes
+// the handshake and the HTTP/2 framing only, so these values are pinned to
+// the same Chrome milestone as the profile in newClients by hand: a
+// User-Agent or brand list that disagrees with the fingerprinted ClientHello
+// is itself a detection signal.
 //
 // The Accept list deliberately omits image/avif and image/svg+xml even though
 // real Chrome advertises them: content-negotiating CDNs (imgix / Unsplash's
 // auto=format) honor avif by serving AVIF, which our image pipeline cannot
 // decode. Everything else is covered by the trailing */*.
 func requestHeaders() http.Header {
-	h := impersonate.Chrome.Headers.Clone()
-	h.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,image/png,image/jpeg,*/*;q=0.8")
-	// gzip only: neither transport decompresses a caller-declared encoding,
-	// and br/zstd would need decoders we don't link (see getOnce).
-	h.Set("Accept-Encoding", "gzip")
-	return h
+	return http.Header{
+		// Chrome's own navigation order. fhttp writes listed headers in this
+		// order and appends the rest; the jar's Cookie is listed so it lands
+		// where Chrome puts it instead of last.
+		http.HeaderOrderKey: {
+			"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+			"upgrade-insecure-requests", "user-agent", "accept",
+			"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
+			"accept-encoding", "accept-language", "cookie", "priority",
+		},
+		// Keys are assigned in lowercase rather than through Header.Set, which
+		// canonicalizes: Chrome puts the client hints on the wire in lowercase
+		// and fhttp writes map keys verbatim.
+		"sec-ch-ua":                 {`"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"`},
+		"sec-ch-ua-mobile":          {"?0"},
+		"sec-ch-ua-platform":        {`"Windows"`},
+		"upgrade-insecure-requests": {"1"},
+		"user-agent":                {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"},
+		"accept":                    {"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,image/png,image/jpeg,*/*;q=0.8"},
+		"sec-fetch-site":            {"none"},
+		"sec-fetch-mode":            {"navigate"},
+		"sec-fetch-user":            {"?1"},
+		"sec-fetch-dest":            {"document"},
+		// gzip only: neither transport decompresses a caller-declared encoding,
+		// and br/zstd would need decoders we don't link (see getOnce).
+		"accept-encoding": {"gzip"},
+		"accept-language": {"en-US,en;q=0.9"},
+		"priority":        {"u=0, i"},
+	}
 }
 
 // Fetch GETs rawURL (following redirects like a browser) and returns
@@ -236,13 +292,17 @@ func Fetch(ctx context.Context, rawURL string, maxBytes int64) ([]byte, *url.URL
 	if err := checkHostPublic(ctx, u.Hostname()); err != nil {
 		return nil, nil, "", err
 	}
-	return get(ctx, clientFor(u), u, maxBytes)
+	c, err := clientFor(u)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return get(ctx, c, u, maxBytes)
 }
 
 // get performs one GET. On HTTP 400 for a MediaWiki-style thumbnail URL it
 // retries once against the original file (see originalOf); the retry result
 // (success or error) wins.
-func get(ctx context.Context, c *http.Client, u *url.URL, maxBytes int64) ([]byte, *url.URL, string, error) {
+func get(ctx context.Context, c doer, u *url.URL, maxBytes int64) ([]byte, *url.URL, string, error) {
 	data, final, ctype, status, err := getOnce(ctx, c, u, maxBytes)
 	if err == nil {
 		return data, final, ctype, nil
@@ -259,7 +319,7 @@ func get(ctx context.Context, c *http.Client, u *url.URL, maxBytes int64) ([]byt
 // getOnce is the raw single request: browser headers, redirect following,
 // status check, gzip decompression, size cap. It also reports the HTTP status
 // so callers can decide on fallbacks.
-func getOnce(ctx context.Context, c *http.Client, u *url.URL, maxBytes int64) ([]byte, *url.URL, string, int, error) {
+func getOnce(ctx context.Context, c doer, u *url.URL, maxBytes int64) ([]byte, *url.URL, string, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, nil, "", 0, err

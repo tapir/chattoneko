@@ -12,19 +12,22 @@ import (
 	"time"
 )
 
-// allowLoopback relaxes the SSRF blocklist for loopback so tests can reach
-// their httptest servers on 127.0.0.1.
+// allowLoopback relaxes the SSRF blocklist and TLS verification so tests can
+// reach their httptest servers on 127.0.0.1, over http and over https with
+// the self-signed test certificate.
 func allowLoopback(t *testing.T) {
 	t.Helper()
-	testAllowLoopback = true
-	t.Cleanup(func() { testAllowLoopback = false })
+	AllowLoopbackForTesting(true)
+	t.Cleanup(func() { AllowLoopbackForTesting(false) })
 }
 
 func TestFetchOK(t *testing.T) {
 	allowLoopback(t)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("User-Agent"); !strings.Contains(got, "Chrome/") {
-			t.Errorf("browser User-Agent missing: %q", got)
+		// Exactly one: fhttp writes our lowercase "user-agent" key verbatim and
+		// must not also add its canonical Go-http-client default.
+		if ua := r.Header.Values("User-Agent"); len(ua) != 1 || !strings.Contains(ua[0], "Chrome/") {
+			t.Errorf("browser User-Agent = %q", ua)
 		}
 		if got := r.Header.Get("Accept"); !strings.Contains(got, "image/") {
 			t.Errorf("image Accept missing: %q", got)
@@ -144,6 +147,29 @@ func TestFetchBlocksRedirectToPrivateAddress(t *testing.T) {
 	}
 }
 
+// The impersonating client must run the same SSRF hooks as the plain one: it
+// is the path bot protection actually sees, and its dialer is a different
+// option on a different library.
+func TestFetchOverHTTPS(t *testing.T) {
+	allowLoopback(t)
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redir" {
+			http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+			return
+		}
+		w.Write([]byte("SECURE"))
+	}))
+	defer ts.Close()
+
+	data, _, _, err := Fetch(context.Background(), ts.URL+"/ok", 1024)
+	if err != nil || string(data) != "SECURE" {
+		t.Fatalf("https fetch: data=%q err=%v", data, err)
+	}
+	if _, _, _, err := Fetch(context.Background(), ts.URL+"/redir", 1024); err == nil {
+		t.Fatal("https redirect to a private address was followed")
+	}
+}
+
 func TestFetchContextCanceled(t *testing.T) {
 	allowLoopback(t)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +210,11 @@ func TestFetchDecompressesGzip(t *testing.T) {
 	defer ts.Close()
 
 	u, _ := url.Parse(ts.URL + "/x.png")
-	data, _, ctype, status, err := getOnce(context.Background(), clientFor(u), u, 1024)
+	c, err := clientFor(u)
+	if err != nil {
+		t.Fatalf("clientFor: %v", err)
+	}
+	data, _, ctype, status, err := getOnce(context.Background(), c, u, 1024)
 	if err != nil {
 		t.Fatalf("getOnce: %v (status %d)", err, status)
 	}

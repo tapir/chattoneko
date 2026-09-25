@@ -50,8 +50,8 @@ This is my personal config trying to achieve cost-efficiency with good performan
 | --- | --- | --- | --- |
 | Chat | DeepSeek 4.1 Flash | high | It's cheap and perfectly capable for everyday assistance; I rarely look for any other model |
 | Chat | Qwen 3.8 2.4T A95B  | xhigh | Relentless thinker. Use only if you need a detailed report or analysis on a subject. It's not super cheap but 10x cheaper than comparable models like Opus, etc...  |
-| Task | Gemma 4 31B | low | Very fast, cheap |
-| Vision | Gemma 4 31B | low | Very good vision capability, cheap |
+| Task | GLM 5.3 Flash | low | Very fast, cheap |
+| Vision | GLM 5.3 Flash | low | Very fast, cheap |
 | File (Document) | Muse Spark 1.2 | low | OKish price, top-notch PDF performance |
 | Transcription | Whisper Large 3 | --- | Industry standard |
 | Speech | Kokoro 82M | --- | Any `/audio/speech` model works |

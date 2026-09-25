@@ -4,7 +4,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
+
+	fhttp "github.com/bogdanfinn/fhttp"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -190,8 +196,8 @@ func TestFetchContextCanceled(t *testing.T) {
 
 func TestFetchDecompressesGzip(t *testing.T) {
 	allowLoopback(t) // getOnce dials through the SSRF hook
-	// We declare Accept-Encoding: gzip ourselves, so no transport unpacks the
-	// body for us — getOnce must. The caller receives the raw bytes.
+	// Over plain HTTP the transport leaves the body packed, so getOnce must
+	// unpack it (by magic bytes). The caller receives the raw bytes.
 	payload := []byte("COMPRESSED-IMAGE-BYTES")
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
@@ -223,6 +229,56 @@ func TestFetchDecompressesGzip(t *testing.T) {
 	}
 	if ctype != "image/png" {
 		t.Fatalf("ctype = %q", ctype)
+	}
+}
+
+// stubDoer replays one canned response, so getOnce can be tested against
+// byte sequences the real transport never hands over verbatim.
+type stubDoer struct{ res *fhttp.Response }
+
+func (s stubDoer) Do(*fhttp.Request) (*fhttp.Response, error) { return s.res, nil }
+
+func TestFetchPassesThroughAlreadyUnpackedBody(t *testing.T) {
+	// tls-client unpacks gzip on some paths (HTTP/2) but keeps the
+	// Content-Encoding header; getOnce then sees a plain body under a gzip
+	// header and must pass it through, not fail on missing magic bytes.
+	payload := []byte("PLAIN-WIKI-TEXT")
+	u, _ := url.Parse("https://example.invalid/x")
+	c := stubDoer{res: &fhttp.Response{
+		StatusCode: 200,
+		Header: fhttp.Header{
+			"Content-Encoding": {"gzip"},
+			"Content-Type":     {"text/x-wiki"},
+		},
+		Body:    io.NopCloser(bytes.NewReader(payload)),
+		Request: &fhttp.Request{URL: u},
+	}}
+	data, _, ctype, status, err := getOnce(context.Background(), c, u, 1024)
+	if err != nil {
+		t.Fatalf("getOnce: %v (status %d)", err, status)
+	}
+	if string(data) != string(payload) {
+		t.Fatalf("body = %q, want %q", data, payload)
+	}
+	if ctype != "text/x-wiki" {
+		t.Fatalf("ctype = %q", ctype)
+	}
+}
+
+func TestDNSRetryable(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{&net.DNSError{Err: "server misbehaving", Server: "127.0.0.53:53"}, true},
+		{fmt.Errorf("lookup: %w", &net.DNSError{Err: "i/o timeout", IsTimeout: true}), true},
+		{&net.DNSError{Err: "no such host", IsNotFound: true}, false},
+		{errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		if got := dnsRetryable(tc.err); got != tc.want {
+			t.Errorf("dnsRetryable(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }
 

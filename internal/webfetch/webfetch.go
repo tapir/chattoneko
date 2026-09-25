@@ -21,6 +21,7 @@
 package webfetch
 
 import (
+	"bufio"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -190,6 +191,13 @@ func checkHostPublic(ctx context.Context, host string) error {
 		return errPrivateAddress
 	}
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	// ponytail: one retry on a transient DNS failure — systemd-resolved
+	// SERVFAILs the odd query on an upstream blip and browsers retry
+	// silently; NXDOMAIN is definitive, so it gets no second attempt. The
+	// dial-time lookup right after rides this answer's resolver cache.
+	if err != nil && dnsRetryable(err) {
+		ips, err = net.DefaultResolver.LookupIPAddr(ctx, host)
+	}
 	if err != nil {
 		return err
 	}
@@ -271,8 +279,8 @@ func requestHeaders() http.Header {
 		"sec-fetch-mode":            {"navigate"},
 		"sec-fetch-user":            {"?1"},
 		"sec-fetch-dest":            {"document"},
-		// gzip only: neither transport decompresses a caller-declared encoding,
-		// and br/zstd would need decoders we don't link (see getOnce).
+		// gzip only: br/zstd would need decoders we don't link; getOnce
+		// unpacks gzip itself, by magic bytes.
 		"accept-encoding": {"gzip"},
 		"accept-language": {"en-US,en;q=0.9"},
 		"priority":        {"u=0, i"},
@@ -316,6 +324,13 @@ func get(ctx context.Context, c doer, u *url.URL, maxBytes int64) ([]byte, *url.
 	return nil, nil, "", err
 }
 
+// dnsRetryable reports whether err is a DNS failure worth one more attempt
+// (SERVFAIL, timeout, refused); a missing name is not.
+func dnsRetryable(err error) bool {
+	var de *net.DNSError
+	return errors.As(err, &de) && !de.IsNotFound
+}
+
 // getOnce is the raw single request: browser headers, redirect following,
 // status check, gzip decompression, size cap. It also reports the HTTP status
 // so callers can decide on fallbacks.
@@ -333,11 +348,13 @@ func getOnce(ctx context.Context, c doer, u *url.URL, maxBytes int64) ([]byte, *
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, nil, "", resp.StatusCode, fmt.Errorf("the server refused the request (HTTP %s)", resp.Status)
 	}
-	body := resp.Body
-	// We declare Accept-Encoding ourselves, so neither transport unpacks the
-	// body for us; gzip is the only encoding we advertise (see requestHeaders).
-	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
-		zr, err := gzip.NewReader(body)
+	// Unpack by gzip magic bytes, not Content-Encoding: tls-client already
+	// unpacks gzip on some paths (HTTP/2) yet leaves the header set, so a
+	// header-only check gunzips an already-plain body and fails on it.
+	br := bufio.NewReader(resp.Body)
+	var body io.Reader = br
+	if m, _ := br.Peek(2); len(m) == 2 && m[0] == 0x1f && m[1] == 0x8b {
+		zr, err := gzip.NewReader(br)
 		if err != nil {
 			return nil, nil, "", resp.StatusCode, fmt.Errorf("the gzip-compressed response could not be unpacked: %w", err)
 		}

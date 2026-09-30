@@ -198,11 +198,24 @@ func runJQ(ctx context.Context, argsJSON string, _ mcphub.CallMeta) (string, err
 			return "", waitErr
 		}
 		if msg := strings.TrimSpace(stderr.buf.String()); msg != "" {
-			return "", errors.New(msg)
+			return "", errors.New(msg + jqInputHint(args.Input))
 		}
 		return "", fmt.Errorf("jq did not finish normally (%v) and reported nothing", exit)
 	}
 	return jqResult(out.String(), false), nil
+}
+
+// jqInputHint names the one argument mistake jq cannot report: input sent as a
+// JSON string holding JSON, so the filter runs on the string and all jq says is
+// "Cannot index string with string". Appended to failures only, and only when
+// the string really holds JSON — a filter fed a string on purpose (fromjson,
+// splits) gets no hint telling it that it meant something else.
+func jqInputHint(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) != nil || !json.Valid([]byte(s)) {
+		return ""
+	}
+	return "\n(input was a JSON string holding JSON, so the filter ran on the string, not on the value inside it — send input as JSON itself, or keep the string and begin the filter with fromjson)"
 }
 
 // jqResult renders what jq wrote. The cap is enforced here rather than by

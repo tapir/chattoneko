@@ -122,6 +122,21 @@ func TestJQErrorsComeBackInBand(t *testing.T) {
 	}
 }
 
+func TestJQDoubleEncodedInputIsDiagnosed(t *testing.T) {
+	requireJQ(t)
+	// The mistake jq cannot describe: input sent as a string holding JSON.
+	out, isErr, err := callJQ(t, `{"filter":".name","input":"{\"name\":\"x\"}"}`)
+	if err != nil || !isErr || !strings.Contains(out, "JSON string holding JSON") {
+		t.Fatalf("out=%q isErr=%v err=%v", out, isErr, err)
+	}
+	// A string fed on purpose is left alone.
+	wantJQ(t, `{"filter":"splits(\",\")","input":"a,b"}`, "\"a\"\n\"b\"\n")
+	out, isErr, err = callJQ(t, `{"filter":"error(\"boom\")","input":"a,b"}`)
+	if err != nil || !isErr || strings.Contains(out, "holding JSON") {
+		t.Fatalf("out=%q isErr=%v err=%v", out, isErr, err)
+	}
+}
+
 func TestJQOutputTruncatedAndKilled(t *testing.T) {
 	requireJQ(t)
 	// range streams, so this hits the cap without jq building anything large

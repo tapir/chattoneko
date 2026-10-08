@@ -372,11 +372,7 @@
             </div>
           {:else}
             <div class="mb-2 flex flex-col gap-1.5">
-              <ImageGallery
-                items={imageFiles}
-                singleClass="max-h-40"
-                widthClass="w-64 sm:w-80"
-              />
+              <ImageGallery items={imageFiles} widthClass="w-64 sm:w-80" />
               {#if pdfFiles.length}
                 <div class="flex flex-wrap gap-1.5">
                   {#each pdfFiles as att (att.id)}

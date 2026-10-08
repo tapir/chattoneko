@@ -12,6 +12,20 @@
 
   let { att, ...rest } = $props();
 
+  // The chat bubble is shrink-to-fit: before the bytes arrive the picture
+  // contributes no width, so the bubble collapses to its padding and the
+  // picture's own max-w-full then pins it to that collapsed width for good.
+  // Publishing the natural size as width/height attributes (the UA turns them
+  // into an aspect-ratio, so the max-h cap still scales it undistorted) gives
+  // the bubble a real size to settle on, for stored pictures too.
+  const reserve = (ev) => {
+    const el = ev.currentTarget;
+    if (el.naturalWidth && !el.hasAttribute('width')) {
+      el.width = el.naturalWidth;
+      el.height = el.naturalHeight;
+    }
+  };
+
   const server = $derived(api.attachmentUrl(att.id));
   const src = $derived(att.previewUrl || app.previewFor(att.id) || server);
   let swapping = false;
@@ -33,4 +47,4 @@
   });
 </script>
 
-<img {src} alt={att.filename} {...rest} />
+<img {src} alt={att.filename} {...rest} onload={reserve} />

@@ -49,7 +49,10 @@
 </script>
 
 {#if count > 0}
-  <div class={cn('@container', count > 1 && widthClass, cls)}>
+  <!-- Only the grid is a container: container-type: inline-size zeroes the
+       box's intrinsic width, so a lone picture inside the shrink-to-fit user
+       bubble would collapse to the width of the action row below it. -->
+  <div class={cn(count > 1 && ['@container max-w-full', widthClass], cls)}>
     {#if count === 1}
       <!-- Shrink-wrapped around the picture, not a grid cell. -->
       <div class="inline-block">

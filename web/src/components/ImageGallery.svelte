@@ -24,7 +24,6 @@
 
   let {
     items, // image attachments ({id, filename, kind, ...}); see AttachmentImage for local previews
-    singleClass = 'max-h-60', // max-height for the lone-image case
     // Explicit width for the grid when the parent is shrink-to-fit (the
     // right-aligned user bubble): a fr-track grid inside a fit-content
     // block collapses to min-content otherwise. Ignored for a lone image.
@@ -64,7 +63,7 @@
         >
           <AttachmentImage
             att={items[0]}
-            class={cn('max-w-full rounded-lg border', singleClass)}
+            class="max-h-60 max-w-full rounded-lg border"
             loading="lazy"
           />
         </button>

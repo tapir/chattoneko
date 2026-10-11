@@ -273,16 +273,27 @@ func (e *Engine) runGeneration(ag *activeGen) {
 		var calls []provider.ToolCall
 		var streamErr error
 		var finishReason string
+		// The body is ONE string across turns, so the first text of a later
+		// turn needs a paragraph break or it glues onto the previous turn's
+		// last sentence ("…not memory.Good,"). Only touched by this goroutine.
+		freshText := turn > 0
 	drain:
 		for ev := range stream.Events() {
 			switch ev.Kind {
 			case provider.EventTextDelta:
 				ag.mu.Lock()
-				ag.text += ev.Text
+				sep := ""
+				if freshText {
+					freshText = false
+					if ag.text != "" {
+						sep = "\n\n"
+					}
+				}
+				ag.text += sep + ev.Text
 				ag.dirty = true
 				ag.mu.Unlock()
 				h.mu.Lock()
-				h.publishGen(ag, WireEvent{Type: "delta", Content: ev.Text})
+				h.publishGen(ag, WireEvent{Type: "delta", Content: sep + ev.Text})
 				h.mu.Unlock()
 			case provider.EventReasoningDelta:
 				ag.mu.Lock()

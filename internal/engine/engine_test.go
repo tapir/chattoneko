@@ -251,6 +251,75 @@ func TestToolLoopExecutesAndReplaysHistory(t *testing.T) {
 	}
 }
 
+// The body is ONE string across turns, so text written before a tool round and
+// text written after it need a paragraph break between them or the sentences
+// glue together ("…not memory.Good,"). The break has to ride the wire too, or
+// a live view shows the glued text until a reload re-reads the persisted copy.
+func TestTextAcrossTurnsGetsParagraphBreak(t *testing.T) {
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{
+		{
+			{Kind: provider.EventTextDelta, Text: "Let me look."},
+			{Kind: provider.EventToolCallDone, CallID: "c1", Name: "echo", Args: `{"text":"x"}`},
+			{Kind: provider.EventDone, Finish: "tool_calls"},
+		},
+		{
+			{Kind: provider.EventTextDelta, Text: "That "},
+			{Kind: provider.EventTextDelta, Text: "worked."},
+			{Kind: provider.EventDone, Finish: "stop"},
+		},
+	}}
+	mcpFake := &fakeMCP{
+		tools:   []mcphub.Entry{{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true}},
+		results: map[string]string{"echo": "echo-result"},
+	}
+	eng, st, _ := testEngine(t, prov, mcpFake)
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(context.Background(), store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, unsub := eng.Subscribe(chatID, 0, "")
+	defer unsub()
+
+	am, err := eng.startGeneration(context.Background(), chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(context.Background(), am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	const want = "Let me look.\n\nThat worked."
+	m, _ := st.GetMessage(context.Background(), am.ID)
+	if m.Content != want {
+		t.Fatalf("persisted content = %q, want %q", m.Content, want)
+	}
+
+	var streamed string
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatalf("stream closed early; deltas = %q", streamed)
+			}
+			switch ev.Type {
+			case "delta":
+				streamed += ev.Content
+			case "done":
+				if streamed != want {
+					t.Fatalf("streamed deltas = %q, want %q", streamed, want)
+				}
+				return
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("no done event; deltas = %q", streamed)
+		}
+	}
+}
+
 // The budget counts individual tool calls in one response. Running out does
 // NOT stop the generation: the over-budget call is refused with an error
 // result and the model still gets a round to answer in text.

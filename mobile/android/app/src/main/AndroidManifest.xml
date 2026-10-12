@@ -45,4 +45,7 @@
          mic down with it. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- The discard haptic: the WebView ignores navigator.vibrate unless the
+         permission is declared (normal permission, granted at install). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 </manifest>

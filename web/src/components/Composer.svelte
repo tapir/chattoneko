@@ -411,6 +411,9 @@
   // screen is exactly the motion prefers-reduced-motion exists for.
   function shakeCard() {
     if (REDUCED) return;
+    // no-op where the API is missing (iOS) or there is no motor (desktop);
+    // the app's WebView needs the declared VIBRATE permission to honour it
+    navigator.vibrate?.(30);
     cardEl?.animate(
       [
         { transform: 'translateX(0)' },

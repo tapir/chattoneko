@@ -1,7 +1,7 @@
 <script>
   import { app } from '../lib/state.svelte.js';
   import { onMount } from 'svelte';
-  import { Paperclip, SendHorizontal, Square, X } from '@lucide/svelte';
+  import { Mic, Paperclip, SendHorizontal, Square, Trash2, X } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Select from '$lib/components/ui/select';
@@ -10,6 +10,7 @@
   import { isNative } from '../lib/server.js';
   import { viewer } from '../lib/viewer.svelte.js';
   import { capturePhoto, pickPhotos, pickFiles } from '../lib/native-attachments.js';
+  import { micAvailable, startRecording } from '../lib/record.js';
 
   // Draft text lives in the store (keyed by chat id) so it survives the
   // Composer remount that ensureChat() triggers on the first send, and chat
@@ -198,11 +199,260 @@
   function removePending(id) {
     app.removePendingAttachment(id);
   }
+
+  // ---- push to talk (lib/record.js) ----
+
+  // A hold that never ends would leave the mic live until the cap, so the cap
+  // reports success rather than dropping what was said.
+  const MAX_SECONDS = 300;
+  // Leftward drag off the button arms the cancel at the threshold and throws the
+  // take away at the end of the drag — the strip follows the finger only this
+  // far, so it is dragged clear of the composer without flying off a wide row.
+  const SLIDE_CANCEL_PX = 60;
+  const DRAG_MAX_PX = 160;
+  const MIC_HINT = 'Hold to record';
+  const MIC_OFF_HINT = 'Microphone needs HTTPS';
+  const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Same breakpoint the composer layout switches at (sm), so the mic only takes
+  // the send button's slot where the row has no width to spare for both.
+  const NARROW = '(max-width: 639px)';
+  let narrow = $state(matchMedia(NARROW).matches);
+  // getUserMedia/MediaRecorder are secure-context only, so a plain-HTTP LAN page
+  // has no mic to offer (lib/record.js). Undefined immediately, never refetched.
+  const micOk = micAvailable();
+  let cardEl = $state(null);
+  let recording = $state(false);
+  let elapsed = $state(0);
+  let drag = $state(0); // how far the strip has been pulled left, in px
+  let stripEl = $state(null);
+  let rec = null; // the live recorder handle; not reactive
+  let timer = null;
+  let startedAt = 0;
+  let pressX = 0;
+  let pressId = null; // the pointer the hold belongs to
+  let discarding = false; // the slide-out is playing; the mic is already off
+
+  $effect(() => {
+    const mq = matchMedia(NARROW);
+    const onChange = () => (narrow = mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  });
+
+  // A recording must not outlive the composer: the pending chip would land in
+  // whatever chat is active when it finishes.
+  $effect(() => () => finishRecording(true));
+
+  let emptyInput = $derived(app.draftFor().trim().length === 0 && pending.length === 0);
+  // Below sm an empty composer is all mic and no send: there is nothing to send,
+  // and the button is where the right thumb already is. At sm and up the row has
+  // room for both.
+  let showMic = $derived(
+    !sending && (recording || !narrow || (emptyInput && !app.generating)),
+  );
+  let showSend = $derived(!narrow || !showMic);
+  let clock = $derived(
+    `${Math.floor(elapsed / 60)}:${String(Math.floor(elapsed % 60)).padStart(2, '0')}`,
+  );
+  // Past the threshold the strip turns into the cancel it has been offering.
+  let armed = $derived(drag >= SLIDE_CANCEL_PX);
+
+  // Capture goes on the CARD rather than on the button: the card is the one part
+  // of the composer a hold never re-renders, and a capture on a node that goes
+  // away is released — which would end the recording on its first frame.
+  function onMicDown(e) {
+    if (e.button !== 0) return;
+    // Keeps focus (and the soft keyboard) off the button, and stops the
+    // browser's own press-and-hold selection.
+    e.preventDefault();
+    // Pressing again while it records ends it: a tap is what started this one,
+    // either because the microphone took longer to come up than the finger held
+    // (the permission prompt) or because that is simply how it was started.
+    if (recording) return endPress();
+    // Capture keeps the press alive over the strip that covers the row.
+    // Safari can refuse it for a touch pointer; the window listeners end the
+    // press either way.
+    try {
+      cardEl?.setPointerCapture(e.pointerId);
+    } catch {}
+    pressId = e.pointerId;
+    pressX = e.clientX;
+    beginRecording();
+  }
+
+  function onMicKeyDown(e) {
+    if ((e.key !== ' ' && e.key !== 'Enter') || e.repeat) return;
+    e.preventDefault();
+    beginRecording();
+  }
+
+  // Android answers a long press with contextmenu and then reclaims the touch,
+  // which lands as the pointercancel that ends a press — half a second into the
+  // very hold that is supposed to record. On the button, which is what a
+  // stationary finger is sitting on (a dragged one is past Chrome's long-press
+  // slop and never gets the event), and only while recording, so a right-click
+  // keeps the browser's own menu — the rule lib/longpress.js keeps too.
+  function onContextMenu(e) {
+    if (recording) e.preventDefault();
+  }
+
+  function onPressMove(e) {
+    if (!recording) return;
+    drag = Math.min(Math.max(pressX - e.clientX, 0), DRAG_MAX_PX);
+    // The end of the drag IS the cancel — no release to wait for.
+    if (drag >= DRAG_MAX_PX) discardSlide();
+  }
+
+  async function beginRecording() {
+    if (recording || sending || !micOk) return;
+    elapsed = 0;
+    drag = 0;
+    // Up before the await, because the mic permission prompt is a screen the
+    // user has to answer while already holding the button.
+    recording = true;
+    let handle;
+    try {
+      handle = await startRecording();
+    } catch (err) {
+      recording = false;
+      app.toast('error', `Couldn't record: ${err?.message ?? 'unknown error'}`);
+      return;
+    }
+    // Cancelled (or unmounted) while the microphone was coming up: it is live
+    // now, so it has to be released even though there is nothing to stage.
+    if (!recording) return handle.cancel();
+    rec = handle;
+    startedAt = Date.now();
+    timer = setInterval(() => {
+      elapsed = (Date.now() - startedAt) / 1000;
+      if (elapsed >= MAX_SECONDS) finishRecording(false);
+    }, 200);
+  }
+
+  // Only a pointer event carries a pointerId, and only the hold's own pointer
+  // ends it: a second finger's up is not this press' release.
+  function endPress(e) {
+    if (!recording || (e?.pointerId != null && e.pointerId !== pressId)) return;
+    // The microphone is not live yet, so this press ended before it recorded
+    // anything — a tap, or a hold the permission prompt cut short. It keeps
+    // running instead of throwing the hold away, and the red button stops it.
+    if (!rec) return;
+    // Dragged back under the threshold means "keep it", as it does in every
+    // messenger that has this gesture.
+    if (armed) return discardSlide();
+    finishRecording(false);
+  }
+
+  // Stops the recorder and the clock without touching the strip, so the caller
+  // can still animate it out. Resolves to the recording's stop promise.
+  function releaseMic(cancel) {
+    clearInterval(timer);
+    timer = null;
+    const handle = rec;
+    rec = null;
+    if (!handle) return null;
+    return cancel ? handle.cancel() : handle.stop();
+  }
+
+  async function finishRecording(cancel) {
+    if (!recording) return;
+    const stopped = releaseMic(cancel);
+    recording = false;
+    drag = 0;
+    if (cancel || !stopped) return;
+    const file = await stopped;
+    if (!file) return app.toast('error', "Couldn't record");
+    app.addAttachments([file]);
+  }
+
+  // A take being thrown away has to be SEEN to be thrown away: the mic is off
+  // already and the strip slides out left and fades while the composer waits for
+  // it. WAAPI rather than a CSS transition, because the transition property and
+  // the transform it should animate would land in the same style change and the
+  // browser would skip the animation.
+  function discardSlide() {
+    if (discarding) return;
+    discarding = true;
+    releaseMic(true);
+    stripEl?.animate(
+      [
+        { transform: `translateX(${-drag}px)`, opacity: 1 },
+        { transform: 'translateX(-110%)', opacity: 0 },
+      ],
+      { duration: 160, easing: 'ease-out', fill: 'forwards' },
+    );
+    shakeCard();
+    setTimeout(() => {
+      recording = false;
+      drag = 0;
+      discarding = false;
+    }, 170);
+  }
+
+  // The take was thrown away, and the composer is what says so: the card shakes,
+  // not the viewport — the card is what the gesture acted on, and a shaking
+  // screen is exactly the motion prefers-reduced-motion exists for.
+  function shakeCard() {
+    if (REDUCED) return;
+    cardEl?.animate(
+      [
+        { transform: 'translateX(0)' },
+        { transform: 'translateX(-7px)' },
+        { transform: 'translateX(6px)' },
+        { transform: 'translateX(-3px)' },
+        { transform: 'translateX(0)' },
+      ],
+      { duration: 280, easing: 'ease-out' },
+    );
+  }
+
+  // The press is captured by the card, and the button it started on is covered
+  // by the strip a moment later, so the release is read from the window:
+  // pointerup for the hold, keyup for one that started on the keyboard, blur for
+  // a release the window never saw (a dialog, an alt-tab). Only the pointer that
+  // started the hold counts, so a second finger on the strip's ✕ cancels through
+  // its own click instead of ending the recording as a release.
+  //
+  // pointercancel is deliberately NOT a release: it is what a browser sends when
+  // it reclaims the gesture (Android's long press, an edge swipe), and honouring
+  // it truncated every hold to the long-press threshold. The strip stays up, and
+  // the red button, ✕ or Escape ends it — one more tap beats a 0.5s take.
+  $effect(() => {
+    if (!recording) return;
+    const up = (e) => {
+      if (e.pointerId === pressId) endPress();
+    };
+    const move = (e) => {
+      if (e.pointerId === pressId) onPressMove(e);
+    };
+    const keyUp = (e) => {
+      if (e.key === ' ' || e.key === 'Enter') endPress();
+    };
+    const keyDown = (e) => {
+      if (e.key === 'Escape') finishRecording(true);
+    };
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('keyup', keyUp);
+    window.addEventListener('keydown', keyDown);
+    window.addEventListener('blur', endPress);
+    return () => {
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('keyup', keyUp);
+      window.removeEventListener('keydown', keyDown);
+      window.removeEventListener('blur', endPress);
+    };
+  });
 </script>
 
 <div class="shrink-0 px-3 pb-4 pt-2 sm:px-6">
   <div class="mx-auto max-w-4xl">
-    <div class="rounded-2xl border bg-card shadow-sm transition-colors focus-within:border-ring/50">
+    <div
+      bind:this={cardEl}
+      class="rounded-2xl border bg-card shadow-sm transition-colors focus-within:border-ring/50"
+    >
       {#if pending.length > 0}
         <div class="flex flex-wrap items-center gap-1.5 px-3 pt-3">
           {#each pending as att (att.id)}
@@ -240,36 +490,117 @@
       {/if}
 
       <div class="flex items-end gap-1.5 p-2.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          class="size-9 shrink-0 rounded-full"
-          title="Attach files (images, text/code, audio, pdf)"
-          onclick={onAttachButton}
-          disabled={attachBusy}
-        >
-          {#if attachBusy}
-            <Spinner class="size-4" label="Attaching" />
-          {:else}
-            <Paperclip class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
-          {/if}
-        </Button>
-        <!-- No accept="": browsers map it through the OS extension→MIME table,
-             which has no entry for .go/.toml and calls .ts a video, so any
-             allow-list hides files the server would accept. addAttachments()
-             filters by extension and content instead. -->
-        <input bind:this={fileInput} type="file" class="hidden" multiple onchange={onFiles} />
+        <!-- The recording strip OVERLAYS the attach button + textarea instead
+             of replacing them: unmounting the row would move everything the
+             held finger is sitting on, and it would blur the textarea (the
+             soft keyboard would drop mid-hold). Same row, same height, no
+             shift — the pressed button never goes anywhere. -->
+        <div class="relative flex min-w-0 flex-1 items-end gap-1.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-9 shrink-0 rounded-full"
+            title="Attach files (images, text/code, audio, pdf)"
+            onclick={onAttachButton}
+            disabled={attachBusy}
+          >
+            {#if attachBusy}
+              <Spinner class="size-4" label="Attaching" />
+            {:else}
+              <Paperclip class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
+            {/if}
+          </Button>
+          <!-- No accept="": browsers map it through the OS extension→MIME table,
+               which has no entry for .go/.toml and calls .ts a video, so any
+               allow-list hides files the server would accept. addAttachments()
+               filters by extension and content instead. -->
+          <input bind:this={fileInput} type="file" class="hidden" multiple onchange={onFiles} />
 
-        <textarea
-          bind:this={textArea}
-          bind:value={() => app.draftFor(), (v) => app.setDraft(v)}
-          class="max-h-60 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-[0.9375rem] leading-6 outline-none placeholder:text-muted-foreground"
-          rows="1"
-          placeholder="Message…"
-          oninput={autoGrow}
-          onkeydown={onKeydown}
-          onpaste={onPaste}
-        ></textarea>
+          <textarea
+            bind:this={textArea}
+            bind:value={() => app.draftFor(), (v) => app.setDraft(v)}
+            class="max-h-60 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-[0.9375rem] leading-6 outline-none placeholder:text-muted-foreground"
+            rows="1"
+            placeholder="Message…"
+            oninput={autoGrow}
+            onkeydown={onKeydown}
+            onpaste={onPaste}
+          ></textarea>
+
+          {#if recording}
+            <div
+              class="absolute inset-0 flex touch-none select-none items-center overflow-hidden bg-card pl-1"
+            >
+              <!-- items-baseline, not items-center: equal line boxes do NOT put
+                   a mono clock and a sans hint on one baseline (their fonts'
+                   ascent ratios differ), and this has to hold on every machine's
+                   fonts. The icon slot opts out with self-center, and the
+                   overlay centers the whole baseline group. -->
+              <div bind:this={stripEl} class="flex items-baseline gap-2.5">
+                <!-- One fixed slot: the pulsing dot while it records, the trash
+                     once the drag arms — so arming shifts nothing, and nothing
+                     is reserved for a control that is not there. -->
+                <span
+                  class="flex size-4 shrink-0 items-center justify-center self-center text-destructive"
+                >
+                  {#if armed}
+                    <Trash2 class="size-4" strokeWidth={1.75} aria-hidden="true" />
+                  {:else}
+                    <span class="size-2.5 rounded-full bg-destructive animate-pulse"></span>
+                  {/if}
+                </span>
+                <span
+                  class="shrink-0 font-mono text-[0.9375rem] leading-6 tabular-nums {armed
+                    ? 'text-destructive'
+                    : ''}"
+                >
+                  {clock}
+                </span>
+                <!-- The hint slides into this box and is clipped by its left
+                     edge, so it disappears into the gap instead of running over
+                     the clock. Same size as the prompt it replaces. -->
+                <span class="relative min-w-0 flex-1 overflow-hidden">
+                  <span
+                    class="block truncate pl-3 text-[0.9375rem] leading-6 text-muted-foreground"
+                    style="transform: translateX({-drag}px)"
+                  >
+                    ‹ Slide to cancel
+                  </span>
+                </span>
+              </div>
+            </div>
+          {/if}
+        </div>
+
+        {#if showMic}
+          {#if micOk}
+            <Button
+              variant={recording ? 'destructive' : narrow ? 'default' : 'ghost'}
+              size="icon"
+              class="size-9 shrink-0 touch-none rounded-full [-webkit-touch-callout:none]"
+              title={MIC_HINT}
+              aria-label={MIC_HINT}
+              onpointerdown={onMicDown}
+              onkeydown={onMicKeyDown}
+              oncontextmenu={onContextMenu}
+            >
+              <Mic class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
+            </Button>
+          {:else}
+            <!-- A span rather than a disabled button on purpose: the kit's
+                 disabled:pointer-events-none would swallow the hover that tells
+                 the user why there is no mic here. -->
+            <span
+              class="inline-flex size-9 shrink-0 items-center justify-center rounded-full opacity-50"
+              role="button"
+              aria-disabled="true"
+              title={MIC_OFF_HINT}
+              aria-label={MIC_OFF_HINT}
+            >
+              <Mic class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
+            </span>
+          {/if}
+        {/if}
 
         {#if app.generating}
           <Button
@@ -281,13 +612,13 @@
           >
             <Square class="size-4" strokeWidth={1.75} aria-hidden="true" />
           </Button>
-        {:else}
+        {:else if showSend}
           <Button
             size="icon"
             class="size-9 shrink-0 rounded-full"
             title="Send"
             onclick={send}
-            disabled={!canSend}
+            disabled={!canSend || recording}
           >
             {#if sending}
               <Spinner class="size-4" label="Sending" />

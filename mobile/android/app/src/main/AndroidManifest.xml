@@ -37,4 +37,12 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Push to talk. Both are needed: Capacitor's BridgeWebChromeClient turns
+         the WebView's AUDIO_CAPTURE request into a runtime request for these
+         two, and it only grants the page when every one of them comes back
+         granted. MODIFY_AUDIO_SETTINGS is a normal permission, so it is granted
+         at install — but an undeclared one is reported as denied and takes the
+         mic down with it. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 </manifest>

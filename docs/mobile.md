@@ -27,7 +27,7 @@ mobile/
   - `@capacitor/status-bar` — bar style and background color follow the theme.
   - `@capacitor/share` + `@capacitor/filesystem` — the attachment share path (the viewer's share button and the chat's long-press sheet): stage the file in the cache dir and hand the system sheet a `file://` URL, since the WebView has no `navigator.share`.
   - `@capawesome/capacitor-file-picker` — photo picker + documents; its `pickImages` is the AndroidX photo picker.
-- The only Android permission the app declares is `INTERNET`, and no plugin adds more (the camera and pickers go through system intents). A `FileProvider` (`res/xml/file_paths.xml`: external + cache paths) exposes app files to other apps, and its cache entry is what makes a shared attachment readable by the receiving app.
+- The Android permissions the app declares are `INTERNET`, plus `RECORD_AUDIO` and `MODIFY_AUDIO_SETTINGS` for push-to-talk recording. No plugin adds more: the camera and pickers go through system intents, and Capacitor's `BridgeWebChromeClient` turns the WebView's `AUDIO_CAPTURE` request into the runtime request for those two — it grants the page only when BOTH come back granted, and an undeclared permission is reported as denied, so `MODIFY_AUDIO_SETTINGS` (a normal permission, granted at install) has to be in the manifest too. On `http://localhost` the WebView is a secure context, so `navigator.mediaDevices` is there and the SPA's mic button works with no Java of its own. A `FileProvider` (`res/xml/file_paths.xml`: external + cache paths) exposes app files to other apps, and its cache entry is what makes a shared attachment readable by the receiving app.
 
 ## Native detection & server configuration
 
@@ -52,6 +52,7 @@ The SPA renders these mobile variants from the same components (viewport/`pointe
 | `Confirm` centered `<dialog>` | `Confirm` bottom action sheet — any dismissal reports cancel |
 | Resizable `PanelSheet` side panels | fullscreen sheets, no resize handle |
 | Header refresh button | pull-to-refresh on the sidebar list |
+| Mic button beside send | mic IN the send slot while the composer is empty — hold to record, release attaches; a press the permission prompt outlives keeps recording (see docs/frontend.md → Composer) |
 | Inline resizable sidebar | fullscreen left `Sheet` |
 | — | `.p-safe` padding for status-bar / gesture insets |
 

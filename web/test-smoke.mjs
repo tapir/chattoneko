@@ -428,6 +428,67 @@ console.log('OK streaming parity');
   console.log('OK media suffixes');
 }
 
+// --- push to talk: the File a hold produces, and the paths that produce none ---
+{
+  // Node has no mic: this is the same absence a plain-HTTP page has, which is
+  // what the Composer's button gates on.
+  const { micAvailable, startRecording } = await import('./src/lib/record.js');
+  assert(!micAvailable(), 'no mic API in node');
+
+  let chunk = new Blob(['tone'], { type: 'audio/webm;codecs=opus' });
+  let tracks = [];
+  class FakeRecorder {
+    constructor() {
+      this.mimeType = 'audio/webm;codecs=opus';
+      this.state = 'inactive';
+    }
+    start() {
+      this.state = 'recording';
+    }
+    stop() {
+      this.state = 'inactive';
+      if (chunk) this.ondataavailable({ data: chunk });
+      this.onstop();
+    }
+  }
+  globalThis.MediaRecorder = FakeRecorder;
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async () => ({
+          getTracks: () => tracks,
+        }),
+      },
+    },
+  });
+  assert(micAvailable(), 'mic availability is feature-detected, not assumed');
+
+  const rec = await startRecording();
+  const file = await rec.stop();
+  assert(file instanceof File, 'stop resolves a File');
+  assert(file.name === 'recording.webm', `the blob's mime names the file (got ${file.name})`);
+  assert(file.size === 4, 'the captured bytes are the file');
+  assert(tracks.every((t) => t.stopped), 'every track is stopped — the mic indicator goes out');
+  console.log('OK push to talk');
+
+  // An empty hold (a press released before the permission prompt was answered)
+  // must stage nothing rather than a zero-byte file the server rejects.
+  tracks = [];
+  chunk = null;
+  const empty = await startRecording();
+  assert((await empty.stop()) === null, 'a hold that captured nothing stages nothing');
+  assert(tracks.every((t) => t.stopped), 'the empty path still releases the mic');
+
+  // Cancel keeps the mic released too, which is the path an unmount takes.
+  tracks = [];
+  chunk = new Blob(['tone'], { type: 'audio/webm' });
+  const cancelled = await startRecording();
+  await cancelled.cancel();
+  assert(tracks.every((t) => t.stopped), 'cancel releases the mic');
+  console.log('OK push to talk edges');
+}
+
 function assert(cond, msg) {
   if (!cond) {
     console.error('FAIL:', msg);

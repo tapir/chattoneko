@@ -134,6 +134,12 @@ jobs:
           apk="chattoneko-${TAG#v}.apk"
           gh release create "$TAG" "$apk" --title "$TAG" --generate-notes ||
             gh release upload "$TAG" "$apk" --clobber
+          # A 500 mid-create leaves the release half-made: GitHub persists a
+          # DRAFT and then fails the request, so the upload fallback above
+          # succeeds against that draft and the job goes green with the release
+          # still unpublished (it happened to v0.7.10). Publishing is idempotent,
+          # so always end here.
+          gh release edit "$TAG" --draft=false
 
       - uses: actions/upload-artifact@v4
         if: github.ref_type != 'tag'

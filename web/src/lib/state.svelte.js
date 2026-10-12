@@ -801,6 +801,10 @@ class AppState {
     this.newChatModelTouched = false;
     this.newChatModel = this.config?.models?.default_chat_model ?? "";
     this.newChatEffort = "";
+    // A draft this send did not consume — a voice note sends the take alone
+    // and leaves the typed text waiting — follows the chat it was meant for.
+    const leftover = this.drafts[""];
+    if (leftover) this.drafts = { ...this.drafts, [chat.id]: leftover, "": "" };
     return { chatId: chat.id, created: true };
   }
 

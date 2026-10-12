@@ -52,7 +52,7 @@ The SPA renders these mobile variants from the same components (viewport/`pointe
 | `Confirm` centered `<dialog>` | `Confirm` bottom action sheet — any dismissal reports cancel |
 | Resizable `PanelSheet` side panels | fullscreen sheets, no resize handle |
 | Header refresh button | pull-to-refresh on the sidebar list |
-| Mic button beside send | mic IN the send slot while the composer is empty — hold to record, release attaches; a press the permission prompt outlives keeps recording (see docs/frontend.md → Composer) |
+| Mic button beside send | mic IN the send slot while the composer is empty — hold to record, release sends; a press the permission prompt outlives cancels (see docs/frontend.md → Composer) |
 | Inline resizable sidebar | fullscreen left `Sheet` |
 | — | `.p-safe` padding for status-bar / gesture insets |
 

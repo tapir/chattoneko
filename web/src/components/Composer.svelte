@@ -240,8 +240,8 @@
     return () => mq.removeEventListener('change', onChange);
   });
 
-  // A recording must not outlive the composer: the pending chip would land in
-  // whatever chat is active when it finishes.
+  // A recording must not outlive the composer: the send it ends in would land
+  // in whatever chat is active when it finishes.
   $effect(() => () => finishRecording(true));
 
   let emptyInput = $derived(app.draftFor().trim().length === 0 && pending.length === 0);
@@ -266,9 +266,8 @@
     // Keeps focus (and the soft keyboard) off the button, and stops the
     // browser's own press-and-hold selection.
     e.preventDefault();
-    // Pressing again while it records ends it: a tap is what started this one,
-    // either because the microphone took longer to come up than the finger held
-    // (the permission prompt) or because that is simply how it was started.
+    // Pressing again while it records ends the take: a live one sends, one
+    // still waiting on the permission prompt cancels.
     if (recording) return endPress();
     // Capture keeps the press alive over the strip that covers the row.
     // Safari can refuse it for a touch pointer; the window listeners end the
@@ -285,16 +284,6 @@
     if ((e.key !== ' ' && e.key !== 'Enter') || e.repeat) return;
     e.preventDefault();
     beginRecording();
-  }
-
-  // Android answers a long press with contextmenu and then reclaims the touch,
-  // which lands as the pointercancel that ends a press — half a second into the
-  // very hold that is supposed to record. On the button, which is what a
-  // stationary finger is sitting on (a dragged one is past Chrome's long-press
-  // slop and never gets the event), and only while recording, so a right-click
-  // keeps the browser's own menu — the rule lib/longpress.js keeps too.
-  function onContextMenu(e) {
-    if (recording) e.preventDefault();
   }
 
   function onPressMove(e) {
@@ -334,10 +323,14 @@
   // ends it: a second finger's up is not this press' release.
   function endPress(e) {
     if (!recording || (e?.pointerId != null && e.pointerId !== pressId)) return;
-    // The microphone is not live yet, so this press ended before it recorded
-    // anything — a tap, or a hold the permission prompt cut short. It keeps
-    // running instead of throwing the hold away, and the red button stops it.
-    if (!rec) return;
+    // The press ended before the microphone came live — the permission prompt
+    // cutting in is the usual reason. Cancel rather than record on with no
+    // finger holding the button; beginRecording releases the stream when it
+    // arrives to nothing.
+    if (!rec) {
+      recording = false;
+      return;
+    }
     // Dragged back under the threshold means "keep it", as it does in every
     // messenger that has this gesture.
     if (armed) return discardSlide();
@@ -355,6 +348,10 @@
     return cancel ? handle.cancel() : handle.stop();
   }
 
+  // The release IS the send — no staged chip in between. The take is shaped
+  // like a pending entry so app.send() and the bubble treat it exactly like a
+  // picked file; actually staging it first would paint the chip for a frame,
+  // because addAttachments has an async classify inside.
   async function finishRecording(cancel) {
     if (!recording) return;
     const stopped = releaseMic(cancel);
@@ -363,7 +360,26 @@
     if (cancel || !stopped) return;
     const file = await stopped;
     if (!file) return app.toast('error', "Couldn't record");
-    app.addAttachments([file]);
+    // Sending mid-chat-load would deliver the take to a NEW chat (the guard
+    // send() keeps); let it wait as an ordinary chip instead.
+    if (sending || app.chatLoading) return app.addAttachments([file]);
+    const take = {
+      id: crypto.randomUUID(),
+      file,
+      filename: file.name,
+      size: file.size,
+      kind: 'file',
+      previewUrl: '',
+    };
+    sending = true;
+    try {
+      await app.send('', [take]);
+    } catch {
+      // toast already shown by state; stage the take so it is not lost.
+      app.addAttachments([file]);
+    } finally {
+      sending = false;
+    }
   }
 
   // A take being thrown away has to be SEEN to be thrown away: the mic is off
@@ -398,26 +414,33 @@
     cardEl?.animate(
       [
         { transform: 'translateX(0)' },
+        { transform: 'translateX(-11px)' },
+        { transform: 'translateX(9px)' },
         { transform: 'translateX(-7px)' },
-        { transform: 'translateX(6px)' },
+        { transform: 'translateX(5px)' },
         { transform: 'translateX(-3px)' },
+        { transform: 'translateX(2px)' },
         { transform: 'translateX(0)' },
       ],
-      { duration: 280, easing: 'ease-out' },
+      { duration: 520, easing: 'ease-out' },
     );
   }
 
   // The press is captured by the card, and the button it started on is covered
   // by the strip a moment later, so the release is read from the window:
-  // pointerup for the hold, keyup for one that started on the keyboard, blur for
-  // a release the window never saw (a dialog, an alt-tab). Only the pointer that
-  // started the hold counts, so a second finger on the strip's ✕ cancels through
-  // its own click instead of ending the recording as a release.
+  // pointerup for the hold, keyup for one that started on the keyboard. Only the
+  // pointer that started the hold counts, so a second finger's up is not this
+  // press' release.
   //
-  // pointercancel is deliberately NOT a release: it is what a browser sends when
-  // it reclaims the gesture (Android's long press, an edge swipe), and honouring
-  // it truncated every hold to the long-press threshold. The strip stays up, and
-  // the red button, ✕ or Escape ends it — one more tap beats a 0.5s take.
+  // Everything that is NOT a clean release is an interruption, and an
+  // interrupted hold is a cancelled hold, never a sent one. The window swallows
+  // contextmenu while recording because Chrome hit-tests the long-press menu at
+  // the FINGER, not at the capture target, and a holding finger drifts off the
+  // small button — and a menu that appears reclaims the touch as pointercancel,
+  // half a second into the hold (the rule lib/longpress.js keeps too). What
+  // still reclaims it — system navigation, browser chrome, dialogs, the app
+  // switcher — arrives as pointercancel, as blur, or as the page going hidden,
+  // and all three cancel.
   $effect(() => {
     if (!recording) return;
     const up = (e) => {
@@ -432,17 +455,28 @@
     const keyDown = (e) => {
       if (e.key === 'Escape') finishRecording(true);
     };
+    const interrupted = () => finishRecording(true);
+    const noMenu = (e) => e.preventDefault();
+    const hidden = () => {
+      if (document.hidden) interrupted();
+    };
     window.addEventListener('pointerup', up);
     window.addEventListener('pointermove', move);
+    window.addEventListener('pointercancel', interrupted);
     window.addEventListener('keyup', keyUp);
     window.addEventListener('keydown', keyDown);
-    window.addEventListener('blur', endPress);
+    window.addEventListener('blur', interrupted);
+    window.addEventListener('contextmenu', noMenu);
+    document.addEventListener('visibilitychange', hidden);
     return () => {
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointercancel', interrupted);
       window.removeEventListener('keyup', keyUp);
       window.removeEventListener('keydown', keyDown);
-      window.removeEventListener('blur', endPress);
+      window.removeEventListener('blur', interrupted);
+      window.removeEventListener('contextmenu', noMenu);
+      document.removeEventListener('visibilitychange', hidden);
     };
   });
 </script>
@@ -582,7 +616,6 @@
               aria-label={MIC_HINT}
               onpointerdown={onMicDown}
               onkeydown={onMicKeyDown}
-              oncontextmenu={onContextMenu}
             >
               <Mic class="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
             </Button>

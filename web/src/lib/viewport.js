@@ -15,12 +15,6 @@ const KEYBOARD_JUMP = 120; // px — a keyboard is 250+, browser chrome is ~60
 
 let lastW = window.innerWidth;
 let lastH = window.innerHeight;
-// tallest height seen at this width: the shell with the keyboard down
-let fullH = lastH;
-
-// Focus says nothing about the keyboard on Android: a programmatic focus does
-// not raise it, and dismissing it with back leaves the input focused.
-export const keyboardOpen = () => fullH - lastH > KEYBOARD_JUMP;
 
 // Height the shell should have. Normally window.innerHeight, but a platform
 // that shrinks only the VISUAL viewport for the keyboard (an edge-to-edge
@@ -50,7 +44,6 @@ function measure() {
     );
   }
   document.documentElement.style.setProperty('--app-h', `${h}px`);
-  fullH = w === lastW ? Math.max(fullH, h) : h;
   lastW = w;
   lastH = h;
 }

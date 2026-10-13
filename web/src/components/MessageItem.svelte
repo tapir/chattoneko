@@ -18,7 +18,7 @@
   import { downloadAttachment } from '../lib/attach-actions.js';
   import { isPdf } from '../lib/pdf.js';
   import { isAudio, canPlayAudio, isPending } from '../lib/media.js';
-  import { FileText, Info, Paperclip, Pencil, RotateCcw, Square, Volume2, Workflow, X } from '@lucide/svelte';
+  import { FileText, Info, Loader2, Paperclip, Pencil, RotateCcw, Square, Volume2, Workflow, X } from '@lucide/svelte';
   import { onDestroy } from 'svelte';
   import { speech, stopSpeech, toggleSpeech } from '../lib/speech.svelte.js';
   import CollapsibleStatus from './CollapsibleStatus.svelte';
@@ -69,7 +69,7 @@
   // treatment (text opens a preview, a binary file downloads on click). User
   // rows are never live, so the same two lists feed both sides.
   // An attachment with no mime is still on its way up, and the row has nothing
-  // to pick a preview by yet: every kind waits behind the same loading box.
+  // to pick a preview by yet: every kind waits behind the same loading chip.
   let pendingFiles = $derived(attachments.filter(isPending));
   let stored = $derived(attachments.filter((a) => !isPending(a)));
   // A PDF shows its first page inline (a card, like a picture) and opens the
@@ -249,7 +249,6 @@
     editValue = msg.content;
     editAttachments = [...(msg.attachments ?? [])];
     editing = true;
-    queueMicrotask(() => editArea?.focus());
   }
 
   function removeEditAttachment(id) {
@@ -325,10 +324,14 @@
 </script>
 
 {#snippet pendingBox()}
-  <!-- One loading box for anything still on its way up: the row has no mime to
-       pick a preview by, so every kind waits behind the same pulse until the
+  <!-- One loading chip for anything still on its way up: the row has no mime to
+       pick a preview by, so every kind waits behind the same spinner until the
        server's row replaces it. -->
-  <div class="h-24 w-64 max-w-full animate-pulse rounded-lg bg-muted sm:w-80"></div>
+  <div
+    class="flex h-12 w-40 items-center justify-center rounded-lg border bg-muted/50 sm:w-52"
+  >
+    <Loader2 class="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+  </div>
 {/snippet}
 
 {#snippet pdfCard(att, width)}

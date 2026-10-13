@@ -1,6 +1,6 @@
 <script>
   // <img> for a stored image attachment: the server URL, nothing else. A row
-  // still on its way up never reaches here — the message shows the loading box
+  // still on its way up never reaches here — the message shows the loading chip
   // for it (MessageItem) — so there is no local copy to paint and no swap to
   // choreograph. The staged lightbox keeps its own previewUrl handling.
   import { api } from '../lib/api.js';

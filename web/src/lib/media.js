@@ -51,7 +51,7 @@ export function canPlayAudio(att) {
 }
 
 // A row attachment with no mime is still on its way up — only the server's row
-// carries one — so the message shows the loading box for it instead of any
+// carries one — so the message shows the loading chip for it instead of any
 // preview. Media kinds only: a text file's chip is already its final form.
 export const isPending = (att) =>
   !att?.mime && (att?.kind === "image" || att?.kind === "audio" || att?.kind === "pdf");

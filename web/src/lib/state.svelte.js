@@ -1030,7 +1030,9 @@ class AppState {
         file,
         filename: name,
         size: file.size,
-        kind: kind === "image" ? "image" : kind === "text" ? "text" : "file",
+        // the classified kind verbatim: a row still on its way up has no mime,
+        // so the kind is what picks it out until the server's row arrives
+        kind,
         previewUrl:
           kind === "image" && previewsLocally(name) ? URL.createObjectURL(file) : "",
       });

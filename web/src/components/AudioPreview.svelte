@@ -21,13 +21,16 @@
   import { onDestroy } from 'svelte';
 
   let {
-    att, // AttachmentMeta ({id, filename, mime, …}) of a stored audio file
+    att, // AttachmentMeta of a stored audio file, or a take still on its way up
   } = $props();
 
   let el = $state(null);
   let playing = $state(false);
   let pos = $state(0);
   let duration = $state(0);
+  // No mime means no stored copy yet: the row is the player it is about to
+  // become, dead until the server's row replaces it (media.js wantsPlayer).
+  let ready = $derived(Boolean(att.mime));
 
   // One label, always worth reading: the length while idle, the position once
   // it is moving. (The server answers audio under its real mime — see
@@ -77,12 +80,13 @@
      fill that reads "a tad darker" in both themes, over the bubble and the page. -->
 <div
   class="flex w-64 max-w-full items-center gap-2 rounded-lg border bg-black/10 px-2 py-1.5 select-none [-webkit-touch-callout:none] sm:w-80"
-  {...longPress(() => attachMenu.open(att))}
+  {...(ready ? longPress(() => attachMenu.open(att)) : {})}
 >
   <Button
     variant="default"
     size="icon"
     class="shrink-0 rounded-full"
+    disabled={!ready}
     onclick={toggle}
     title={`${action} ${att.filename}`}
     aria-label={`${action} ${att.filename}`}
@@ -97,6 +101,7 @@
     bind:value={pos}
     max={duration || 1}
     step={0.25}
+    disabled={!ready}
     onValueCommit={commit}
     label={`Seek ${att.filename}`}
     class="min-w-0 flex-1"
@@ -110,7 +115,7 @@
   bind:this={el}
   class="hidden"
   preload="metadata"
-  src={api.attachmentUrl(att.id)}
+  src={ready ? api.attachmentUrl(att.id) : null}
   onplay={() => {
     playing = true;
     current = el;

@@ -114,6 +114,13 @@ class AppState {
   // subscribe emits) can wipe it, and no id reconciliation is needed — the
   // real rows arrive through the normal paths and this simply goes away.
   outgoing = $state(null);
+  // Set while a push-to-talk send is in flight, with the prompt's focus state
+  // captured at the moment the take is sent. The first send of a new chat
+  // remounts the Composer; a typed send refocuses on remount to keep the soft
+  // keyboard it just dropped, but a voice send must leave the keyboard exactly
+  // as the user had it — open stays open, closed stays closed.
+  voiceOutgoing = $state(false);
+  voiceFocus = $state(false);
   // server attachment id -> local object URL of the file just uploaded under
   // it, so the real message's <img> can keep painting the local copy until the
   // server's is fully decoded (AttachmentImage does the flip and the revoke).

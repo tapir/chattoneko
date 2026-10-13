@@ -38,6 +38,11 @@
   // key), which throws away the focus send() just set and drops the keyboard
   // — app.outgoing identifies that remount, so take the focus back.
   onMount(() => {
+    if (app.voiceOutgoing) {
+      // A voice send's remount: leave the keyboard as the user had it.
+      if (app.voiceFocus) textArea?.focus();
+      return;
+    }
     if (app.activeChatId == null || app.outgoing) textArea?.focus();
   });
 
@@ -372,6 +377,8 @@
       previewUrl: '',
     };
     sending = true;
+    app.voiceOutgoing = true;
+    app.voiceFocus = document.activeElement === textArea;
     try {
       await app.send('', [take]);
     } catch {
@@ -379,6 +386,7 @@
       app.addAttachments([file]);
     } finally {
       sending = false;
+      app.voiceOutgoing = false;
     }
   }
 

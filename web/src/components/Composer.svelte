@@ -1,6 +1,5 @@
 <script>
   import { app } from '../lib/state.svelte.js';
-  import { onMount } from 'svelte';
   import { Mic, Paperclip, SendHorizontal, Square, Trash2, X } from '@lucide/svelte';
   import Spinner from './Spinner.svelte';
   import { Button } from '$lib/components/ui/button';
@@ -11,7 +10,6 @@
   import { viewer } from '../lib/viewer.svelte.js';
   import { capturePhoto, pickPhotos, pickFiles } from '../lib/native-attachments.js';
   import { micAvailable, startRecording } from '../lib/record.js';
-  import { keyboardOpen } from '../lib/viewport.js';
 
   // Draft text lives in the store (keyed by chat id) so it survives the
   // Composer remount that ensureChat() triggers on the first send, and chat
@@ -32,20 +30,6 @@
   // camera/photos/files shortcuts instead of the plain file input.
   let attachOpen = $state(false);
   let attachBusy = $state(false);
-
-  // New (not-yet-created) chat: focus the prompt on mount so the mobile
-  // soft keyboard pops up and desktop users can type right away. The first
-  // send of a new chat remounts this component (ensureChat changes the route
-  // key), which throws away the focus send() just set and drops the keyboard
-  // — app.outgoing identifies that remount, so take the focus back.
-  onMount(() => {
-    if (app.voiceOutgoing) {
-      // A voice send's remount: leave the keyboard as the user had it.
-      if (app.voiceFocus) textArea?.focus();
-      return;
-    }
-    if (app.activeChatId == null || app.outgoing) textArea?.focus();
-  });
 
   // Model selection: for an existing chat this patches the chat's model; for a
   // not-yet-created chat it sets the draft model used at creation.
@@ -137,7 +121,6 @@
     // remount that ensureChat() triggers on the first send.
     const staged = pending;
     app.setDraft('');
-    textArea?.focus();
     requestAnimationFrame(autoGrow);
     app.clearPendingAttachments();
     sending = true;
@@ -381,8 +364,6 @@
       previewUrl: '',
     };
     sending = true;
-    app.voiceOutgoing = true;
-    app.voiceFocus = document.activeElement === textArea && keyboardOpen();
     try {
       await app.send('', [take]);
     } catch {
@@ -390,7 +371,6 @@
       app.addAttachments([file]);
     } finally {
       sending = false;
-      app.voiceOutgoing = false;
     }
   }
 

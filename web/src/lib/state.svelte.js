@@ -107,20 +107,13 @@ class AppState {
   chatLoading = $state(false);
   generating = $state(false);
   // The message currently being sent, until the server has it. MessageList
-  // renders it at the tail of the list (bubble + loading boxes + scramble)
+  // renders it at the tail of the list (bubble + loading chipes + scramble)
   // so it shows the moment the user hits send, not after the create-chat,
   // upload and send round trips. Deliberately NOT part of `messages`: nothing
   // that reloads the list (refreshChat, the `idle` event a fresh stream
   // subscribe emits) can wipe it, and no id reconciliation is needed — the
   // real rows arrive through the normal paths and this simply goes away.
   outgoing = $state(null);
-  // Set while a push-to-talk send is in flight, with whether the keyboard was
-  // up at the moment the take is sent. The first send of a new chat
-  // remounts the Composer; a typed send refocuses on remount to keep the soft
-  // keyboard it just dropped, but a voice send must leave the keyboard exactly
-  // as the user had it — open stays open, closed stays closed.
-  voiceOutgoing = $state(false);
-  voiceFocus = $state(false);
   // Chats with an in-flight generation (drives the sidebar breathing title).
   // SvelteSet because add/delete must be reactive: a plain Set in $state is not
   // tracked. Entries for the active chat come from its per-chat SSE stream;
@@ -809,7 +802,7 @@ class AppState {
   async send(content, attachments = []) {
     // Staged entries already carry the attachment shape the bubble renders
     // (id/filename/kind) plus previewUrl, the local object URL the composer's
-    // chip and the staged lightbox paint; the message row shows a loading box
+    // chip and the staged lightbox paint; the message row shows a loading chip
     // until the server's row arrives instead (MessageItem).
     this.outgoing = {
       id: "outgoing",

@@ -107,7 +107,7 @@ class AppState {
   chatLoading = $state(false);
   generating = $state(false);
   // The message currently being sent, until the server has it. MessageList
-  // renders it at the tail of the list (bubble + staged previews + scramble)
+  // renders it at the tail of the list (bubble + loading boxes + scramble)
   // so it shows the moment the user hits send, not after the create-chat,
   // upload and send round trips. Deliberately NOT part of `messages`: nothing
   // that reloads the list (refreshChat, the `idle` event a fresh stream
@@ -121,17 +121,6 @@ class AppState {
   // as the user had it — open stays open, closed stays closed.
   voiceOutgoing = $state(false);
   voiceFocus = $state(false);
-  // server attachment id -> local object URL of the file just uploaded under
-  // it, so the real message's <img> can keep painting the local copy until the
-  // server's is fully decoded (AttachmentImage does the flip and the revoke).
-  // Plain Map, not $state: read once at mount, never rendered from.
-  previews = new Map();
-  previewFor(id) {
-    return this.previews.get(id);
-  }
-  forgetPreview(id) {
-    this.previews.delete(id);
-  }
   // Chats with an in-flight generation (drives the sidebar breathing title).
   // SvelteSet because add/delete must be reactive: a plain Set in $state is not
   // tracked. Entries for the active chat come from its per-chat SSE stream;
@@ -819,8 +808,9 @@ class AppState {
   // reach the server only now, at send time.
   async send(content, attachments = []) {
     // Staged entries already carry the attachment shape the bubble renders
-    // (id/filename/kind) plus previewUrl, a local object URL for images that
-    // the gallery/viewer prefer over the server URL when present.
+    // (id/filename/kind) plus previewUrl, the local object URL the composer's
+    // chip and the staged lightbox paint; the message row shows a loading box
+    // until the server's row arrives instead (MessageItem).
     this.outgoing = {
       id: "outgoing",
       role: "user",
@@ -839,14 +829,12 @@ class AppState {
           );
           ids = metas.map((m) => m.id);
           // Same order in and out (the server rejects the whole request on
-          // any bad file, never skips one). Populated BEFORE the message is
-          // sent, so it's there however the real row arrives (POST response
-          // or the SSE broadcast). ponytail: a failed send leaves its ids
-          // here — orphan uuids that never render, not worth a cleanup path.
-          metas.forEach((m, i) => {
-            if (attachments[i]?.previewUrl)
-              this.previews.set(m.id, attachments[i].previewUrl);
-          });
+          // any bad file, never skips one). ponytail: a failed send leaves its
+          // ids here — orphan uuids that never render, not worth a cleanup.
+          // The local copies have no painter left once the upload is accepted,
+          // and a send that throws never reaches here, so the Composer's
+          // restore still gets live object URLs.
+          attachments.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
         }
         const res = await api.sendMessage(chatId, content, ids);
         const um = res?.user_message ?? res?.message;
@@ -869,9 +857,6 @@ class AppState {
         this.msgsVersion++;
         this.stream?.kick();
         this.bumpChatInList(chatId);
-        // Preview object URLs are NOT revoked here: the real row's <img> is
-        // still painting them (see `previews`); AttachmentImage revokes each
-        // once the server copy has taken over.
       } catch (e) {
         // A chat created by this attempt must not linger messageless (it
         // would sit in the sidebar with nothing in it); the delete also

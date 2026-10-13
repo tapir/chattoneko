@@ -23,7 +23,7 @@
   const CAP = 6;
 
   let {
-    items, // image attachments ({id, filename, kind, ...}); see AttachmentImage for local previews
+    items, // stored image attachments ({id, filename, kind, …})
     // Explicit width for the grid when the parent is shrink-to-fit (the
     // right-aligned user bubble): a fr-track grid inside a fit-content
     // block collapses to min-content otherwise. Ignored for a lone image.

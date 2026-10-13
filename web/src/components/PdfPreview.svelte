@@ -8,10 +8,9 @@
   import { api } from '../lib/api.js';
   import { pdfjs } from '../lib/pdf.js';
   import { cn } from '../lib/utils.js';
-  import placeholder from '../lib/pdf-placeholder.png';
 
   let {
-    att, // AttachmentMeta of a stored PDF, or one still on its way up
+    att, // AttachmentMeta ({id, filename, mime, …}) of a stored PDF
     page = 1,
     // Render scale in CSS pixels, NOT display size — the canvas is always
     // stretched to the box, so 2 is what keeps a fit-to-width page sharp on a
@@ -31,16 +30,11 @@
   let Pdf = $state(null);
   let mount = $state(null);
   let ready = $state(false);
-  // No mime means no stored copy yet: the card shows the placeholder page and
-  // never loads pdf.js. Rows are keyed by attachment id, so the stored row that
-  // follows mounts a fresh card — this one is never promoted in place.
-  let pending = $derived(!att.mime);
   // <img>/<a> can't carry the Authorization header, so this is the ?token=
   // URL (the server accepts a token on GETs) — pdf.js fetches it plainly.
   let url = $derived(api.attachmentUrl(att.id));
 
   onMount(() => {
-    if (pending) return;
     let dead = false;
     // The shared worker has to be in place BEFORE the first getDocument, so
     // pdf.js loads first and the component mounts only once it has.
@@ -78,11 +72,9 @@
 
 <div
   bind:this={mount}
-  class={cn('pdf', natural && 'pdf-natural', ready || pending ? 'ready' : 'animate-pulse bg-muted', cls)}
+  class={cn('pdf', natural && 'pdf-natural', ready ? 'ready' : 'animate-pulse bg-muted', cls)}
 >
-  {#if pending}
-    <img src={placeholder} alt="" class="block h-auto w-full" />
-  {:else if Pdf}
+  {#if Pdf}
     <!-- currentPage is the controlled prop; with showButtons empty the
          library renders no navigation of its own. -->
     <Pdf

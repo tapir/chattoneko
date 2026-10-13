@@ -211,6 +211,8 @@
   // A hold that never ends would leave the mic live until the cap, so the cap
   // reports success rather than dropping what was said.
   const MAX_SECONDS = 300;
+  // Under this a take is a mis-tap or a dead mic, not speech — dropped, not sent
+  const MIN_TAKE_BYTES = 10 * 1024;
   // Leftward drag off the button arms the cancel at the threshold and throws the
   // take away at the end of the drag — the strip follows the finger only this
   // far, so it is dragged clear of the composer without flying off a wide row.
@@ -366,6 +368,7 @@
     if (cancel || !stopped) return;
     const file = await stopped;
     if (!file) return app.toast('error', "Couldn't record");
+    if (file.size < MIN_TAKE_BYTES) return;
     // Sending mid-chat-load would deliver the take to a NEW chat (the guard
     // send() keeps); let it wait as an ordinary chip instead.
     if (sending || app.chatLoading) return app.addAttachments([file]);

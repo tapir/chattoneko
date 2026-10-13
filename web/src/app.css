@@ -208,6 +208,26 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* A hold is a hold, not a selection — on touch, where a hold that starts a
+     selection also fires Android's long-press haptic. Desktop keeps drag-select
+     everywhere: the lock is a phone rule. In @layer base, so the select-text
+     utility wins where the app opts in. */
+  @media (pointer: coarse) {
+    body {
+      -webkit-user-select: none;
+      user-select: none;
+    }
+  }
+
+  /* Editable fields stay selectable whatever an ancestor says: selecting what
+     you typed is how a draft gets fixed or copied. */
+  input,
+  textarea,
+  [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
   /* Full-screen shells read the px mirror of window.innerHeight that
      lib/viewport.js keeps on <html> instead of 100dvh, because a viewport
      unit cannot be transitioned — see .kb-anim below. In @layer base so the

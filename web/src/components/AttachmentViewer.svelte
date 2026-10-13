@@ -806,7 +806,7 @@
                need a horizontal scroll. -->
           <pre
             bind:this={textPre}
-            class="mx-auto w-full max-w-4xl font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words text-foreground/85"
+            class="mx-auto w-full max-w-4xl font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words text-foreground/85 select-text"
           >{text}</pre>
         {/if}
       </div>

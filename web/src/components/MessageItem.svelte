@@ -17,7 +17,7 @@
   import { longPress } from '../lib/longpress.js';
   import { downloadAttachment } from '../lib/attach-actions.js';
   import { isPdf } from '../lib/pdf.js';
-  import { wantsPlayer } from '../lib/media.js';
+  import { isAudio, canPlayAudio, isPending } from '../lib/media.js';
   import { FileText, Info, Paperclip, Pencil, RotateCcw, Square, Volume2, Workflow, X } from '@lucide/svelte';
   import { onDestroy } from 'svelte';
   import { speech, stopSpeech, toggleSpeech } from '../lib/speech.svelte.js';
@@ -68,26 +68,33 @@
   // Image attachments render inline; everything else keeps the download-chip
   // treatment (text opens a preview, a binary file downloads on click). User
   // rows are never live, so the same two lists feed both sides.
-  let imageFiles = $derived(attachments.filter((a) => a.kind === 'image'));
+  // An attachment with no mime is still on its way up, and the row has nothing
+  // to pick a preview by yet: every kind waits behind the same loading box.
+  let pendingFiles = $derived(attachments.filter(isPending));
+  let stored = $derived(attachments.filter((a) => !isPending(a)));
   // A PDF shows its first page inline (a card, like a picture) and opens the
   // lightbox on a click; audio gets a player row (AudioPreview — the app's own
   // chrome, since a native control is browser-drawn and eats the long press);
-  // the rest keep the download-chip treatment. Stored rows are picked out by
-  // mime, since the binary kind is shared with every other file; a take still
-  // on its way up has no mime yet and goes by the kind staging gave it.
-  let pdfFiles = $derived(attachments.filter(isPdf));
-  let audioFiles = $derived(attachments.filter(wantsPlayer));
+  // the rest keep the download-chip treatment. All of it is picked out by mime,
+  // since the binary kind is shared with every other file.
+  let imageFiles = $derived(stored.filter((a) => a.kind === 'image'));
+  let pdfFiles = $derived(stored.filter(isPdf));
+  // A player this browser cannot decode is a dead button, so an unsupported
+  // recording falls through to the download chip like any other binary.
+  const playable = (att) => isAudio(att) && canPlayAudio(att);
+  let audioFiles = $derived(stored.filter(playable));
   let files = $derived(
-    attachments.filter((a) => a.kind !== 'image' && !isPdf(a) && !wantsPlayer(a)),
+    stored.filter((a) => a.kind !== 'image' && !isPdf(a) && !playable(a)),
   );
-  // A lone voice note — one playable audio attachment, no text, nothing else —
-  // drops the bubble chrome and shows just the player. Any more (a second
-  // audio, text, an image) keeps the normal bubble.
+  // A lone voice note — one audio attachment, no text, nothing else — drops the
+  // bubble chrome and shows just the player. Any more (a second audio, text, an
+  // image) keeps the normal bubble; a lone take still uploading counts too, so
+  // the chrome does not pop in when the stored row lands.
   let audioOnly = $derived(
     !editing &&
       attachments.length === 1 &&
-      audioFiles.length === 1 &&
-      !content?.trim(),
+      !content?.trim() &&
+      (audioFiles.length === 1 || pendingFiles[0]?.kind === 'audio'),
   );
 
   // ---- streaming markdown ----
@@ -317,17 +324,23 @@
   let generationError = $derived(status === 'failed' || status === 'stopped');
 </script>
 
+{#snippet pendingBox()}
+  <!-- One loading box for anything still on its way up: the row has no mime to
+       pick a preview by, so every kind waits behind the same pulse until the
+       server's row replaces it. -->
+  <div class="h-24 w-64 max-w-full animate-pulse rounded-lg bg-muted sm:w-80"></div>
+{/snippet}
+
 {#snippet pdfCard(att, width)}
   <!-- The page IS the thumbnail — the same cursor + long-press sheet as a
        picture, and no filename under it (the page shows what it is). -->
   <button
     type="button"
-    class="block select-none [-webkit-touch-callout:none] {att.mime ? 'cursor-zoom-in' : ''}"
-    disabled={!att.mime}
+    class="block cursor-zoom-in select-none [-webkit-touch-callout:none]"
     title={`View ${att.filename}`}
     aria-label={`View ${att.filename}`}
     onclick={() => viewer.open(att)}
-    {...(att.mime ? longPress(() => attachMenu.open(att)) : {})}
+    {...longPress(() => attachMenu.open(att))}
   >
     <PdfPreview {att} scale={1} class="{width} rounded-lg border" />
   </button>
@@ -379,6 +392,13 @@
             </div>
           {:else}
             <div class="flex flex-col gap-1.5 {audioOnly ? '' : 'mb-2'}">
+              {#if pendingFiles.length}
+                <div class="flex flex-wrap gap-1.5">
+                  {#each pendingFiles as att (att.id)}
+                    {@render pendingBox()}
+                  {/each}
+                </div>
+              {/if}
               <ImageGallery items={imageFiles} widthClass="w-64 sm:w-80" />
               {#if pdfFiles.length}
                 <div class="flex flex-wrap gap-1.5">

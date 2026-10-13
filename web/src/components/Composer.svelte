@@ -11,6 +11,7 @@
   import { viewer } from '../lib/viewer.svelte.js';
   import { capturePhoto, pickPhotos, pickFiles } from '../lib/native-attachments.js';
   import { micAvailable, startRecording } from '../lib/record.js';
+  import { keyboardOpen } from '../lib/viewport.js';
 
   // Draft text lives in the store (keyed by chat id) so it survives the
   // Composer remount that ensureChat() triggers on the first send, and chat
@@ -378,7 +379,7 @@
     };
     sending = true;
     app.voiceOutgoing = true;
-    app.voiceFocus = document.activeElement === textArea;
+    app.voiceFocus = document.activeElement === textArea && keyboardOpen();
     try {
       await app.send('', [take]);
     } catch {

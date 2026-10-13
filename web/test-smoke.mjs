@@ -394,7 +394,7 @@ console.log('OK streaming parity');
 
 // --- attachment kinds: the extension decides, the server converts ---
 {
-  const { kindOfExt, previewsLocally } = await import('./src/lib/media.js');
+  const { kindOfExt, previewsLocally, wantsPlayer } = await import('./src/lib/media.js');
   for (const [name, want] of [
     ['photo.PNG', 'image'], ['shot.jpeg', 'image'], ['sprite.tga', 'image'],
     ['  photo.png  ', 'image'], // trimmed like the server's CleanFilename does
@@ -414,6 +414,14 @@ console.log('OK streaming parity');
   // TGA is the one accepted picture no browser can paint from the local file.
   assert(!previewsLocally('sprite.tga') && previewsLocally('photo.jpg'),
     'only TGA has no local preview');
+  // The player row's gate. canPlayAudio needs a DOM, so only the branches that
+  // never reach it: a take with no mime yet, and the two PDF cases.
+  assert(wantsPlayer({ kind: 'audio', filename: 'rec.webm' }),
+    'a take with no mime yet still gets a player');
+  assert(!wantsPlayer({ kind: 'pdf', filename: 'paper.pdf' }),
+    'a staged PDF gets the page card, not a player');
+  assert(!wantsPlayer({ kind: 'file', mime: 'application/pdf' }),
+    'a stored PDF is not audio');
   console.log('OK attachment kinds');
 }
 

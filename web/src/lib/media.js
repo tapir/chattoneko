@@ -50,6 +50,13 @@ export function canPlayAudio(att) {
   return playable.get(mime);
 }
 
+// Which attachments get the player row. A stored one is audio by mime, and only
+// where this browser can decode it. A take still on its way up has no mime yet,
+// so the kind staging gave it is the signal: it renders the player it is about
+// to become, dead until the server's row replaces it.
+export const wantsPlayer = (att) =>
+  att?.mime ? isAudio(att) && canPlayAudio(att) : att?.kind === "audio";
+
 // extFromMime is the display suffix for a mime, for a file whose name has none
 // (the native pickers' blobs). audio/mpeg is the one media mime whose subtype
 // is not its extension.

@@ -17,7 +17,7 @@
   import { longPress } from '../lib/longpress.js';
   import { downloadAttachment } from '../lib/attach-actions.js';
   import { isPdf } from '../lib/pdf.js';
-  import { isAudio, canPlayAudio } from '../lib/media.js';
+  import { wantsPlayer } from '../lib/media.js';
   import { FileText, Info, Paperclip, Pencil, RotateCcw, Square, Volume2, Workflow, X } from '@lucide/svelte';
   import { onDestroy } from 'svelte';
   import { speech, stopSpeech, toggleSpeech } from '../lib/speech.svelte.js';
@@ -72,16 +72,13 @@
   // A PDF shows its first page inline (a card, like a picture) and opens the
   // lightbox on a click; audio gets a player row (AudioPreview — the app's own
   // chrome, since a native control is browser-drawn and eats the long press);
-  // the rest keep the download-chip treatment. Both are picked out by mime,
-  // since the binary kind is shared with every other file, and a staged one
-  // carries no mime yet — so it stays a chip until the send round-trips.
+  // the rest keep the download-chip treatment. Stored rows are picked out by
+  // mime, since the binary kind is shared with every other file; a take still
+  // on its way up has no mime yet and goes by the kind staging gave it.
   let pdfFiles = $derived(attachments.filter(isPdf));
-  // A player this browser cannot decode is a dead button, so an unsupported
-  // recording falls through to the download chip like any other binary.
-  const playable = (att) => isAudio(att) && canPlayAudio(att);
-  let audioFiles = $derived(attachments.filter(playable));
+  let audioFiles = $derived(attachments.filter(wantsPlayer));
   let files = $derived(
-    attachments.filter((a) => a.kind !== 'image' && !isPdf(a) && !playable(a)),
+    attachments.filter((a) => a.kind !== 'image' && !isPdf(a) && !wantsPlayer(a)),
   );
   // A lone voice note — one playable audio attachment, no text, nothing else —
   // drops the bubble chrome and shows just the player. Any more (a second
@@ -325,11 +322,12 @@
        picture, and no filename under it (the page shows what it is). -->
   <button
     type="button"
-    class="block cursor-zoom-in select-none [-webkit-touch-callout:none]"
+    class="block select-none [-webkit-touch-callout:none] {att.mime ? 'cursor-zoom-in' : ''}"
+    disabled={!att.mime}
     title={`View ${att.filename}`}
     aria-label={`View ${att.filename}`}
     onclick={() => viewer.open(att)}
-    {...longPress(() => attachMenu.open(att))}
+    {...(att.mime ? longPress(() => attachMenu.open(att)) : {})}
   >
     <PdfPreview {att} scale={1} class="{width} rounded-lg border" />
   </button>

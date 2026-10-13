@@ -22,10 +22,12 @@ export function pdfjs() {
   }));
 }
 
-// The server keeps a PDF under the binary kind and names it by mime, exactly
-// like attach.Type does — the kind alone would also match audio and the
-// binaries a tool created.
-export const isPdf = (att) => att?.mime === 'application/pdf';
+// A stored PDF is named by mime, exactly like attach.Type does — the kind alone
+// would also match audio and the binaries a tool created. A row still on its
+// way up has no mime, so the kind staging gave it is the signal: it shows the
+// placeholder page until the server's row replaces it.
+export const isPdf = (att) =>
+  att?.mime ? att.mime === 'application/pdf' : att?.kind === 'pdf';
 
 // Page count for the lightbox's "n / N" and its disabled nav buttons:
 // svelte-pdf keeps the number to itself. The server answers Range requests

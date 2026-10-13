@@ -377,7 +377,7 @@
       file,
       filename: file.name,
       size: file.size,
-      kind: 'file',
+      kind: 'audio',
       previewUrl: '',
     };
     sending = true;

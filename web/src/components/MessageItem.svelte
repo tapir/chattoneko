@@ -448,7 +448,7 @@
             <Button size="sm" class="h-7 text-xs" onclick={commitEdit} disabled={!editValid || !editDirty}>Save & resend</Button>
           </div>
         {:else if msg.content}
-          <div class="whitespace-pre-wrap break-words text-[0.9375rem] leading-relaxed">{msg.content}</div>
+          <div class="whitespace-pre-wrap break-words text-[0.9375rem] leading-relaxed select-text">{msg.content}</div>
         {/if}
       </div>
       <!-- No actions on a message that hasn't reached the server yet (app.outgoing). -->
@@ -474,7 +474,7 @@
     {#if content}
       <!-- Children are patched in imperatively by the incremental renderer;
            Svelte owns the div, the renderer owns what's inside it. -->
-      <div bind:this={contentEl} class="md-body break-words"></div>
+      <div bind:this={contentEl} class="md-body break-words select-text"></div>
     {/if}
 
     <!-- Continuous from the moment of sending: MessageList shows the same

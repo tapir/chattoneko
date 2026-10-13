@@ -83,6 +83,15 @@
   let files = $derived(
     attachments.filter((a) => a.kind !== 'image' && !isPdf(a) && !playable(a)),
   );
+  // A lone voice note — one playable audio attachment, no text, nothing else —
+  // drops the bubble chrome and shows just the player. Any more (a second
+  // audio, text, an image) keeps the normal bubble.
+  let audioOnly = $derived(
+    !editing &&
+      attachments.length === 1 &&
+      audioFiles.length === 1 &&
+      !content?.trim(),
+  );
 
   // ---- streaming markdown ----
   // incremark-renderer patches blocks straight into `contentEl`: stabilized
@@ -348,7 +357,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="group mt-5 flex justify-end" onclick={onBubbleClick}>
     <div class="max-w-[85%] sm:max-w-[75%]">
-      <div class="rounded-2xl rounded-br-sm bg-accent px-4 py-2.5">
+      <div class={audioOnly ? '' : 'rounded-2xl rounded-br-sm bg-accent px-4 py-2.5'}>
         {#if (editing ? editAttachments : (msg.attachments ?? [])).length}
           {#if editing}
             <div class="mb-2 flex flex-wrap gap-1.5">
@@ -371,7 +380,7 @@
               {/each}
             </div>
           {:else}
-            <div class="mb-2 flex flex-col gap-1.5">
+            <div class="flex flex-col gap-1.5 {audioOnly ? '' : 'mb-2'}">
               <ImageGallery items={imageFiles} widthClass="w-64 sm:w-80" />
               {#if pdfFiles.length}
                 <div class="flex flex-wrap gap-1.5">

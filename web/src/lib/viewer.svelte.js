@@ -6,7 +6,7 @@
 // is required.
 //
 // `items` is the optional GALLERY SET the opened attachment belongs to —
-// every image attachment of the same message. With more than one member the
+// every picture attachment of the same message, rasters and SVGs alike. With more than one member the
 // viewer gains prev/next: swiping left/right, arrow keys and the side
 // chevrons all just move `attachment` within `items`, so App.svelte re-passes
 // a prop and the overlay (which is never keyed) stays mounted. Text files

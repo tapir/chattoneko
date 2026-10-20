@@ -12,6 +12,8 @@
   import { attachMenu } from '../lib/attachmenu.svelte.js';
   import { copyAttachment, shareAttachment } from '../lib/attach-actions.js';
   import { registerOverlay } from '../lib/overlays.svelte.js';
+  import { isSvg } from '../lib/svg.js';
+  import AttachmentSvg from './AttachmentSvg.svelte';
 
   let att = $derived(attachMenu.attachment);
   // What the sheet renders: the last real target, kept through the close
@@ -22,7 +24,11 @@
     if (att) shown = att;
   });
   let image = $derived(shown?.kind === 'image');
-  let text = $derived(shown?.kind === 'text');
+  // An SVG previews as a picture everywhere else, so the sheet treats it as
+  // one too: its own thumbnail, and no Copy row (the lightbox hides copy for
+  // it as well — what would be copied is XML source).
+  let svg = $derived(isSvg(shown));
+  let text = $derived(shown?.kind === 'text' && !svg);
 
   // Android back closes the sheet before falling back to history (LIFO
   // overlay registry, same as AttachmentSheet/PanelSheet).
@@ -63,6 +69,8 @@
         <span class="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent">
           {#if image}
             <img src={api.attachmentUrl(shown.id)} alt="" class="size-full object-cover" />
+          {:else if svg}
+            <AttachmentSvg att={shown} alt="" class="size-full object-cover" />
           {:else}
             <FileText class="size-5" strokeWidth={1.75} aria-hidden="true" />
           {/if}

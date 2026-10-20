@@ -1,7 +1,8 @@
 <script>
   // Fullscreen attachment lightbox, opened by viewer.open() in
   // lib/viewer.svelte.js and mounted once at the root by App.svelte. Text
-  // attachments render as inert monospace; images get a pan/zoom stage.
+  // attachments render as inert monospace; images get a pan/zoom stage, which
+  // an SVG stored as text joins (lib/svg.js).
   //
   // A native <dialog> puts the overlay in the browser TOP LAYER: it escapes
   // every stacking context, traps focus and closes on Escape — no z-index.
@@ -18,6 +19,7 @@
   import { registerOverlay } from '../lib/overlays.svelte.js';
   import { shareAttachment } from '../lib/attach-actions.js';
   import { isPdf, pdfPages } from '../lib/pdf.js';
+  import { isSvg, svgSource } from '../lib/svg.js';
   import PdfPreview from './PdfPreview.svelte';
   import { Check, ChevronLeft, ChevronRight, Copy, Download, Share2, X, ZoomIn, ZoomOut } from '@lucide/svelte';
   import { copyText } from '../lib/clipboard.js';
@@ -34,7 +36,11 @@
   // A PDF is stored under the binary kind and named by its mime; it uses the
   // black media pane, not the themed text pane.
   let pdf = $derived(isPdf(attachment));
-  let media = $derived(isImage || pdf);
+  // An SVG arrives as text and previews as a picture (lib/svg.js); one that
+  // turns out not to be SVG after all drops back to the text pane.
+  let svgFailed = $state(false);
+  let svg = $derived(isSvg(attachment) && !svgFailed);
+  let media = $derived(isImage || pdf || svg);
   // <img>/<a> can't carry the Authorization header; attachmentUrl appends
   // ?token= (the server accepts a token on GETs). A real URL in the browser
   // also keeps download trivial.
@@ -137,8 +143,48 @@
 
   $effect(() => {
     const id = attachment?.id;
-    if (!id || isImage || pdf) return;
+    if (!id || isImage || pdf || svg) return;
     loadText(id);
+  });
+
+  // ---- svg pane ----
+  // The source comes in as text, like any other text attachment, and becomes a
+  // blob URL for the picture stage: an <img> renders SVG in secure static
+  // mode, so a hostile file stays inert without the server ever serving it as
+  // markup. svgSource injects intrinsic dimensions, so from here on the file
+  // sizes and contains exactly like a raster — no inline sizing of our own.
+  let svgUrl = $state('');
+  let src = $derived(svg ? svgUrl : url);
+
+  $effect(() => {
+    const att = attachment;
+    if (!att?.id || !isSvg(att)) return;
+    // Cleared before the fetch so a navigating viewer never points the <img>
+    // at the previous file's revoked blob.
+    svgUrl = '';
+    svgFailed = false;
+    let blobUrl = '';
+    let dead = false;
+    api.attachmentText(att.id).then(
+      (body) => {
+        if (dead) return;
+        const source = svgSource(body);
+        if (source === null) {
+          svgFailed = true; // not a decodable SVG: show the source instead
+          return;
+        }
+        blobUrl = URL.createObjectURL(new Blob([source], { type: 'image/svg+xml' }));
+        svgUrl = blobUrl;
+      },
+      () => {
+        // The text pane's own load reports the failure and offers a retry.
+        if (!dead) svgFailed = true;
+      },
+    );
+    return () => {
+      dead = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
   });
 
   // ---- pdf pane ----
@@ -703,21 +749,7 @@
           onclick={onStageClick}
           onwheel={onWheel}
         >
-          {#if isImage}
-            <img
-              bind:this={img}
-              src={url}
-              alt={attachment?.filename ?? ''}
-              draggable="false"
-              class="max-h-full max-w-full shrink-0 object-contain {imgLoaded ? '' : 'invisible'}"
-              style={imageStyle}
-              onload={() => {
-                imgLoaded = true;
-                clampOffsets();
-              }}
-              onerror={() => (imgFailed = true)}
-            />
-          {:else}
+          {#if pdf}
             <!-- The stage transform fits the page, so it shares the picture's
                  gestures, pan bounds and chrome. onready is the first painted
                  page. -->
@@ -733,6 +765,22 @@
                 }}
               />
             </div>
+          {:else if src}
+            <!-- No src attribute at all until one exists: an empty one would
+                 point the <img> at the page itself. -->
+            <img
+              bind:this={img}
+              src={src}
+              alt={attachment?.filename ?? ''}
+              draggable="false"
+              class="max-h-full max-w-full shrink-0 object-contain {imgLoaded ? '' : 'invisible'}"
+              style={imageStyle}
+              onload={() => {
+                imgLoaded = true;
+                clampOffsets();
+              }}
+              onerror={() => (imgFailed = true)}
+            />
           {/if}
         </div>
 
@@ -765,7 +813,7 @@
           <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
             <span
               role="status"
-              aria-label={isImage ? 'Loading image' : 'Loading page'}
+              aria-label={pdf ? 'Loading page' : 'Loading image'}
               class="inline-block size-6 animate-spin rounded-full border-2 border-white/25 border-t-white"
             ></span>
           </div>

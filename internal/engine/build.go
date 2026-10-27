@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"chattoneko/internal/attach"
+	"chattoneko/internal/mcphub"
 	"chattoneko/internal/provider"
 	"chattoneko/internal/store"
 )
@@ -49,12 +51,27 @@ func (e *Engine) chatParams(ctx context.Context, chatID string) (*store.Chat, pr
 // reference when it doesn't. Binary attachments (audio, PDF, tool files) have
 // no wire representation at all and always take the reference path, so the
 // model at least learns the file exists and what its id is.
-func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, msgs []*store.Message, attCache map[string]*store.Attachment, vision bool) ([]provider.Message, error) {
+//
+// mcpLeft is the response's remaining MCP-call budget (nil = don't tell the
+// model): the note rides the request only, so history and the UI keep the
+// bare tool output, and it is rebuilt with the live count on every round
+// instead of leaving a stale number on an old result.
+func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, msgs []*store.Message, attCache map[string]*store.Attachment, vision bool, mcpLeft *int) ([]provider.Message, error) {
 	out := make([]provider.Message, 0, len(msgs)+1)
 	if sp := e.SystemPrompt(); sp != "" {
 		out = append(out, provider.Message{Role: "system", Content: sp})
 	}
-	for _, m := range msgs {
+	// The trailing run of tool results is the batch this response just ran;
+	// results further back are settled history.
+	lastBatch := len(msgs)
+	for lastBatch > 0 && msgs[lastBatch-1].Role == store.RoleTool {
+		lastBatch--
+	}
+	var mcpTools map[string]bool
+	if mcpLeft != nil {
+		mcpTools = e.mcpToolNames()
+	}
+	for i, m := range msgs {
 		switch m.Role {
 		case store.RoleUser:
 			content := m.Content
@@ -102,14 +119,30 @@ func (e *Engine) buildProviderMessages(ctx context.Context, chat *store.Chat, ms
 			}
 			out = append(out, provider.Message{Role: "assistant", Content: m.Content, Calls: calls})
 		case store.RoleTool:
+			content := m.Content
+			if mcpLeft != nil && i >= lastBatch && mcpTools[m.Name] {
+				content += "\n\n[MCP tool calls remaining in this response: " + strconv.Itoa(*mcpLeft) + "]"
+			}
 			out = append(out, provider.Message{
 				Role:       "tool",
-				Content:    m.Content,
+				Content:    content,
 				ToolCallID: m.ToolCallID,
 			})
 		}
 	}
 	return out, nil
+}
+
+// mcpToolNames is the catalog's MCP-backed tools. Integrated tools are
+// unbudgeted, so they never carry a budget note.
+func (e *Engine) mcpToolNames() map[string]bool {
+	out := map[string]bool{}
+	for _, t := range e.catalog.Tools() {
+		if t.Server != mcphub.BuiltinServer {
+			out[t.Display] = true
+		}
+	}
+	return out
 }
 
 // inputModalities returns the model's stored input modalities. Metadata never

@@ -109,9 +109,9 @@
     lastBox = container.clientHeight;
   });
 
-  function isNearBottom() {
+  function isAtBottom() {
     if (!container) return true;
-    return container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    return container.scrollHeight - container.scrollTop - container.clientHeight < 2;
   }
 
   function updateCanScroll() {
@@ -152,13 +152,9 @@
       // scrollTop, which looks like an upward scroll but isn't user intent.
     } else if (top < lastTop - 1) {
       pinned = false;
-    } else if (top > lastTop + 1 && isNearBottom()) {
-      // Re-pin ONLY on deliberate downward movement into the near-bottom
-      // zone. Without the `top > lastTop` guard, any no-op scroll event
-      // (browser clamp adjustment, scroll anchoring, sub-pixel wobble) would
-      // re-pin — and when the whole scrollable range is smaller than the 80px
-      // near-bottom threshold, EVERY position is "near bottom", so the pane
-      // would fight the user's upward scrolls and vibrate.
+    } else if (top > lastTop + 1 && isAtBottom()) {
+      // Only the real bottom re-pins: inside a zone above it, a scrollbar drag
+      // or key-scroll still heading down pulls the pane back off each follow.
       pinned = true;
     }
     lastTop = top;
@@ -205,6 +201,17 @@
     if (!pinned || !container) return;
     requestAnimationFrame(() => {
       if (!container || !pinned) return;
+      // Moved up since the last follow, not by a resize or shrink: a keyboard
+      // or scrollbar scroll, which fires no wheel event and would be undone
+      // here before onScroll saw it.
+      if (
+        container.scrollTop < lastTop - 1 &&
+        container.clientHeight === lastBox &&
+        container.scrollHeight >= lastHeight
+      ) {
+        pinned = false;
+        return;
+      }
       container.scrollTop = container.scrollHeight;
       lastTop = container.scrollTop;
       lastHeight = container.scrollHeight;

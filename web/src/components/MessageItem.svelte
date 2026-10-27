@@ -18,6 +18,7 @@
   import { downloadAttachment } from '../lib/attach-actions.js';
   import { isPdf } from '../lib/pdf.js';
   import { isAudio, canPlayAudio, isPending } from '../lib/media.js';
+  import { isSvg } from '../lib/svg.js';
   import { FileText, Info, Loader2, Paperclip, Pencil, RotateCcw, Square, Volume2, Workflow, X } from '@lucide/svelte';
   import { onDestroy } from 'svelte';
   import { speech, stopSpeech, toggleSpeech } from '../lib/speech.svelte.js';
@@ -75,16 +76,17 @@
   // A PDF shows its first page inline (a card, like a picture) and opens the
   // lightbox on a click; audio gets a player row (AudioPreview — the app's own
   // chrome, since a native control is browser-drawn and eats the long press);
-  // the rest keep the download-chip treatment. All of it is picked out by mime,
-  // since the binary kind is shared with every other file.
-  let imageFiles = $derived(stored.filter((a) => a.kind === 'image'));
+  // an SVG is stored as text but joins the pictures, painted from a blob URL
+  // (AttachmentSvg); the rest keep the download-chip treatment. All of it is
+  // picked out by mime, since the binary kind is shared with every other file.
+  let imageFiles = $derived(stored.filter((a) => a.kind === 'image' || isSvg(a)));
   let pdfFiles = $derived(stored.filter(isPdf));
   // A player this browser cannot decode is a dead button, so an unsupported
   // recording falls through to the download chip like any other binary.
   const playable = (att) => isAudio(att) && canPlayAudio(att);
   let audioFiles = $derived(stored.filter(playable));
   let files = $derived(
-    stored.filter((a) => a.kind !== 'image' && !isPdf(a) && !playable(a)),
+    stored.filter((a) => a.kind !== 'image' && !isPdf(a) && !playable(a) && !isSvg(a)),
   );
   // A lone voice note — one audio attachment, no text, nothing else — drops the
   // bubble chrome and shows just the player. Any more (a second audio, text, an

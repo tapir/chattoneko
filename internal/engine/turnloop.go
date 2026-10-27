@@ -253,7 +253,7 @@ func (e *Engine) runGeneration(ag *activeGen) {
 			stepFailed("load history: " + err.Error())
 			return
 		}
-		providerMsgs, err := e.buildProviderMessages(ctx, chat, msgs, ag.attCache, vision)
+		providerMsgs, err := e.buildProviderMessages(ctx, chat, msgs, ag.attCache, vision, &budget)
 		if err != nil {
 			stepFailed("build request: " + err.Error())
 			return
@@ -443,6 +443,8 @@ func isTruncationFinish(reason string) bool {
 // or a tool this chat does not have). Refusals never run, which is what lets
 // the loop hand control back to the model — and, when a round is nothing but
 // refusals, end the generation. Integrated tools are not budgeted.
+// The model learns the leftover allowance from the next request's tool results
+// (see buildProviderMessages); the stored results stay bare.
 // A canceled generation aborts the remaining calls; the invariant finalize
 // covers any left dangling with synthetic results. Events publish to the
 // generation's own hub (never re-resolved: after a chat deletion the old
@@ -451,10 +453,7 @@ func (e *Engine) executeTools(ctx context.Context, h *chatHub, chat *store.Chat,
 	enabled := e.enabledTools(chat)
 	// Only MCP tools are budgeted. A name absent from the catalog reads as
 	// integrated, which is harmless: Call fails on it and failures are free.
-	mcp := map[string]bool{}
-	for _, t := range e.catalog.Tools() {
-		mcp[t.Display] = t.Server != mcphub.BuiltinServer
-	}
+	mcp := e.mcpToolNames()
 	meta := mcphub.CallMeta{ChatID: chat.ID, MessageID: ag.messageID}
 	// Tool side effects happen under the cancellable ctx, but persisting a
 	// result that EXISTS must survive a user stop / server shutdown landing

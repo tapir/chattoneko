@@ -2,7 +2,8 @@
   // Image attachments as a gallery: one picture keeps its natural aspect
   // ratio, two or more become a grid of square thumbnails. Columns come from
   // CONTAINER queries, not viewport breakpoints, because the chat column width
-  // is user-resizable (sidebar drag handle) and collapses on mobile.
+  // is user-resizable (sidebar drag handle) and collapses on mobile. SVGs join
+  // the set: stored as text, painted from a blob URL (AttachmentSvg).
   //
   // Beyond CAP images the last cell darkens into a "+N" tile, keeping a
   // message scannable when a tool gathers a dozen pictures; tapping the tile
@@ -13,6 +14,8 @@
   import { longPress } from '../lib/longpress.js';
   import { cn } from '../lib/utils.js';
   import AttachmentImage from './AttachmentImage.svelte';
+  import AttachmentSvg from './AttachmentSvg.svelte';
+  import { isSvg } from '../lib/svg.js';
 
   // Long press (touch only) opens the Share / Copy sheet instead of the
   // browser's own image menu. `select-none` + the iOS callout kill keep the
@@ -64,11 +67,15 @@
           onclick={() => viewer.open(items[0], items)}
           {...press(items[0])}
         >
-          <AttachmentImage
-            att={items[0]}
-            class="max-h-60 max-w-full rounded-lg border"
-            loading="lazy"
-          />
+          {#if isSvg(items[0])}
+            <AttachmentSvg att={items[0]} class="max-h-60 max-w-full rounded-lg border" />
+          {:else}
+            <AttachmentImage
+              att={items[0]}
+              class="max-h-60 max-w-full rounded-lg border"
+              loading="lazy"
+            />
+          {/if}
         </button>
       </div>
     {:else}
@@ -87,7 +94,11 @@
               onclick={() => viewer.open(att, items)}
               {...press(att)}
             >
-              <AttachmentImage {att} class="size-full object-cover" loading="lazy" />
+              {#if isSvg(att)}
+                <AttachmentSvg {att} class="size-full object-cover" />
+              {:else}
+                <AttachmentImage {att} class="size-full object-cover" loading="lazy" />
+              {/if}
               {#if i === visible.length - 1 && hidden > 0}
                 <span class="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/55 text-sm font-medium tabular-nums text-white">
                   +{hidden}

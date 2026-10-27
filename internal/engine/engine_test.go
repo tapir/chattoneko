@@ -24,9 +24,11 @@ import (
 type scriptedProvider struct {
 	scripts   [][]provider.StreamEvent // one script per StreamChat call
 	callIndex int
+	requests  [][]provider.Message // messages of each StreamChat call
 }
 
-func (f *scriptedProvider) StreamChat(_ context.Context, _ []provider.Message, _ []provider.Tool, _ provider.GenParams) (*provider.EventStream, error) {
+func (f *scriptedProvider) StreamChat(_ context.Context, msgs []provider.Message, _ []provider.Tool, _ provider.GenParams) (*provider.EventStream, error) {
+	f.requests = append(f.requests, msgs)
 	script := f.scripts[f.callIndex]
 	f.callIndex++
 	es := provider.NewEventStream(64, nil)
@@ -366,6 +368,78 @@ func TestToolCallBudgetRefusesOverBudgetCalls(t *testing.T) {
 	m, _ := st.GetMessage(context.Background(), am.ID)
 	if m.Content != "final" {
 		t.Fatalf("model never got its final round: %q", m.Content)
+	}
+}
+
+// The leftover budget reaches the model on the tool results of the current
+// batch, and only there: the note is request-only (the stored result stays
+// bare) and integrated tools, which are unbudgeted, carry none.
+func TestToolCallBudgetNoteInRequestsOnly(t *testing.T) {
+	prov := &scriptedProvider{scripts: [][]provider.StreamEvent{
+		{{Kind: provider.EventToolCallDone, CallID: "c1", Name: "calc", Args: `{}`}, {Kind: provider.EventDone, Finish: "tool_calls"}},
+		{{Kind: provider.EventToolCallDone, CallID: "c2", Name: "echo", Args: `{}`}, {Kind: provider.EventDone, Finish: "tool_calls"}},
+		{{Kind: provider.EventTextDelta, Text: "final"}, {Kind: provider.EventDone, Finish: "stop"}},
+	}}
+	catalog := &fakeMCP{
+		tools: []mcphub.Entry{
+			{Display: "echo", Description: "d", Server: "s", DefaultEnabled: true},
+			{Display: "calc", Description: "d", Server: mcphub.BuiltinServer, DefaultEnabled: true},
+		},
+		results: map[string]string{"echo": "echo-result", "calc": "calc-ok"},
+	}
+	eng, st, _ := testEngine(t, prov, catalog, config.LimitsConfig{MaxToolIterations: 2})
+	ctx := context.Background()
+	chatID := newTestChat(t, st)
+	if _, err := st.CreateMessage(ctx, store.NewMessageParams{
+		ChatID: chatID, Role: store.RoleUser, Status: store.StatusComplete, Content: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	am, err := eng.startGeneration(ctx, chatID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "generation complete", 5*time.Second, func() bool {
+		m, err := st.GetMessage(ctx, am.ID)
+		return err == nil && m.Status == store.StatusComplete
+	})
+
+	// Round 1 has no results yet; round 2 has only the free integrated one.
+	for i := range 2 {
+		for _, m := range prov.requests[i] {
+			if strings.Contains(m.Content, "tool calls remaining") {
+				t.Fatalf("request %d carries a budget note before any MCP call: %q", i, m.Content)
+			}
+		}
+	}
+
+	third := prov.requests[2]
+	var calc, echo *provider.Message
+	for i := range third {
+		switch third[i].ToolCallID {
+		case "c1":
+			calc = &third[i]
+		case "c2":
+			echo = &third[i]
+		}
+	}
+	if calc == nil || echo == nil {
+		t.Fatalf("both tool results must be in the request: %+v", third)
+	}
+	if calc.Content != "calc-ok" {
+		t.Fatalf("integrated tool result must stay bare: %q", calc.Content)
+	}
+	wantEcho := "echo-result\n\n[MCP tool calls remaining in this response: 1]"
+	if echo.Content != wantEcho {
+		t.Fatalf("mcp tool result = %q, want %q", echo.Content, wantEcho)
+	}
+
+	msgs, _ := st.ListMessages(ctx, chatID)
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "tool calls remaining") {
+			t.Fatalf("persisted result picked up the note: %q", m.Content)
+		}
 	}
 }
 
@@ -1296,7 +1370,7 @@ func TestBuildMessagesUnreadableAttachments(t *testing.T) {
 	}
 	build := func(vision bool) provider.Message {
 		t.Helper()
-		out, err := eng.buildProviderMessages(ctx, chat, msgs, nil, vision)
+		out, err := eng.buildProviderMessages(ctx, chat, msgs, nil, vision, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

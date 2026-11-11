@@ -29,8 +29,10 @@ untar() { # <filename> [patches...] - patches are applied once, on a fresh extra
   for p in "${@:2}"; do patch -d "$SRC/${1%.tar*}" -p1 < "$p"; done
 }
 
+# /fossils/ is where zlib.net keeps every release tarball; the site root only
+# carries the current one, so a pinned version moves (and 404s) there.
 fetch "zlib-$ZLIB_VERSION.tar.gz" \
-  "https://zlib.net/zlib-$ZLIB_VERSION.tar.gz"
+  "https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz"
 fetch "lame-$LAME_VERSION.tar.gz" \
   "https://sourceforge.net/projects/lame/files/lame/$LAME_VERSION/lame-$LAME_VERSION.tar.gz/download"
 fetch "ffmpeg-$FFMPEG_VERSION.tar.xz" \

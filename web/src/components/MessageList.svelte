@@ -109,9 +109,16 @@
     lastBox = container.clientHeight;
   });
 
+  // A wheel or touch scroll can stop a couple of px short of the max (touch
+  // slop, a sub-pixel delta rounded away), which still counts as the bottom.
+  // Kept this tight on purpose: the whole gap is reachable by a hand wobbling
+  // the scrollbar thumb at the track's end, so a wider band would flap the
+  // button (and engage the follow) while the pane is visibly off the bottom.
+  const BOTTOM_SLACK = 4;
+
   function isAtBottom() {
     if (!container) return true;
-    return container.scrollHeight - container.scrollTop - container.clientHeight < 2;
+    return container.scrollHeight - container.scrollTop - container.clientHeight < BOTTOM_SLACK;
   }
 
   function updateCanScroll() {
@@ -152,9 +159,9 @@
       // scrollTop, which looks like an upward scroll but isn't user intent.
     } else if (top < lastTop - 1) {
       pinned = false;
-    } else if (top > lastTop + 1 && isAtBottom()) {
-      // Only the real bottom re-pins: inside a zone above it, a scrollbar drag
-      // or key-scroll still heading down pulls the pane back off each follow.
+    } else if (isAtBottom()) {
+      // On position, never on a downward delta: an up-notch and a down-notch
+      // applied in the same frame leave one scroll event reporting no movement.
       pinned = true;
     }
     lastTop = top;
@@ -163,6 +170,8 @@
 
   function onWheel(e) {
     if (e.deltaY < 0) pinned = false;
+    // Too small a notch to move the pane fires no scroll event at all.
+    else if (e.deltaY > 0 && isAtBottom()) pinned = true;
   }
 
   function onTouchStart(e) {
@@ -201,14 +210,16 @@
     if (!pinned || !container) return;
     requestAnimationFrame(() => {
       if (!container || !pinned) return;
-      // Moved up since the last follow, not by a resize or shrink: a keyboard
+      // Only real growth moves the pane. The effect that calls this re-runs for
+      // renders that change nothing on screen (a rebuilt derived array), and
+      // following one of those would drag the pane down from wherever the user
+      // had it.
+      if (container.scrollHeight === lastHeight) return;
+      const grew = container.scrollHeight >= lastHeight;
+      // Moved up since the last follow with nothing to explain it: a keyboard
       // or scrollbar scroll, which fires no wheel event and would be undone
       // here before onScroll saw it.
-      if (
-        container.scrollTop < lastTop - 1 &&
-        container.clientHeight === lastBox &&
-        container.scrollHeight >= lastHeight
-      ) {
+      if (grew && container.scrollTop < lastTop - 1 && container.clientHeight === lastBox) {
         pinned = false;
         return;
       }

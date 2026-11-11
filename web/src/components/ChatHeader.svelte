@@ -27,7 +27,21 @@
 
   let promptTotal = $derived(app.chatUsage?.prompt_tokens ?? 0);
   let completionTotal = $derived(app.chatUsage?.completion_tokens ?? 0);
-  let contextWindow = $derived(app.contextWindowFor(currentModel));
+  // Window of the model the latest prompt ran on, not the chat's stored one (a
+  // picker change moves that before it has generated anything). /api/config
+  // ships metadata for the current whitelist only, so an id dropped from it has
+  // no entry: fall back to the default chat model rather than hide the bar for
+  // a conversation that is still readable.
+  let contextModel = $derived.by(() => {
+    for (let i = app.messages.length - 1; i >= 0; i--) {
+      const m = app.messages[i];
+      if (m.role === 'assistant' && m.model) return m.model;
+    }
+    return currentModel;
+  });
+  let contextWindow = $derived(
+    app.contextWindowFor(contextModel) || app.contextWindowFor(config?.models?.default_chat_model),
+  );
   // Context occupancy = the last turn's final request input+output (what the
   // next request resends), NOT the billed totals: a tool loop re-sends the
   // full history per request, so billed sums exceed the window while the

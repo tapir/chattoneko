@@ -55,7 +55,7 @@ lib/
   viewer.svelte.js          singleton state for the attachment lightbox (open/close/step)
   speech.svelte.js          read-aloud playback singleton (one message at a time, blob revoked after)
   format.js, clipboard.js, resize.js, utils.js (cn), turns.js (per-turn thinking timeline)
-  logo.svg                  sidebar + login-screen mark (not the favicon: index.html uses the raster web/public/favicon.ico alone, since Firefox stores no SVG favicon for bookmarks)
+  logo.svg                  sidebar + login-screen mark; web/public/favicon.ico is rendered from it (rsvg-convert 16/32/48, keep the alpha) rather than linked as the icon — Firefox stores no SVG favicon for bookmarks
   neko*.png                 cat art, one picked at random for the empty-chat screen
 components/
   ChatView.svelte           header + message list + composer column

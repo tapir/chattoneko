@@ -11,9 +11,10 @@
        retuning it means updating all of them. -->
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfcfc" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#141414" />
-  <!-- Bookmark/history/new-tab surfaces ignore SVG favicons, hence the raster fallback. -->
-  <link rel="icon" href="/favicon.ico" sizes="32x32" />
-  <link rel="icon" type="image/svg+xml" href="/src/lib/logo.svg" />
+  <!-- Raster only: Firefox renders an SVG favicon in the tab but never stores it,
+       so bookmarks/history stay blank — and it picks the SVG over any raster icon
+       offered alongside it. -->
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
   <title>Chattoねこ</title>
   <script>
     // Seed theme before first paint (no flash). Mirrors src/lib/theme.svelte.js.

@@ -203,6 +203,22 @@
       initialRouteApplied = true;
     }
   });
+
+  // Browser tab title: the open chat's title. The sidebar lists stand in for
+  // the window where openChat() has already nulled `chat` but the fetch has
+  // not landed, so switching chats never flashes the bare app name.
+  let tabTitle = $derived.by(() => {
+    const id = app.activeChatId;
+    const title =
+      app.chat?.title ||
+      app.chats.find((c) => c.id === id)?.title ||
+      app.pinnedChats.find((c) => c.id === id)?.title;
+    return title ? `${title} — Chattoねこ` : 'Chattoねこ';
+  });
+
+  $effect(() => {
+    document.title = tabTitle;
+  });
 </script>
 
 <svelte:window onhashchange={() => applyRoute()} onfocus={() => app.onFocus()} onclick={openSidebarFromTrigger} />

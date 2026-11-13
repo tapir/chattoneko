@@ -213,7 +213,7 @@
       app.chat?.title ||
       app.chats.find((c) => c.id === id)?.title ||
       app.pinnedChats.find((c) => c.id === id)?.title;
-    return title ? `${title} — Chattoねこ` : 'Chattoねこ';
+    return title ? `Chattoねこ - ${title}` : 'Chattoねこ';
   });
 
   $effect(() => {

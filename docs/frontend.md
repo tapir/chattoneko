@@ -86,7 +86,7 @@ components/
 ## App shell (App.svelte)
 
 - **Routing**: hash-based, two routes — `#/` (home) and `#/c/:chatId`. Route changes call `app.openChat(id)` / `app.closeChat()`. An auth-gated `$effect` applies the route only once auth is resolved.
-- **Tab title**: `document.title` follows the open chat (`<chat title> — Chattoねこ`, the bare app name on home and the gates). The sidebar lists stand in while `openChat()`'s fetch is in flight, so a chat switch never flashes the app name.
+- **Tab title**: `document.title` follows the open chat (`Chattoねこ - <chat title>`, the bare app name on home and the gates). The sidebar lists stand in while `openChat()`'s fetch is in flight, so a chat switch never flashes the app name.
 - **Deep links vs. restored tabs**: a per-tab `sessionStorage['chattoneko-booted']` flag tells an explicit deep link (fresh tab → honour `#/c/<id>`) apart from a browser-restored hash (reload / session restore → land on the new-chat screen, never auto-restore the last chat).
 - **Theme**: seeded before first paint by an inline script in `index.html` (no flash): `localStorage['chattoneko-theme']` or the system preference, dark when the system reports no light preference. `theme.svelte.js` keeps it in sync afterwards, follows live system changes until the user picks explicitly, and (native only) matches the Android status-bar style/background to the theme.
 - **Boot gates** (in order): auth check in flight → spinner; native build with no configured server, or auth enabled and not signed in → `LoginScreen` (native adds the server-address phase on top of the same card); server unreachable → server-down card (with "Change server" on native); otherwise the main layout.
